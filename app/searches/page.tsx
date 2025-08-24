@@ -366,4 +366,22 @@ function Field({ label, value, onChange, type="text" }:{
 }) {
   return (
     <label className="block text-sm">
-      <span className="mb-1 inline-block">{label}<
+      <span className="mb-1 inline-block">{label}</span>
+      <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+             value={value} onChange={e=>onChange(e.target.value)} type={type}/>
+    </label>
+  );
+}
+function Select({ label, value, onChange, options }:{
+  label:string; value:string; onChange:(v:string)=>void; options:string[];
+}) {
+  return (
+    <label className="block text-sm">
+      <span className="mb-1 inline-block">{label}</span>
+      <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+              value={value} onChange={e=>onChange(e.target.value)}>
+        {options.map(o=><option key={o} value={o}>{o}</option>)}
+      </select>
+    </label>
+  );
+}

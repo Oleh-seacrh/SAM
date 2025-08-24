@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useCRM } from "@/hooks/use-crm";
 import { useSessions, SavedItem } from "@/hooks/use-sessions";
+import { useSettings } from "@/hooks/use-settings";
+import { usePrompts } from "@/hooks/use-prompts";
 import { canonicalHomepage, getDomain } from "@/lib/domain";
 import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
@@ -12,7 +14,6 @@ type SearchResponse = {
   q: string; num: number; start: number; nextStart: number | null; prevStart: number | null;
   totalResults: number; items: SearchItem[];
 };
-
 type Score = { label: "good" | "maybe" | "bad"; confidence?: number; reasons?: string[]; tags?: string[] };
 type ScoresByDomain = Record<string, Score>;
 
@@ -25,16 +26,40 @@ export default function Page() {
   const [err, setErr] = useState<string | null>(null);
 
   const { add: addCRM, existsDomain } = useCRM();
-  const { sessions, add: addSession, remove: removeSession, clear: clearSessions } = useSessions();
+  const { sessions, add: addSession } = useSessions();
+  const { settings, setLastSearch, setLLM, setAutoRun } = useSettings();
+  const { prompts, add: addPrompt, remove: removePrompt, lastUsedId, setLastUsedId } = usePrompts();
 
   // LLM UI
   const [provider, setProvider] = useState<"openai" | "anthropic" | "gemini">("openai");
   const [model, setModel] = useState<string>("");
-  const [prompt, setPrompt] = useState<string>("Target: B2B distributors/manufacturers of X-ray film and related medical imaging consumables. Exclude blogs, news, generic marketplaces.");
+  const [prompt, setPrompt] = useState<string>(
+    "Target: B2B distributors/manufacturers of X-ray film and related medical imaging consumables. Exclude blogs, news, generic marketplaces."
+  );
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
-  // recent queries
+  // restore last search + last LLM prompt/provider/model
+  useEffect(() => {
+    if (!settings) return;
+    if (settings.lastQuery) setQ(settings.lastQuery);
+    if (settings.lastStart) setStart(settings.lastStart);
+    if (settings.lastProvider) setProvider(settings.lastProvider);
+    if (settings.lastModel) setModel(settings.lastModel);
+    if (settings.lastPrompt) setPrompt(settings.lastPrompt);
+  }, [settings]);
+
+  // optional autorun
+  useEffect(() => {
+    if (!settings?.autoRunLastSearch) return;
+    if (settings?.lastQuery) {
+      // auto-run last search once on load
+      runSearch(settings.lastStart || 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.autoRunLastSearch]);
+
+  // history chips
   const [history, setHistory] = useState<string[]>([]);
   useEffect(() => { if (data?.q) setHistory(p => (p[0] === data.q ? p : [data.q, ...p].slice(0,10))); }, [data?.q]);
 
@@ -47,9 +72,11 @@ export default function Page() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Search failed");
       setData(j as SearchResponse);
-      setScores({}); // reset previous scores
+      setScores({});
+      // persist last search
+      setLastSearch(query, s, num);
 
-      // save session
+      // save session snapshot
       const savedItems: SavedItem[] = (j.items ?? []).map((it: any) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         return { title: it.title, link: it.link, displayLink: it.displayLink, snippet: it.snippet, homepage, domain: getDomain(homepage) };
@@ -68,6 +95,9 @@ export default function Page() {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         return { title: it.title, snippet: it.snippet, homepage, domain: getDomain(homepage) };
       });
+      // remember last LLM settings
+      setLLM(provider, model || undefined, prompt);
+
       const r = await fetch("/api/score", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -82,7 +112,7 @@ export default function Page() {
   const canPrev = useMemo(()=>!!data?.prevStart,[data?.prevStart]);
   const canNext = useMemo(()=>!!data?.nextStart,[data?.nextStart]);
 
-  // Add-to-CRM modal
+  // Add-to-CRM modal (same fields as before)
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<any>({});
   function openAddModal(it: SearchItem) {
@@ -90,18 +120,9 @@ export default function Page() {
     const domain = getDomain(homepage);
     setDraft({
       companyName: it.title?.slice(0,80) || domain,
-      domain, url: homepage,
-      status: "New",
-      source: "google",
-      // opportunity defaults
-      brand: "",
-      product: "",
-      quantity: "",
-      dealValueUSD: undefined,
-      // optional company data
-      country: "",
-      industry: "",
-      note: ""
+      domain, url: homepage, status: "New", source: "google",
+      brand: "", product: "", quantity: "", dealValueUSD: undefined,
+      country: "", industry: "", note: ""
     });
     setOpen(true);
   }
@@ -109,27 +130,42 @@ export default function Page() {
     if (!draft.companyName || !draft.domain || !draft.url) return;
     const dealValue = draft.dealValueUSD ? Number(draft.dealValueUSD) : undefined;
     const payload = { ...draft, dealValueUSD: dealValue };
-    delete (payload as any).open; // safety
     addCRM(payload);
     setOpen(false);
   }
+
+  // prompt library UI state
+  const [newName, setNewName] = useState("");
 
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Searches</h1>
 
-      {/* Search form */}
+      {/* Search form + autorun toggle */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
-        <form onSubmit={(e)=>{e.preventDefault(); setStart(1); runSearch(1);}} className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <input
-            className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none"
-            placeholder="Enter keywords (e.g., x-ray film distributor India)"
-            value={q} onChange={e=>setQ(e.target.value)}
-          />
-          <button type="submit" disabled={loading || !q.trim()} className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50">
+        <form onSubmit={(e)=>{e.preventDefault(); setStart(1); runSearch(1);}}
+              className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none"
+                 placeholder="Enter keywords (e.g., x-ray film distributor India)"
+                 value={q} onChange={e=>setQ(e.target.value)} />
+          <button type="submit" disabled={loading || !q.trim()}
+                  className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50">
             {loading ? "Searching…" : "Search"}
           </button>
         </form>
+        <div className="mt-2 text-xs text-[var(--muted)] flex items-center gap-3">
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={Boolean(settings?.autoRunLastSearch)}
+              onChange={(e)=>setAutoRun(e.target.checked)}
+            />
+            Auto-run last search on load
+          </label>
+          {settings?.lastQuery && (
+            <span>Last: <b>{settings.lastQuery}</b></span>
+          )}
+        </div>
 
         {history.length>0 && (
           <div className="mt-3 text-sm text-[var(--muted)]">
@@ -144,12 +180,13 @@ export default function Page() {
         )}
       </div>
 
-      {/* AI panel */}
-      <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
+      {/* AI panel + prompt library */}
+      <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="text-sm">
             <span className="mb-1 inline-block">Provider</span>
-            <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" value={provider} onChange={(e)=>setProvider(e.target.value as any)}>
+            <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+                    value={provider} onChange={(e)=>setProvider(e.target.value as any)}>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
               <option value="gemini">Gemini</option>
@@ -168,17 +205,72 @@ export default function Page() {
             </button>
           </div>
         </div>
-        <label className="text-sm block mt-3">
+
+        <label className="text-sm block">
           <span className="mb-1 inline-block">Prompt</span>
           <textarea className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-28"
                     value={prompt} onChange={(e)=>setPrompt(e.target.value)}
                     placeholder="Describe ideal prospect criteria…" />
         </label>
+
+        {/* Prompt library */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          <label className="text-sm">
+            <span className="mb-1 inline-block">Saved prompts</span>
+            <select
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+              value={lastUsedId ?? ""}
+              onChange={e=>setLastUsedId(e.target.value || null)}
+            >
+              <option value="">— Select —</option>
+              {prompts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          <div className="flex items-end gap-2">
+            <button
+              className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
+              onClick={()=>{
+                const p = prompts.find(x => x.id === lastUsedId);
+                if (!p) return;
+                setProvider(p.provider);
+                setModel(p.model || "");
+                setPrompt(p.text);
+              }}
+              disabled={!lastUsedId}
+            >
+              Load
+            </button>
+            <button
+              className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
+              onClick={()=> lastUsedId && removePrompt(lastUsedId)}
+              disabled={!lastUsedId}
+            >
+              Delete
+            </button>
+          </div>
+          <div className="flex items-end gap-2">
+            <input
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+              placeholder="Name to save current prompt…"
+              value={newName} onChange={e=>setNewName(e.target.value)}
+            />
+            <button
+              className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
+              onClick={()=>{
+                if (!newName.trim()) return;
+                addPrompt({ name: newName.trim(), text: prompt, provider, model: model || undefined });
+                setNewName("");
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
       </div>
 
       {err && <div className="rounded-lg border border-rose-400/40 bg-rose-500/10 p-3 text-sm">{err}</div>}
 
-      {/* Results list */}
+      {/* Results */}
       {data && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -215,7 +307,8 @@ export default function Page() {
                       {inCRM ? (
                         <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">In CRM</span>
                       ) : (
-                        <button onClick={()=>openAddModal(it)} className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10">+ Add</button>
+                        <button onClick={()=>openAddModal(it)}
+                                className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10">+ Add</button>
                       )}
                     </div>
                   </div>
@@ -227,13 +320,12 @@ export default function Page() {
         </div>
       )}
 
-      {/* Add-to-CRM modal (with Opportunity section) */}
+      {/* Add-to-CRM modal (unchanged fields from your latest spec) */}
       <Modal open={open} onClose={()=>setOpen(false)}>
         <h3 className="text-lg font-semibold mb-3">Add to CRM</h3>
 
         <div className="space-y-4">
-          {/* Company section */}
-          <SectionTitle>Company</SectionTitle>
+          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Company</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Company" value={draft.companyName||""} onChange={v=>setDraft((d:any)=>({...d, companyName:v}))} />
             <Field label="Country" value={draft.country||""} onChange={v=>setDraft((d:any)=>({...d, country:v}))} />
@@ -244,8 +336,7 @@ export default function Page() {
                     options={["New","Contacted","Qualified","Bad Fit"]} />
           </div>
 
-          {/* Opportunity section */}
-          <SectionTitle>Opportunity</SectionTitle>
+          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Opportunity</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field label="Brand" value={draft.brand||""} onChange={v=>setDraft((d:any)=>({...d, brand:v}))} />
             <Field label="Product" value={draft.product||""} onChange={v=>setDraft((d:any)=>({...d, product:v}))} />
@@ -270,30 +361,9 @@ export default function Page() {
   );
 }
 
-function SectionTitle({ children }: { children: any }) {
-  return <div className="text-sm uppercase tracking-wide text-[var(--muted)]">{children}</div>;
-}
 function Field({ label, value, onChange, type="text" }:{
   label:string; value:string; onChange:(v:string)=>void; type?:string;
 }) {
   return (
     <label className="block text-sm">
-      <span className="mb-1 inline-block">{label}</span>
-      <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-             value={value} onChange={e=>onChange(e.target.value)} type={type}/>
-    </label>
-  );
-}
-function Select({ label, value, onChange, options }:{
-  label:string; value:string; onChange:(v:string)=>void; options:string[];
-}) {
-  return (
-    <label className="block text-sm">
-      <span className="mb-1 inline-block">{label}</span>
-      <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-              value={value} onChange={e=>onChange(e.target.value)}>
-        {options.map(o=><option key={o} value={o}>{o}</option>)}
-      </select>
-    </label>
-  );
-}
+      <span className="mb-1 inline-block">{label}<

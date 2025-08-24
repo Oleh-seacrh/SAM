@@ -39,6 +39,9 @@ export default function Page() {
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
+  // NEW: tags input for Add-to-CRM modal
+  const [tagsText, setTagsText] = useState("");
+
   // restore last search + last LLM prompt/provider/model
   useEffect(() => {
     if (!settings) return;
@@ -112,7 +115,7 @@ export default function Page() {
   const canPrev = useMemo(()=>!!data?.prevStart,[data?.prevStart]);
   const canNext = useMemo(()=>!!data?.nextStart,[data?.nextStart]);
 
-  // Add-to-CRM modal (same fields as before)
+  // Add-to-CRM modal
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<any>({});
   function openAddModal(it: SearchItem) {
@@ -122,14 +125,19 @@ export default function Page() {
       companyName: it.title?.slice(0,80) || domain,
       domain, url: homepage, status: "New", source: "google",
       brand: "", product: "", quantity: "", dealValueUSD: undefined,
-      country: "", industry: "", note: ""
+      country: "", industry: "", note: "",
+      // NEW
+      sizeTag: "",
+      tags: []
     });
+    setTagsText("");
     setOpen(true);
   }
   function submitAdd() {
     if (!draft.companyName || !draft.domain || !draft.url) return;
     const dealValue = draft.dealValueUSD ? Number(draft.dealValueUSD) : undefined;
-    const payload = { ...draft, dealValueUSD: dealValue };
+    const tags = tagsText.split(",").map((s)=>s.trim()).filter(Boolean);
+    const payload = { ...draft, dealValueUSD: dealValue, sizeTag: draft.sizeTag || undefined, tags };
     addCRM(payload);
     setOpen(false);
   }
@@ -320,7 +328,7 @@ export default function Page() {
         </div>
       )}
 
-      {/* Add-to-CRM modal (unchanged fields from your latest spec) */}
+      {/* Add-to-CRM modal */}
       <Modal open={open} onClose={()=>setOpen(false)}>
         <h3 className="text-lg font-semibold mb-3">Add to CRM</h3>
 
@@ -343,6 +351,32 @@ export default function Page() {
             <Field label="Quantity" value={draft.quantity||""} onChange={v=>setDraft((d:any)=>({...d, quantity:v}))} />
             <Field label="Deal value (USD)" type="number" value={String(draft.dealValueUSD ?? "")}
                    onChange={v=>setDraft((d:any)=>({...d, dealValueUSD: v ? Number(v) : undefined}))} />
+          </div>
+
+          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Sizing & Tags</div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label className="block text-sm">
+              <span className="mb-1 inline-block">Size</span>
+              <select
+                className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+                value={draft.sizeTag || ""}
+                onChange={(e)=>setDraft((d:any)=>({...d, sizeTag: e.target.value || ""}))}
+              >
+                <option value="">—</option>
+                <option value="BIG">BIG</option>
+                <option value="SMALL">SMALL</option>
+              </select>
+            </label>
+
+            <label className="block text-sm">
+              <span className="mb-1 inline-block">Tags (comma-separated)</span>
+              <input
+                className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+                placeholder="priority,repeat-buyer,EMEA"
+                value={tagsText}
+                onChange={(e)=>setTagsText(e.target.value)}
+              />
+            </label>
           </div>
 
           <div>

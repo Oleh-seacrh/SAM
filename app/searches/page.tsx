@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useCRM } from "@/hooks/use-crm";
+import { canonicalHomepage, getDomain } from "@/lib/domain";
 
 type SearchItem = {
   title: string;
@@ -21,21 +23,18 @@ type SearchResponse = {
 
 export default function Page() {
   const [q, setQ] = useState("");
-  const [start, setStart] = useState(1); // 1, 11, 21...
-  const [num] = useState(10); // Google дозволяє до 10/req
+  const [start, setStart] = useState(1);
+  const [num] = useState(10);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // історія запитів у межах сесії (на цій же сторінці)
+  const { add, existsDomain } = useCRM();
+
   const [history, setHistory] = useState<string[]>([]);
   useEffect(() => {
     if (data?.q) {
-      setHistory((prev) => {
-        if (prev[0] === data.q) return prev; // не дублюємо поспіль
-        const next = [data.q, ...prev];
-        return next.slice(0, 10);
-      });
+      setHistory((prev) => (prev[0] === data.q ? prev : [data.q, ...prev].slice(0, 10)));
     }
   }, [data?.q]);
 
@@ -46,10 +45,9 @@ export default function Page() {
     setErr(null);
     try {
       const s = nextStart ?? start;
-      const url = `/api/search?q=${encodeURIComponent(query)}&num=${num}&start=${s}`;
-      const r = await fetch(url);
-      const j = (await r.json()) as SearchResponse | { error: string };
-      if (!r.ok) throw new Error(("error" in j && j.error) || "Search failed");
+      const r = await fetch(`/api/search?q=${encodeURIComponent(query)}&num=${num}&start=${s}`);
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "Search failed");
       setData(j as SearchResponse);
       if (nextStart !== undefined) setStart(nextStart);
     } catch (e: any) {
@@ -66,7 +64,7 @@ export default function Page() {
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Searches</h1>
 
-      {/* Форма пошуку (на тій же сторінці) */}
+      {/* Форма пошуку + останні запити */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
         <form
           onSubmit={(e) => {
@@ -91,7 +89,6 @@ export default function Page() {
           </button>
         </form>
 
-        {/* Історія на цій же сторінці */}
         {history.length > 0 && (
           <div className="mt-3 text-sm text-[var(--muted)]">
             <div className="mb-1">Останні запити:</div>
@@ -114,14 +111,12 @@ export default function Page() {
         )}
       </div>
 
-      {/* Повідомлення про помилку */}
       {err && (
         <div className="rounded-lg border border-red-400/40 bg-red-500/10 p-3 text-sm">
           {err}
         </div>
       )}
 
-      {/* Результати — залишаються на цій сторінці */}
       {data && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -134,7 +129,7 @@ export default function Page() {
                 onClick={() => canPrev && runSearch(data.prevStart!)}
                 className="rounded-md px-3 py-1.5 border border-white/10 bg-white/5 disabled:opacity-40"
               >
-                ← Popередня
+                ← Попередня
               </button>
               <button
                 disabled={!canNext || loading}
@@ -147,37 +142,54 @@ export default function Page() {
           </div>
 
           <ul className="space-y-3">
-            {data.items.map((it) => (
-              <li
-                key={it.link}
-                className="rounded-xl bg-[var(--card)] p-4 border border-white/10"
-              >
-                <a
-                  href={it.link}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-lg font-medium hover:underline"
-                >
-                  {it.title}
-                </a>
-                <div className="text-xs text-[var(--muted)] mt-1">
-                  {it.displayLink} {it.homepage && "• "}
-                  {it.homepage && (
-                    <a
-                      href={it.homepage}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="hover:underline"
-                    >
-                      homepage
-                    </a>
+            {data.items.map((it) => {
+              const homepage = it.homepage ? canonicalHomepage(it.homepage) : canonicalHomepage(it.link);
+              const domain = getDomain(homepage);
+              const inCRM = existsDomain(domain);
+              return (
+                <li key={it.link} className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <a href={it.link} target="_blank" rel="noreferrer" className="text-lg font-medium hover:underline">
+                        {it.title}
+                      </a>
+                      <div className="text-xs text-[var(--muted)] mt-1">
+                        {it.displayLink} •{" "}
+                        <a href={homepage} target="_blank" rel="noreferrer" className="hover:underline">
+                          {domain}
+                        </a>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      {inCRM ? (
+                        <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">
+                          В CRM
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() =>
+                            add({
+                              title: it.title,
+                              url: homepage,
+                              domain,
+                              source: "google",
+                            })
+                          }
+                          className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10"
+                        >
+                          + Додати в CRM
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {it.snippet && (
+                    <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>
                   )}
-                </div>
-                {it.snippet && (
-                  <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>
-                )}
-              </li>
-            ))}
+                </li>
+              );
+            })}
           </ul>
         </div>
       )}

@@ -27,14 +27,14 @@ export default function Page() {
   const { add: addCRM, existsDomain } = useCRM();
   const { sessions, add: addSession, remove: removeSession, clear: clearSessions } = useSessions();
 
-  // LLM UI state
+  // LLM UI
   const [provider, setProvider] = useState<"openai" | "anthropic" | "gemini">("openai");
   const [model, setModel] = useState<string>("");
-  const [prompt, setPrompt] = useState<string>("Target: B2B distributors / manufacturers of X-ray film. Exclude blogs, news, generic marketplaces.");
+  const [prompt, setPrompt] = useState<string>("Target: B2B distributors/manufacturers of X-ray film and related medical imaging consumables. Exclude blogs, news, generic marketplaces.");
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
-  // history для швидких кнопок
+  // recent queries
   const [history, setHistory] = useState<string[]>([]);
   useEffect(() => { if (data?.q) setHistory(p => (p[0] === data.q ? p : [data.q, ...p].slice(0,10))); }, [data?.q]);
 
@@ -47,9 +47,9 @@ export default function Page() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Search failed");
       setData(j as SearchResponse);
-      setScores({}); // скидати минулі оцінки при новому пошуку
+      setScores({}); // reset previous scores
 
-      // автосесія
+      // save session
       const savedItems: SavedItem[] = (j.items ?? []).map((it: any) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         return { title: it.title, link: it.link, displayLink: it.displayLink, snippet: it.snippet, homepage, domain: getDomain(homepage) };
@@ -76,28 +76,41 @@ export default function Page() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Scoring failed");
       setScores(j.scores || {});
-    } catch (e: any) {
-      setErr(e.message || "Scoring failed");
-    } finally {
-      setScoring(false);
-    }
+    } catch (e: any) { setErr(e.message || "Scoring failed"); } finally { setScoring(false); }
   }
 
   const canPrev = useMemo(()=>!!data?.prevStart,[data?.prevStart]);
   const canNext = useMemo(()=>!!data?.nextStart,[data?.nextStart]);
 
-  // модал додавання в CRM (скорочена версія)
+  // Add-to-CRM modal
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<any>({});
   function openAddModal(it: SearchItem) {
     const homepage = canonicalHomepage(it.homepage ?? it.link);
     const domain = getDomain(homepage);
-    setDraft({ companyName: it.title?.slice(0,80) || domain, domain, url: homepage, status: "New", source: "google" });
+    setDraft({
+      companyName: it.title?.slice(0,80) || domain,
+      domain, url: homepage,
+      status: "New",
+      source: "google",
+      // opportunity defaults
+      brand: "",
+      product: "",
+      quantity: "",
+      dealValueUSD: undefined,
+      // optional company data
+      country: "",
+      industry: "",
+      note: ""
+    });
     setOpen(true);
   }
   function submitAdd() {
     if (!draft.companyName || !draft.domain || !draft.url) return;
-    addCRM({ ...draft });
+    const dealValue = draft.dealValueUSD ? Number(draft.dealValueUSD) : undefined;
+    const payload = { ...draft, dealValueUSD: dealValue };
+    delete (payload as any).open; // safety
+    addCRM(payload);
     setOpen(false);
   }
 
@@ -105,22 +118,22 @@ export default function Page() {
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Searches</h1>
 
-      {/* форма пошуку */}
+      {/* Search form */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
-        <form onSubmit={(e)=>{e.preventDefault(); setStart(1); runSearch(1);}}
-              className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none"
-                 placeholder="Ключові слова (наприклад: x-ray film distributor India)"
-                 value={q} onChange={e=>setQ(e.target.value)} />
-          <button type="submit" disabled={loading || !q.trim()}
-                  className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50">
-            {loading ? "Пошук…" : "Шукати"}
+        <form onSubmit={(e)=>{e.preventDefault(); setStart(1); runSearch(1);}} className="flex flex-col gap-3 sm:flex-row sm:items-center">
+          <input
+            className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none"
+            placeholder="Enter keywords (e.g., x-ray film distributor India)"
+            value={q} onChange={e=>setQ(e.target.value)}
+          />
+          <button type="submit" disabled={loading || !q.trim()} className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50">
+            {loading ? "Searching…" : "Search"}
           </button>
         </form>
 
         {history.length>0 && (
           <div className="mt-3 text-sm text-[var(--muted)]">
-            <div className="mb-1">Останні запити:</div>
+            <div className="mb-1">Recent queries:</div>
             <div className="flex flex-wrap gap-2">
               {history.map(h=>(
                 <button key={h} onClick={()=>{setQ(h); setStart(1); runSearch(1);}}
@@ -131,13 +144,12 @@ export default function Page() {
         )}
       </div>
 
-      {/* панель AI */}
+      {/* AI panel */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="text-sm">
             <span className="mb-1 inline-block">Provider</span>
-            <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                    value={provider} onChange={(e)=>setProvider(e.target.value as any)}>
+            <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" value={provider} onChange={(e)=>setProvider(e.target.value as any)}>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
               <option value="gemini">Gemini</option>
@@ -146,16 +158,13 @@ export default function Page() {
           <label className="text-sm">
             <span className="mb-1 inline-block">Model (optional)</span>
             <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                   placeholder="auto (e.g. gpt-4o-mini, claude-3-haiku, gemini-1.5-flash)"
+                   placeholder="auto (e.g., gpt-4o-mini, claude-3-haiku, gemini-1.5-flash)"
                    value={model} onChange={(e)=>setModel(e.target.value)} />
           </label>
           <div className="flex items-end">
-            <button
-              onClick={analyze}
-              disabled={!data?.items?.length || scoring}
-              className="w-full rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50"
-            >
-              {scoring ? "Аналізую…" : "Аналізувати поточні результати"}
+            <button onClick={analyze} disabled={!data?.items?.length || scoring}
+              className="w-full rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50">
+              {scoring ? "Analyzing…" : "Analyze current results"}
             </button>
           </div>
         </div>
@@ -163,22 +172,22 @@ export default function Page() {
           <span className="mb-1 inline-block">Prompt</span>
           <textarea className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-28"
                     value={prompt} onChange={(e)=>setPrompt(e.target.value)}
-                    placeholder="Опиши критерії ідеального клієнта…" />
+                    placeholder="Describe ideal prospect criteria…" />
         </label>
       </div>
 
-      {err && <div className="rounded-lg border border-red-400/40 bg-red-500/10 p-3 text-sm">{err}</div>}
+      {err && <div className="rounded-lg border border-rose-400/40 bg-rose-500/10 p-3 text-sm">{err}</div>}
 
-      {/* результати пошуку + теги */}
+      {/* Results list */}
       {data && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <div className="text-sm text-[var(--muted)]">Запит: <b>{data.q}</b> • Всього: {data.totalResults.toLocaleString()}</div>
+            <div className="text-sm text-[var(--muted)]">Query: <b>{data.q}</b> • Total: {data.totalResults.toLocaleString()}</div>
             <div className="flex gap-2">
               <button disabled={!canPrev || loading} onClick={()=>canPrev && runSearch(data.prevStart!)}
-                      className="rounded-md px-3 py-1.5 border border-white/10 bg-white/5 disabled:opacity-40">← Попередня</button>
+                      className="rounded-md px-3 py-1.5 border border-white/10 bg-white/5 disabled:opacity-40">← Previous</button>
               <button disabled={!canNext || loading} onClick={()=>canNext && runSearch(data.nextStart!)}
-                      className="rounded-md px-3 py-1.5 border border-white/10 bg-white/5 disabled:opacity-40">Наступна →</button>
+                      className="rounded-md px-3 py-1.5 border border-white/10 bg-white/5 disabled:opacity-40">Next →</button>
             </div>
           </div>
 
@@ -204,24 +213,13 @@ export default function Page() {
                     <div className="shrink-0 flex items-center gap-2">
                       {score && <Badge tone={score.label}>{score.label.toUpperCase()}</Badge>}
                       {inCRM ? (
-                        <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">В CRM</span>
+                        <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">In CRM</span>
                       ) : (
-                        <button onClick={()=>openAddModal(it)}
-                                className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10">+ Додати</button>
+                        <button onClick={()=>openAddModal(it)} className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10">+ Add</button>
                       )}
                     </div>
                   </div>
                   {it.snippet && <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>}
-                  {score?.reasons && score.reasons.length > 0 && (
-                    <div className="mt-2 text-xs text-[var(--muted)]">
-                      Причини: {score.reasons.join("; ")}
-                    </div>
-                  )}
-                  {score?.tags && score.tags.length > 0 && (
-                    <div className="mt-1 text-xs opacity-80">
-                      Теги: {score.tags.map((t,i)=><span key={i} className="mr-1">#{t}</span>)}
-                    </div>
-                  )}
                 </li>
               );
             })}
@@ -229,30 +227,52 @@ export default function Page() {
         </div>
       )}
 
-      {/* модал додавання в CRM */}
+      {/* Add-to-CRM modal (with Opportunity section) */}
       <Modal open={open} onClose={()=>setOpen(false)}>
-        <h3 className="text-lg font-semibold mb-3">Додати в CRM</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <Field label="Company" value={draft.companyName||""} onChange={v=>setDraft((d:any)=>({...d, companyName:v}))} />
-          <Field label="Homepage (URL)" value={draft.url||""} onChange={v=>setDraft((d:any)=>({...d, url:v}))} />
-          <Field label="Domain" value={draft.domain||""} onChange={v=>setDraft((d:any)=>({...d, domain:v}))} />
-          <Select label="Status" value={draft.status || "New"} onChange={v=>setDraft((d:any)=>({...d, status:v}))}
-                  options={["New","Contacted","Qualified","Bad Fit"]} />
-          <div className="sm:col-span-2">
+        <h3 className="text-lg font-semibold mb-3">Add to CRM</h3>
+
+        <div className="space-y-4">
+          {/* Company section */}
+          <SectionTitle>Company</SectionTitle>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Company" value={draft.companyName||""} onChange={v=>setDraft((d:any)=>({...d, companyName:v}))} />
+            <Field label="Country" value={draft.country||""} onChange={v=>setDraft((d:any)=>({...d, country:v}))} />
+            <Field label="Industry" value={draft.industry||""} onChange={v=>setDraft((d:any)=>({...d, industry:v}))} />
+            <Field label="Homepage (URL)" value={draft.url||""} onChange={v=>setDraft((d:any)=>({...d, url:v}))} />
+            <Field label="Domain" value={draft.domain||""} onChange={v=>setDraft((d:any)=>({...d, domain:v}))} />
+            <Select label="Status" value={draft.status || "New"} onChange={v=>setDraft((d:any)=>({...d, status:v}))}
+                    options={["New","Contacted","Qualified","Bad Fit"]} />
+          </div>
+
+          {/* Opportunity section */}
+          <SectionTitle>Opportunity</SectionTitle>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Field label="Brand" value={draft.brand||""} onChange={v=>setDraft((d:any)=>({...d, brand:v}))} />
+            <Field label="Product" value={draft.product||""} onChange={v=>setDraft((d:any)=>({...d, product:v}))} />
+            <Field label="Quantity" value={draft.quantity||""} onChange={v=>setDraft((d:any)=>({...d, quantity:v}))} />
+            <Field label="Deal value (USD)" type="number" value={String(draft.dealValueUSD ?? "")}
+                   onChange={v=>setDraft((d:any)=>({...d, dealValueUSD: v ? Number(v) : undefined}))} />
+          </div>
+
+          <div>
             <label className="block text-sm mb-1">Note</label>
             <textarea className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-24"
                       value={draft.note||""} onChange={e=>setDraft((d:any)=>({...d, note:e.target.value}))}/>
           </div>
-        </div>
-        <div className="mt-4 flex justify-end gap-2">
-          <button onClick={()=>setOpen(false)} className="rounded-md px-3 py-1.5 border border-white/10">Скасувати</button>
-          <button onClick={submitAdd} className="rounded-md px-3 py-1.5 border border-white/10 bg-white/10 hover:bg-white/20">Додати</button>
+
+          <div className="mt-2 flex justify-end gap-2">
+            <button onClick={()=>setOpen(false)} className="rounded-md px-3 py-1.5 border border-white/10">Cancel</button>
+            <button onClick={submitAdd} className="rounded-md px-3 py-1.5 border border-white/10 bg-white/10 hover:bg-white/20">Add</button>
+          </div>
         </div>
       </Modal>
     </div>
   );
 }
 
+function SectionTitle({ children }: { children: any }) {
+  return <div className="text-sm uppercase tracking-wide text-[var(--muted)]">{children}</div>;
+}
 function Field({ label, value, onChange, type="text" }:{
   label:string; value:string; onChange:(v:string)=>void; type?:string;
 }) {

@@ -1,37 +1,31 @@
 "use client";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export type SizeTag = "BIG" | "SMALL";
 export type CRMItem = {
   id: number;
   companyName: string;
   domain: string;
-  url: string;
   country?: string;
   industry?: string;
-
   brand?: string;
   product?: string;
   quantity?: string;
   dealValueUSD?: number;
-
   sizeTag?: SizeTag;
   tags?: string[];
-
   contactName?: string;
   contactRole?: string;
   contactEmail?: string;
   contactPhone?: string;
-
   status: "New" | "Contacted" | "Qualified" | "Bad Fit";
   note?: string;
   source?: string;
-
   addedAt: number;
   updatedAt: number;
 };
 
-type NewClient = Omit<CRMItem,"id"|"addedAt"|"updatedAt">;
+type NewClient = Omit<CRMItem, "id" | "addedAt" | "updatedAt">;
 
 const LS_KEY = "sam.crm.fallback.v1";
 
@@ -39,44 +33,29 @@ export function useCRM() {
   const [items, setItems] = useState<CRMItem[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  // ---- helpers
-  const saveFallback = (list: CRMItem[]) => {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch {}
-  };
-  const loadFallback = (): CRMItem[] => {
-    try {
-      const raw = localStorage.getItem(LS_KEY);
-      return raw ? JSON.parse(raw) as CRMItem[] : [];
-    } catch { return []; }
-  };
+  const saveFallback = (list: CRMItem[]) => { try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch {} };
+  const loadFallback = (): CRMItem[] => { try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; } };
 
-  // ---- load from API (fallback local)
   const load = useCallback(async () => {
     try {
       const r = await fetch("/api/clients", { cache: "no-store" });
-      if (!r.ok) throw new Error("GET /api/clients failed");
       const j = await r.json();
-      const list = (j.items ?? []) as CRMItem[];
-      setItems(list);
-      saveFallback(list);
+      setItems(j.items ?? []);
+      saveFallback(j.items ?? []);
     } catch {
-      const list = loadFallback();
-      setItems(list);
-    } finally {
-      setLoaded(true);
-    }
+      setItems(loadFallback());
+    } finally { setLoaded(true); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { if (loaded) saveFallback(items); }, [items, loaded]);
 
-  // ---- ops
-  async function add(payload: Partial<NewClient> & Pick<NewClient,"companyName"|"domain"|"url"|"status">) {
-    // optimistic
+  async function add(payload: Pick<NewClient, "companyName"|"domain"|"status"> & Partial<NewClient>) {
+    // оптимістично
     const temp: CRMItem = {
       id: Math.floor(Math.random()*1e9)*-1,
       companyName: payload.companyName,
       domain: payload.domain,
-      url: payload.url,
       country: payload.country,
       industry: payload.industry,
       brand: payload.brand,
@@ -100,15 +79,14 @@ export function useCRM() {
     try {
       const r = await fetch("/api/clients", {
         method: "POST",
-        headers: {"content-type":"application/json"},
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "POST failed");
       const id = j.item?.id ?? j.id;
-      setItems(prev => [{...temp, id: id ?? temp.id}, ...prev.filter(x=>x.id!==temp.id)]);
+      setItems(prev => [{ ...temp, id: id ?? temp.id }, ...prev.filter(x => x.id !== temp.id)]);
     } catch {
-      // keep in fallback so користувач нічого не втратить
       saveFallback([temp, ...items]);
     }
   }
@@ -124,11 +102,10 @@ export function useCRM() {
     try {
       const r = await fetch(`/api/clients/${id}`, {
         method: "PATCH",
-        headers: {"content-type":"application/json"},
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(patch),
       });
-      const j = await r.json();
-      if (!r.ok) throw new Error(j?.error || "PATCH failed");
+      if (!r.ok) throw new Error("PATCH failed");
     } catch {
       setItems(prev); // rollback
     }
@@ -146,13 +123,6 @@ export function useCRM() {
   }
 
   const existsDomain = (domain: string) => items.some(i => i.domain === domain);
-  const byProduct = useCallback((filter: string) => {
-    const f = filter.trim().toLowerCase();
-    if (!f) return items;
-    return items.filter(i => (i.product ?? "").toLowerCase().includes(f));
-  }, [items]);
 
-  useEffect(() => { if (loaded) saveFallback(items); }, [items, loaded]);
-
-  return { items, add, update, remove, existsDomain, byProduct };
+  return { items, add, update, remove, existsDomain };
 }

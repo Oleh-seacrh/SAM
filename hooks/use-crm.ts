@@ -1,171 +1,158 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-export type CRMStatus = "New" | "Contacted" | "Qualified" | "Bad Fit";
 export type SizeTag = "BIG" | "SMALL";
-
 export type CRMItem = {
-  id: string;
-
-  // Core company info
+  id: number;
   companyName: string;
   domain: string;
   url: string;
   country?: string;
   industry?: string;
 
-  // Opportunity
   brand?: string;
   product?: string;
   quantity?: string;
   dealValueUSD?: number;
 
-  // NEW
-  sizeTag?: SizeTag;     // BIG | SMALL
-  tags: string[];        // arbitrary labels
+  sizeTag?: SizeTag;
+  tags?: string[];
 
-  // Contact (optional)
   contactName?: string;
   contactRole?: string;
   contactEmail?: string;
   contactPhone?: string;
 
-  // Meta
-  status: CRMStatus;
+  status: "New" | "Contacted" | "Qualified" | "Bad Fit";
   note?: string;
-  source?: "google" | "manual";
+  source?: string;
+
   addedAt: number;
   updatedAt: number;
 };
 
-const STORAGE_V4 = "sam_crm_v4";
-const STORAGE_V3 = "sam_crm_v3";
-const STORAGE_V2 = "sam_crm_v2";
+type NewClient = Omit<CRMItem,"id"|"addedAt"|"updatedAt">;
 
-function safeParse<T>(s: string | null, fallback: T): T {
-  try { return s ? (JSON.parse(s) as T) : fallback; } catch { return fallback; }
-}
-function makeId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return (crypto as any).randomUUID();
-  return `id_${Date.now()}_${Math.random().toString(16).slice(2)}`;
-}
+const LS_KEY = "sam.crm.fallback.v1";
 
 export function useCRM() {
   const [items, setItems] = useState<CRMItem[]>([]);
+  const [loaded, setLoaded] = useState(false);
 
-  // load + migrate to V4 (adds sizeTag,tags)
-  useEffect(() => {
-    if (typeof window === "undefined") return;
+  // ---- helpers
+  const saveFallback = (list: CRMItem[]) => {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch {}
+  };
+  const loadFallback = (): CRMItem[] => {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      return raw ? JSON.parse(raw) as CRMItem[] : [];
+    } catch { return []; }
+  };
 
-    const v4 = safeParse<CRMItem[]>(localStorage.getItem(STORAGE_V4), []);
-    if (v4.length) {
-      setItems(v4);
-      return;
+  // ---- load from API (fallback local)
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch("/api/clients", { cache: "no-store" });
+      if (!r.ok) throw new Error("GET /api/clients failed");
+      const j = await r.json();
+      const list = (j.items ?? []) as CRMItem[];
+      setItems(list);
+      saveFallback(list);
+    } catch {
+      const list = loadFallback();
+      setItems(list);
+    } finally {
+      setLoaded(true);
     }
-
-    const v3 = safeParse<any[]>(localStorage.getItem(STORAGE_V3), []);
-    if (v3.length) {
-      const migrated: CRMItem[] = v3.map((x) => ({
-        id: x.id ?? makeId(),
-        companyName: x.companyName ?? x.title ?? x.domain ?? "Company",
-        domain: x.domain,
-        url: x.url,
-        country: x.country,
-        industry: x.industry,
-        brand: x.brand,
-        product: x.product,
-        quantity: x.quantity,
-        dealValueUSD: typeof x.dealValueUSD === "number" ? x.dealValueUSD : undefined,
-        sizeTag: (x.sizeTag === "BIG" || x.sizeTag === "SMALL") ? x.sizeTag : undefined,
-        tags: Array.isArray(x.tags) ? x.tags.filter(Boolean) : [],
-        contactName: x.contactName,
-        contactRole: x.contactRole,
-        contactEmail: x.contactEmail,
-        contactPhone: x.contactPhone,
-        status: (x.status ?? "New") as CRMStatus,
-        note: x.note,
-        source: x.source,
-        addedAt: x.addedAt ?? Date.now(),
-        updatedAt: Date.now(),
-      }));
-      setItems(migrated);
-      localStorage.setItem(STORAGE_V4, JSON.stringify(migrated));
-      return;
-    }
-
-    const v2 = safeParse<any[]>(localStorage.getItem(STORAGE_V2), []);
-    if (v2.length) {
-      const migrated: CRMItem[] = v2.map((x) => ({
-        id: x.id ?? makeId(),
-        companyName: x.companyName ?? x.title ?? x.domain ?? "Company",
-        domain: x.domain,
-        url: x.url,
-        country: x.country,
-        industry: x.industry,
-        brand: undefined,
-        product: undefined,
-        quantity: undefined,
-        dealValueUSD: undefined,
-        sizeTag: undefined,
-        tags: [],
-        contactName: x.contactName,
-        contactRole: x.contactRole,
-        contactEmail: x.contactEmail,
-        contactPhone: x.contactPhone,
-        status: (x.status ?? "New") as CRMStatus,
-        note: x.note,
-        source: x.source,
-        addedAt: x.addedAt ?? Date.now(),
-        updatedAt: Date.now(),
-      }));
-      setItems(migrated);
-      localStorage.setItem(STORAGE_V4, JSON.stringify(migrated));
-      return;
-    }
-
-    setItems([]);
   }, []);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(STORAGE_V4, JSON.stringify(items));
+  useEffect(() => { load(); }, [load]);
+
+  // ---- ops
+  async function add(payload: Partial<NewClient> & Pick<NewClient,"companyName"|"domain"|"url"|"status">) {
+    // optimistic
+    const temp: CRMItem = {
+      id: Math.floor(Math.random()*1e9)*-1,
+      companyName: payload.companyName,
+      domain: payload.domain,
+      url: payload.url,
+      country: payload.country,
+      industry: payload.industry,
+      brand: payload.brand,
+      product: payload.product,
+      quantity: payload.quantity,
+      dealValueUSD: payload.dealValueUSD,
+      sizeTag: payload.sizeTag,
+      tags: payload.tags ?? [],
+      contactName: payload.contactName,
+      contactRole: payload.contactRole,
+      contactEmail: payload.contactEmail,
+      contactPhone: payload.contactPhone,
+      status: payload.status,
+      note: payload.note,
+      source: payload.source ?? "google",
+      addedAt: Date.now(),
+      updatedAt: Date.now(),
+    };
+    setItems(prev => [temp, ...prev]);
+
+    try {
+      const r = await fetch("/api/clients", {
+        method: "POST",
+        headers: {"content-type":"application/json"},
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "POST failed");
+      const id = j.item?.id ?? j.id;
+      setItems(prev => [{...temp, id: id ?? temp.id}, ...prev.filter(x=>x.id!==temp.id)]);
+    } catch {
+      // keep in fallback so користувач нічого не втратить
+      saveFallback([temp, ...items]);
+    }
+  }
+
+  async function update(id: number, patch: Partial<NewClient>) {
+    const prev = items;
+    const idx = prev.findIndex(i => i.id === id);
+    if (idx < 0) return;
+    const next = [...prev];
+    next[idx] = { ...prev[idx], ...patch, updatedAt: Date.now() };
+    setItems(next);
+
+    try {
+      const r = await fetch(`/api/clients/${id}`, {
+        method: "PATCH",
+        headers: {"content-type":"application/json"},
+        body: JSON.stringify(patch),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || "PATCH failed");
+    } catch {
+      setItems(prev); // rollback
+    }
+  }
+
+  async function remove(id: number) {
+    const prev = items;
+    setItems(prev.filter(i => i.id !== id));
+    try {
+      const r = await fetch(`/api/clients/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error("DELETE failed");
+    } catch {
+      setItems(prev); // rollback
+    }
+  }
+
+  const existsDomain = (domain: string) => items.some(i => i.domain === domain);
+  const byProduct = useCallback((filter: string) => {
+    const f = filter.trim().toLowerCase();
+    if (!f) return items;
+    return items.filter(i => (i.product ?? "").toLowerCase().includes(f));
   }, [items]);
 
-  const add = (p: Omit<CRMItem, "id" | "addedAt" | "updatedAt">) => {
-    setItems((prev) => {
-      if (prev.some((x) => x.domain === p.domain)) return prev; // dedupe by domain
-      return [{
-        ...p,
-        tags: Array.isArray(p.tags) ? p.tags.filter(Boolean) : [],
-        id: makeId(),
-        addedAt: Date.now(),
-        updatedAt: Date.now()
-      }, ...prev];
-    });
-  };
+  useEffect(() => { if (loaded) saveFallback(items); }, [items, loaded]);
 
-  const update = (id: string, patch: Partial<CRMItem>) => {
-    setItems((prev) => prev.map((x) =>
-      x.id === id
-        ? {
-            ...x,
-            ...patch,
-            tags: patch.tags ? patch.tags.filter(Boolean) : x.tags,
-            updatedAt: Date.now(),
-          }
-        : x
-    ));
-  };
-
-  const remove = (id: string) => setItems((prev) => prev.filter((x) => x.id !== id));
-  const existsDomain = (domain: string) => items.some((x) => x.domain === domain);
-  const byProduct = (needle: string) => {
-    const q = needle.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter((x) => (x.product ?? "").toLowerCase().includes(q));
-  };
-
-  const sorted = useMemo(() => [...items].sort((a, b) => b.addedAt - a.addedAt), [items]);
-
-  return { items: sorted, add, update, remove, existsDomain, byProduct, setItems };
+  return { items, add, update, remove, existsDomain, byProduct };
 }

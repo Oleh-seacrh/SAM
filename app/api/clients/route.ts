@@ -55,15 +55,15 @@ export async function GET() {
   return Response.json({ items: norm });
 }
 
-export async function POST(req: NextRequest) {
-  const body = (await req.json()) as NewClient;
-  if (!body.companyName || !body.domain || !body.url) {
-    return new Response(JSON.stringify({ error: "Missing required fields" }), { status: 400 });
+export async function POST(req: Request) {
+  const sql = getSql();
+  const body = await req.json();
+
+  if (!body.companyName || !body.domain || !body.url || !body.status) {
+    return Response.json({ error: "Missing required fields" }, { status: 400 });
   }
 
-  const sql = getSql();
-  const tags = Array.isArray(body.tags) ? body.tags.filter(Boolean) : [];
-  const tagsLiteral = toPgTextArray(tags); // -> {"a","b"}
+  const tagsLiteral = toPgTextArray(Array.isArray(body.tags) ? body.tags : []);
 
   const rows = await sql/* sql */`
     INSERT INTO clients (
@@ -77,10 +77,11 @@ export async function POST(req: NextRequest) {
       ${body.brand ?? null}, ${body.product ?? null}, ${body.quantity ?? null}, ${body.dealValueUSD ?? null},
       ${body.sizeTag ?? null}, ${tagsLiteral}::text[],
       ${body.contactName ?? null}, ${body.contactRole ?? null}, ${body.contactEmail ?? null}, ${body.contactPhone ?? null},
-      ${body.status}, ${body.note ?? null}, ${body.source ?? null}, NOW(), NOW()
+      ${body.status}, ${body.note ?? null}, ${body.source ?? "google"}, NOW(), NOW()
     )
     RETURNING id;
   `;
 
-  return Response.json({ id: rows[0].id }, { status: 201 });
+  return Response.json({ item: { id: rows[0].id } }, { status: 201 });
 }
+

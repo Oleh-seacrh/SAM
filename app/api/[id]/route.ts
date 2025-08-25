@@ -1,25 +1,18 @@
 export const runtime = "nodejs";
-
 import { getSql, toPgTextArray } from "@/lib/db";
 
-export async function PATCH(
-  req: Request,
-  { params }: { params: { id: string } }
-) {
+export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   const id = Number(params.id);
   if (!id) return Response.json({ error: "Bad id" }, { status: 400 });
 
   const body = await req.json();
-
   const sql = getSql();
-  const tagsLiteral =
-    Array.isArray(body.tags) ? toPgTextArray(body.tags) : null;
+  const tagsLiteral = Array.isArray(body.tags) ? toPgTextArray(body.tags) : null;
 
   const rows = await sql/* sql */`
     UPDATE clients SET
       company_name   = COALESCE(${body.companyName ?? null}, company_name),
       domain         = COALESCE(${body.domain ?? null}, domain),
-      url            = COALESCE(${body.url ?? null}, url),
       country        = COALESCE(${body.country ?? null}, country),
       industry       = COALESCE(${body.industry ?? null}, industry),
       brand          = COALESCE(${body.brand ?? null}, brand),
@@ -39,19 +32,14 @@ export async function PATCH(
     WHERE id = ${id}
     RETURNING id;
   `;
-
   if (!rows.length) return Response.json({ error: "Not found" }, { status: 404 });
   return Response.json({ ok: true });
 }
 
-export async function DELETE(
-  _req: Request,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
   const id = Number(params.id);
   if (!id) return Response.json({ error: "Bad id" }, { status: 400 });
-
   const sql = getSql();
-  await sql/* sql */`DELETE FROM clients WHERE id = ${id}`;
+  await sql/* sql */`DELETE FROM clients WHERE id=${id}`;
   return Response.json({ ok: true });
 }

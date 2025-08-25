@@ -8,19 +8,24 @@ export type CRMItem = {
   domain: string;
   country?: string;
   industry?: string;
+
   brand?: string;
   product?: string;
   quantity?: string;
   dealValueUSD?: number;
+
   sizeTag?: SizeTag;
   tags?: string[];
+
   contactName?: string;
   contactRole?: string;
   contactEmail?: string;
   contactPhone?: string;
+
   status: "New" | "Contacted" | "Qualified" | "Bad Fit";
   note?: string;
   source?: string;
+
   addedAt: number;
   updatedAt: number;
 };
@@ -33,27 +38,37 @@ export function useCRM() {
   const [items, setItems] = useState<CRMItem[]>([]);
   const [loaded, setLoaded] = useState(false);
 
-  const saveFallback = (list: CRMItem[]) => { try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch {} };
-  const loadFallback = (): CRMItem[] => { try { const raw = localStorage.getItem(LS_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; } };
+  const saveFallback = (list: CRMItem[]) => {
+    try { localStorage.setItem(LS_KEY, JSON.stringify(list)); } catch {}
+  };
+  const loadFallback = (): CRMItem[] => {
+    try {
+      const raw = localStorage.getItem(LS_KEY);
+      return raw ? JSON.parse(raw) as CRMItem[] : [];
+    } catch { return []; }
+  };
 
   const load = useCallback(async () => {
     try {
       const r = await fetch("/api/clients", { cache: "no-store" });
+      if (!r.ok) throw new Error("GET /api/clients failed");
       const j = await r.json();
-      setItems(j.items ?? []);
-      saveFallback(j.items ?? []);
+      const list = (j.items ?? []) as CRMItem[];
+      setItems(list);
+      saveFallback(list);
     } catch {
       setItems(loadFallback());
-    } finally { setLoaded(true); }
+    } finally {
+      setLoaded(true);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { if (loaded) saveFallback(items); }, [items, loaded]);
 
   async function add(payload: Pick<NewClient, "companyName"|"domain"|"status"> & Partial<NewClient>) {
-    // оптимістично
     const temp: CRMItem = {
-      id: Math.floor(Math.random()*1e9)*-1,
+      id: Math.floor(Math.random() * 1e9) * -1,
       companyName: payload.companyName,
       domain: payload.domain,
       country: payload.country,
@@ -124,5 +139,11 @@ export function useCRM() {
 
   const existsDomain = (domain: string) => items.some(i => i.domain === domain);
 
-  return { items, add, update, remove, existsDomain };
+  const byProduct = useCallback((needle: string) => {
+    const q = (needle || "").trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(i => (i.product ?? "").toLowerCase().includes(q));
+  }, [items]);
+
+  return { items, add, update, remove, existsDomain, byProduct };
 }

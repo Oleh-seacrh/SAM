@@ -123,7 +123,7 @@ export default function Page() {
     const domain = getDomain(homepage);
     setDraft({
       companyName: it.title?.slice(0,80) || domain,
-      domain, url: homepage, status: "New", source: "google",
+      domain, status: "New", source: "google",
       brand: "", product: "", quantity: "", dealValueUSD: undefined,
       country: "", industry: "", note: "",
       // NEW
@@ -134,7 +134,7 @@ export default function Page() {
     setOpen(true);
   }
   function submitAdd() {
-    if (!draft.companyName || !draft.domain || !draft.url) return;
+    if (!draft.companyName || !draft.domain ) return;
     const dealValue = draft.dealValueUSD ? Number(draft.dealValueUSD) : undefined;
     const tags = tagsText.split(",").map((s)=>s.trim()).filter(Boolean);
     const payload = { ...draft, dealValueUSD: dealValue, sizeTag: draft.sizeTag || undefined, tags };
@@ -338,7 +338,6 @@ export default function Page() {
             <Field label="Company" value={draft.companyName||""} onChange={v=>setDraft((d:any)=>({...d, companyName:v}))} />
             <Field label="Country" value={draft.country||""} onChange={v=>setDraft((d:any)=>({...d, country:v}))} />
             <Field label="Industry" value={draft.industry||""} onChange={v=>setDraft((d:any)=>({...d, industry:v}))} />
-            <Field label="Homepage (URL)" value={draft.url||""} onChange={v=>setDraft((d:any)=>({...d, url:v}))} />
             <Field label="Domain" value={draft.domain||""} onChange={v=>setDraft((d:any)=>({...d, domain:v}))} />
             <Select label="Status" value={draft.status || "New"} onChange={v=>setDraft((d:any)=>({...d, status:v}))}
                     options={["New","Contacted","Qualified","Bad Fit"]} />

@@ -1,60 +1,65 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import type { Provider } from "./use-settings";
 
-export type SavedPrompt = {
+export type PromptItem = {
   id: string;
   name: string;
   text: string;
-  provider: Provider;
+  provider: "openai" | "anthropic" | "gemini";
   model?: string;
-  ts: number;
+  createdAt: number;
 };
 
-const STORAGE_KEY = "sam_prompts_v1";
+const KEY = "sam.prompts.v1";
+const KEY_LAST = "sam.prompts.lastId";
 
-function safeParse<T>(s: string | null, fallback: T): T {
-  try { return s ? (JSON.parse(s) as T) : fallback; } catch { return fallback; }
+function load(): PromptItem[] {
+  try {
+    const raw = localStorage.getItem(KEY);
+    return raw ? JSON.parse(raw) as PromptItem[] : [];
+  } catch { return []; }
 }
-function makeId() {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return (crypto as any).randomUUID();
-  return `pr_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+function save(list: PromptItem[]) {
+  localStorage.setItem(KEY, JSON.stringify(list));
 }
 
 export function usePrompts() {
-  const [items, setItems] = useState<SavedPrompt[]>([]);
-  const [lastUsedId, setLastUsedId] = useState<string | null>(null);
+  const [prompts, setPrompts] = useState<PromptItem[]>([]);
+  const [lastUsedId, setLastUsedIdState] = useState<string | null>(null);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const data = safeParse<{ items: SavedPrompt[]; lastUsedId: string | null }>(
-      localStorage.getItem(STORAGE_KEY),
-      { items: [], lastUsedId: null }
-    );
-    setItems(data.items || []);
-    setLastUsedId(data.lastUsedId || null);
+    const list = load();
+    setPrompts(list);
+    setLastUsedIdState(localStorage.getItem(KEY_LAST));
   }, []);
 
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ items, lastUsedId }));
-  }, [items, lastUsedId]);
+  function setLastUsedId(id: string | null) {
+    setLastUsedIdState(id);
+    if (id) localStorage.setItem(KEY_LAST, id);
+    else localStorage.removeItem(KEY_LAST);
+  }
 
-  const add = (p: Omit<SavedPrompt, "id" | "ts">) => {
-    const next: SavedPrompt = { ...p, id: makeId(), ts: Date.now() };
-    setItems(prev => [next, ...prev]);
-    setLastUsedId(next.id);
-  };
+  function add(p: {name:string;text:string;provider:"openai"|"anthropic"|"gemini";model?:string}) {
+    const item: PromptItem = {
+      id: crypto.randomUUID(),
+      name: p.name,
+      text: p.text,
+      provider: p.provider,
+      model: p.model,
+      createdAt: Date.now(),
+    };
+    const list = [item, ...prompts];
+    setPrompts(list);
+    save(list);
+    setLastUsedId(item.id);
+  }
 
-  const update = (id: string, patch: Partial<SavedPrompt>) =>
-    setItems(prev => prev.map(x => x.id === id ? { ...x, ...patch } : x));
+  function remove(id: string) {
+    const list = prompts.filter(p => p.id !== id);
+    setPrompts(list);
+    save(list);
+    if (lastUsedId === id) setLastUsedId(null);
+  }
 
-  const remove = (id: string) => {
-    setItems(prev => prev.filter(x => x.id !== id));
-    setLastUsedId(prev => (prev === id ? null : prev));
-  };
-
-  const sorted = useMemo(() => [...items].sort((a,b)=>b.ts-a.ts), [items]);
-
-  return { prompts: sorted, add, update, remove, lastUsedId, setLastUsedId, setAll: setItems };
+  return { prompts, add, remove, lastUsedId, setLastUsedId };
 }

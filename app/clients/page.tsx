@@ -133,7 +133,6 @@ function DetailCard({ item, onChange }: { item: CRMItem; onChange: (patch: Parti
         <Row label="Country"><Inp value={item.country} onChange={v=>onChange({country:v})} /></Row>
         <Row label="Industry"><Inp value={item.industry} onChange={v=>onChange({industry:v})} /></Row>
         <Row label="Domain"><Inp value={item.domain} onChange={v=>onChange({domain:v})} /></Row>
-        <Row label="Homepage URL"><Inp value={item.url} onChange={v=>onChange({url:v})} /></Row>
         <Row label="Status">
           <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
                   value={item.status} onChange={e=>onChange({status: e.target.value as any})}>

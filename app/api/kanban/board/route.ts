@@ -8,30 +8,21 @@ import { getSql } from "@/lib/db";
 export async function GET() {
   const sql = getSql();
 
-  // 1) Беремо першу дошку (дефолтну)
   let boards = await sql/* sql */`
-    SELECT id, name
-    FROM kanban_boards
-    ORDER BY id ASC
-    LIMIT 1;
+    SELECT id, name FROM kanban_boards ORDER BY id ASC LIMIT 1;
   `;
-
-  // 2) Якщо дошки немає — створюємо її та стандартні колонки
   if (!boards.length) {
     const created = await sql/* sql */`
       INSERT INTO kanban_boards(name) VALUES('Tasks') RETURNING id, name;
     `;
     const boardId = created[0].id;
-
     await sql/* sql */`
-      INSERT INTO kanban_columns (board_id, key, title, position)
-      VALUES
-        (${boardId}, 'todo',       'To do',       1),
-        (${boardId}, 'inprogress', 'In progress', 2),
-        (${boardId}, 'done',       'Done',        3),
-        (${boardId}, 'blocked',    'Blocked',     4);
+      INSERT INTO kanban_columns (board_id, key, title, position) VALUES
+      (${boardId}, 'todo','To do',1),
+      (${boardId}, 'inprogress','In progress',2),
+      (${boardId}, 'done','Done',3),
+      (${boardId}, 'blocked','Blocked',4);
     `;
-
     boards = created;
   }
 
@@ -51,6 +42,7 @@ export async function GET() {
       column_id       AS "columnId",
       title,
       description,
+      owner,
       priority,
       status,
       assignees,
@@ -67,7 +59,5 @@ export async function GET() {
     ORDER BY position, created_at;
   `;
 
-  return Response.json({
-    board: { id: boardId, name: boards[0].name, columns, tasks },
-  });
+  return Response.json({ board: { id: boardId, name: boards[0].name, columns, tasks } });
 }

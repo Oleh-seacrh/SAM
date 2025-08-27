@@ -22,11 +22,7 @@ export async function POST(req: NextRequest) {
   if (!boards.length) return Response.json({ error: "No board" }, { status: 400 });
   const boardId = boards[0].id;
 
-  const cols = await sql/* sql */`
-    SELECT id, key
-    FROM kanban_columns
-    WHERE board_id=${boardId};
-  `;
+  const cols = await sql/* sql */`SELECT id, key FROM kanban_columns WHERE board_id=${boardId};`;
   const wantKey = (body.columnKey || "todo").toString().toLowerCase();
   const col = cols.find((c: any) => c.key === wantKey) || cols.find((c: any) => c.key === "todo") || cols[0];
   const columnId = col.id;
@@ -38,24 +34,24 @@ export async function POST(req: NextRequest) {
   `;
   const position = Number(nextPos?.[0]?.pos ?? 0);
 
-  const priority = ["Low", "Normal", "High", "Urgent"].includes(body.priority) ? body.priority : "Normal";
+  const priority = ["Low","Normal","High","Urgent"].includes(body.priority) ? body.priority : "Normal";
   const progress = Number.isFinite(Number(body.progress)) ? Math.max(0, Math.min(100, Number(body.progress))) : 0;
 
   const assignees = Array.isArray(body.assignees) ? body.assignees : [];
   const tags = Array.isArray(body.tags) ? body.tags : [];
-
   const startAt = body.startAt ? new Date(body.startAt) : null;
-  const dueAt = body.dueAt ? new Date(body.dueAt) : null;
+  const dueAt   = body.dueAt   ? new Date(body.dueAt)   : null;
+  const owner   = typeof body.owner === "string" ? body.owner : null;
 
   const rows = await sql/* sql */`
     INSERT INTO kanban_tasks (
       board_id, column_id, title, description,
-      priority, status, assignees, tags,
+      owner, priority, status, assignees, tags,
       progress, start_at, due_at, position, archived,
       created_at, updated_at
     ) VALUES (
       ${boardId}, ${columnId}, ${title}, ${body.description ?? null},
-      ${priority}, ${statusFromKey(col.key)}, ${toPgTextArray(assignees)}::text[], ${toPgTextArray(tags)}::text[],
+      ${owner}, ${priority}, ${statusFromKey(col.key)}, ${toPgTextArray(assignees)}::text[], ${toPgTextArray(tags)}::text[],
       ${progress}, ${startAt}, ${dueAt}, ${position}, false,
       NOW(), NOW()
     )

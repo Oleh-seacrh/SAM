@@ -20,6 +20,15 @@ type BoardPayload = { board: { id: number; name: string; columns: Column[]; task
 type Comment = { id: number; author?: string|null; body: string; createdAt: number };
 type TaskDetail = { task: Task; comments: Comment[] };
 
+function toInputDate(iso?: string|null) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth()+1).padStart(2,"0");
+  const dd = String(d.getDate()).padStart(2,"0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export default function TasksPage() {
   const [loading, setLoading] = useState(false);
   const [board, setBoard] = useState<BoardPayload["board"] | null>(null);
@@ -27,10 +36,11 @@ export default function TasksPage() {
 
   // create form
   const [title, setTitle] = useState("");
+  const [owner, setOwner] = useState("");
   const [priority, setPriority] = useState<"Low"|"Normal"|"High"|"Urgent">("Normal");
   const [columnKey, setColumnKey] = useState<"todo"|"inprogress"|"done"|"blocked">("todo");
   const [tags, setTags] = useState("");
-  const [owner, setOwner] = useState("");
+  const [dueDate, setDueDate] = useState(""); // 'YYYY-MM-DD'
 
   async function load() {
     setLoading(true); setError(null);
@@ -56,12 +66,23 @@ export default function TasksPage() {
     const t = title.trim();
     if (!t) return;
     const inputTags = tags.split(",").map(s=>s.trim()).filter(Boolean);
+    const body: any = {
+      title: t,
+      priority,
+      columnKey,
+      tags: inputTags,
+      owner: owner.trim() || null,
+    };
+    if (dueDate) {
+      // зробимо ISO на північ локального дня
+      body.dueAt = new Date(`${dueDate}T00:00:00`).toISOString();
+    }
     await fetch("/api/kanban/tasks", {
       method: "POST",
       headers: { "content-type":"application/json" },
-      body: JSON.stringify({ title: t, priority, columnKey, tags: inputTags, owner: owner.trim() || null }),
+      body: JSON.stringify(body),
     });
-    setTitle(""); setTags(""); setOwner("");
+    setTitle(""); setOwner(""); setTags(""); setDueDate("");
     await load();
   }
 
@@ -113,7 +134,6 @@ export default function TasksPage() {
       body: JSON.stringify({ body: newComment.trim(), author: "Me" }),
     });
     setNewComment("");
-    // refresh modal and board
     openView(detail.task.id);
     load();
   }
@@ -129,13 +149,25 @@ export default function TasksPage() {
     await load();
   }
 
+  async function saveDueDate(dateStr: string) {
+    if (!detail?.task?.id) return;
+    const payload: any = { dueAt: dateStr ? new Date(`${dateStr}T00:00:00`).toISOString() : null };
+    await fetch(`/api/kanban/tasks/${detail.task.id}`, {
+      method: "PATCH",
+      headers: { "content-type":"application/json" },
+      body: JSON.stringify(payload),
+    });
+    await openView(detail.task.id);
+    await load();
+  }
+
   return (
     <div className="space-y-6">
       <h1 className="text-2xl font-semibold">Tasks</h1>
 
       {/* create */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
           <label className="text-sm">
             <span className="mb-1 inline-block">Title</span>
             <input value={title} onChange={e=>setTitle(e.target.value)}
@@ -162,6 +194,11 @@ export default function TasksPage() {
               <option value="done">Done</option>
               <option value="blocked">Blocked</option>
             </select>
+          </label>
+          <label className="text-sm">
+            <span className="mb-1 inline-block">Due date</span>
+            <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" />
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Tags (comma separated)</span>
@@ -260,14 +297,35 @@ export default function TasksPage() {
                   className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
                 />
               </label>
+
+              <label className="text-sm">
+                <span className="mb-1 inline-block">Due date</span>
+                <input
+                  type="date"
+                  defaultValue={toInputDate(detail.task.dueAt || null)}
+                  onBlur={(e)=>saveDueDate(e.target.value)}
+                  className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+                />
+              </label>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="text-sm">
-                <div className="mb-1">Tags</div>
-                <div className="flex flex-wrap gap-2">
-                  {detail.task.tags?.length
-                    ? detail.task.tags.map(t => <span key={t} className="text-xs rounded-full px-2 py-0.5 border border-white/10 bg-white/10">{t}</span>)
-                    : <span className="text-xs text-[var(--muted)]">No tags</span>}
+                <div className="mb-1">Created</div>
+                <div className="text-sm text-[var(--muted)]">
+                  {new Date(detail.task.createdAt).toLocaleString()}
                 </div>
               </div>
+              {detail.task.tags?.length ? (
+                <div className="text-sm">
+                  <div className="mb-1">Tags</div>
+                  <div className="flex flex-wrap gap-2">
+                    {detail.task.tags.map(t => (
+                      <span key={t} className="text-xs rounded-full px-2 py-0.5 border border-white/10 bg-white/10">{t}</span>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
             </div>
 
             {detail.task.description && (
@@ -283,7 +341,7 @@ export default function TasksPage() {
                 {detail.comments.length ? detail.comments.map(c => (
                   <div key={c.id} className="rounded-lg border border-white/10 p-2 bg-black/20">
                     <div className="text-xs text-[var(--muted)] mb-1">
-                      {c.author || "Anon"} • {new Date(c.createdAt).toLocaleString()}
+                      {c.author || "Anon"}
                     </div>
                     <div className="text-sm whitespace-pre-wrap">{c.body}</div>
                   </div>

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Modal } from "@/components/ui/Modal";
+import { TagBadge } from "@/components/ui/TagBadge";
 
 type Column = { id: number; key: "todo"|"inprogress"|"done"|"blocked"; title: string; wipLimit?: number|null; position: number; };
 type Task = {

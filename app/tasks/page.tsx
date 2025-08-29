@@ -26,31 +26,30 @@ type Task = {
   assignees?: string[] | null;
   tags?: string[] | null;
   progress: number;
-  startAt?: string | null; // ISO
-  dueAt?: string | null;   // ISO
+  startAt?: string | number | null; // ISO | epoch | null
+  dueAt?: string | number | null;   // ISO | epoch | null
   position: number;
   archived: boolean;
-  createdAt: number | string; // epoch(ms|s) або ISO — парсимо універсально
-  updatedAt: number | string;
+  createdAt: string | number; // ISO | epoch
+  updatedAt: string | number;
 };
 
-type BoardPayload = { board: { id: number; name: string; columns: Column[]; tasks: Task[] } };
+type BoardPayload = { board: { id: number; name: string; columns: Column[]; tasks: any[] } };
 
-type Comment = { id: number; author?: string | null; body: string; createdAt: number | string };
+type Comment = { id: number; author?: string | null; body: string; createdAt: string | number };
 type TaskDetail = { task: Task; comments: Comment[] };
 
 // -------------------- date helpers --------------------
-// Надійно перетворює number(epoch s|ms) / string(ISO/PG) -> Date
 function toDate(value: number | string | null | undefined): Date | null {
   if (value === null || value === undefined) return null;
   if (typeof value === "number") {
-    const ms = value < 1e12 ? value * 1000 : value; // якщо прийшли секунди
+    const ms = value < 1e12 ? value * 1000 : value; // seconds → ms
     return new Date(ms);
   }
-  // рядок з Postgres типу "2025-08-27 10:11:57.32+00" теж підхопиться
+  // PG row like "2025-08-27 10:11:57.32+00" → make it ISOish
   const s = value.includes(" ") && !value.includes("T") ? value.replace(" ", "T") : value;
   const t = Date.parse(s);
-  return isNaN(t) ? null : new Date(t);
+  return Number.isNaN(t) ? null : new Date(t);
 }
 
 function formatDateTime(value: number | string | null | undefined): string {
@@ -65,29 +64,66 @@ function formatDateTime(value: number | string | null | undefined): string {
   });
 }
 
-// для <input type="datetime-local">
 function toLocalInputValue(value: string | number | null | undefined): string {
   const d = toDate(value);
   if (!d) return "";
   const pad = (n: number) => String(n).padStart(2, "0");
-  const yyyy = d.getFullYear();
-  const mm = pad(d.getMonth() + 1);
-  const dd = pad(d.getDate());
-  const hh = pad(d.getHours());
-  const mi = pad(d.getMinutes());
-  return `${yyyy}-${mm}-${dd}T${hh}:${mi}`;
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
 }
 
 function fromLocalInputToISO(s: string): string | null {
   if (!s) return null;
-  // інтерпретуємо як локальний час, зберігаємо в ISO (UTC)
   return new Date(s).toISOString();
+}
+
+// -------------------- normalization --------------------
+function tryParseArray(x: any): string[] | null {
+  if (Array.isArray(x)) return x as string[];
+  if (typeof x === "string") {
+    try {
+      const j = JSON.parse(x);
+      return Array.isArray(j) ? (j as string[]) : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function normalizeTask(raw: any): Task {
+  const tags = tryParseArray(raw.tags) ?? raw.tags ?? null;
+  const created = raw.createdAt ?? raw.created_at ?? raw.created ?? Date.now();
+  const updated = raw.updatedAt ?? raw.updated_at ?? Date.now();
+  const start = raw.startAt ?? raw.start_at ?? null;
+  const due = raw.dueAt ?? raw.due_at ?? null;
+
+  return {
+    id: Number(raw.id),
+    boardId: Number(raw.boardId ?? raw.board_id ?? raw.board ?? 0),
+    columnId: Number(raw.columnId ?? raw.column_id ?? raw.column ?? 0),
+    title: String(raw.title ?? ""),
+    description: raw.description ?? null,
+    owner: raw.owner ?? null,
+    priority: (raw.priority ?? "Normal") as Task["priority"],
+    status: (raw.status ?? "Todo") as Task["status"],
+    assignees: raw.assignees ?? null,
+    tags,
+    progress: Number(raw.progress ?? 0),
+    startAt: start,
+    dueAt: due,
+    position: Number(raw.position ?? 0),
+    archived: Boolean(raw.archived ?? false),
+    createdAt: created,
+    updatedAt: updated,
+  };
 }
 
 // -------------------- page --------------------
 export default function TasksPage() {
   const [loading, setLoading] = useState(false);
-  const [board, setBoard] = useState<BoardPayload["board"] | null>(null);
+  const [board, setBoard] = useState<{ id: number; name: string; columns: Column[]; tasks: Task[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // create form
@@ -96,32 +132,53 @@ export default function TasksPage() {
   const [priority, setPriority] = useState<"Low" | "Normal" | "High" | "Urgent">("Normal");
   const [columnKey, setColumnKey] = useState<"todo" | "inprogress" | "done" | "blocked">("todo");
   const [tags, setTags] = useState("");
-  const [dueDate, setDueDate] = useState(""); // YYYY-MM-DD (створення — без часу)
+  const [dueDate, setDueDate] = useState(""); // YYYY-MM-DD
+
+  // modal
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<TaskDetail | null>(null);
+  const [newComment, setNewComment] = useState("");
+  const [dueEdit, setDueEdit] = useState<string>(""); // datetime-local value
 
   async function load() {
-    setLoading(true); setError(null);
+    setLoading(true);
+    setError(null);
     try {
       const r = await fetch("/api/kanban/board", { cache: "no-store" });
       const j: BoardPayload = await r.json();
       if (!r.ok) throw new Error((j as any)?.error || "Failed to load");
-      setBoard(j.board);
-    } catch (e: any) { setError(e.message || "Failed"); }
-    finally { setLoading(false); }
+      const tasks = (j.board?.tasks ?? []).map(normalizeTask);
+      setBoard({ id: j.board.id, name: j.board.name, columns: j.board.columns as Column[], tasks });
+    } catch (e: any) {
+      setError(e.message || "Failed");
+    } finally {
+      setLoading(false);
+    }
   }
   useEffect(() => { load(); }, []);
 
-  const columns = useMemo(() => (board?.columns ?? []).sort((a,b)=>a.position-b.position), [board?.columns]);
+  const columns = useMemo(
+    () => (board?.columns ?? []).slice().sort((a, b) => a.position - b.position),
+    [board?.columns]
+  );
+
   const tasksByColumn = useMemo(() => {
     const map: Record<number, Task[]> = {};
-    (board?.tasks ?? []).forEach(t => { (map[t.columnId] ||= []).push(t); });
-    Object.values(map).forEach(list => list.sort((a,b)=>a.position-b.position || Number(toDate(a.createdAt)?.getTime() ?? 0) - Number(toDate(b.createdAt)?.getTime() ?? 0)));
+    (board?.tasks ?? []).forEach((t) => { (map[t.columnId] ||= []).push(t); });
+    Object.values(map).forEach((list) =>
+      list.sort(
+        (a, b) =>
+          a.position - b.position ||
+          Number(toDate(a.createdAt)?.getTime() ?? 0) - Number(toDate(b.createdAt)?.getTime() ?? 0)
+      )
+    );
     return map;
   }, [board?.tasks]);
 
   async function createTask() {
     const t = title.trim();
     if (!t) return;
-    const inputTags = tags.split(",").map(s=>s.trim()).filter(Boolean);
+    const inputTags = tags.split(",").map((s) => s.trim()).filter(Boolean);
     const body: any = {
       title: t,
       priority,
@@ -132,7 +189,7 @@ export default function TasksPage() {
     if (dueDate) body.dueAt = new Date(`${dueDate}T00:00:00`).toISOString();
     await fetch("/api/kanban/tasks", {
       method: "POST",
-      headers: { "content-type":"application/json" },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
     });
     setTitle(""); setOwner(""); setTags(""); setDueDate("");
@@ -140,15 +197,18 @@ export default function TasksPage() {
   }
 
   // drag-n-drop
-  const [dragId, setDragId] = useState<number|null>(null);
+  const [dragId, setDragId] = useState<number | null>(null);
   function onDragStart(e: React.DragEvent, taskId: number) {
-    setDragId(taskId); e.dataTransfer.setData("text/plain", String(taskId)); e.dataTransfer.effectAllowed = "move";
+    setDragId(taskId);
+    e.dataTransfer.setData("text/plain", String(taskId));
+    e.dataTransfer.effectAllowed = "move";
   }
   function onDragOver(e: React.DragEvent) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
   async function onDrop(col: Column) {
     if (!dragId) return;
     await fetch(`/api/kanban/tasks/${dragId}`, {
-      method: "PATCH", headers: { "content-type":"application/json" },
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ moveToColumnKey: col.key }),
     });
     setDragId(null);
@@ -157,7 +217,8 @@ export default function TasksPage() {
 
   async function markDone(taskId: number) {
     await fetch(`/api/kanban/tasks/${taskId}`, {
-      method: "PATCH", headers: { "content-type":"application/json" },
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ moveToColumnKey: "done" }),
     });
     await load();
@@ -168,23 +229,18 @@ export default function TasksPage() {
     await load();
   }
 
-  // View modal
-  const [open, setOpen] = useState(false);
-  const [detail, setDetail] = useState<TaskDetail | null>(null);
-  const [newComment, setNewComment] = useState("");
-
-  // локальний редактор дати дедлайну з кнопкою OK
-  const [dueEdit, setDueEdit] = useState<string>("");
-
-  useEffect(() => {
-    // коли відкрили задачу — заповнюємо поле для datetime-local
-    setDueEdit(toLocalInputValue(detail?.task?.dueAt ?? null));
-  }, [detail?.task?.dueAt, open]);
-
+  // modal helpers
   async function openView(taskId: number) {
     const r = await fetch(`/api/kanban/tasks/${taskId}`, { cache: "no-store" });
     const j = await r.json();
-    if (r.ok) { setDetail(j as TaskDetail); setOpen(true); }
+    if (r.ok) {
+      // нормалізуємо деталь теж
+      const nt = normalizeTask((j as any).task ?? j);
+      const comments = Array.isArray((j as any).comments) ? (j as any).comments : [];
+      setDetail({ task: nt, comments });
+      setDueEdit(toLocalInputValue(nt.dueAt ?? null));
+      setOpen(true);
+    }
   }
 
   async function addComment() {
@@ -195,31 +251,33 @@ export default function TasksPage() {
       body: JSON.stringify({ body: newComment.trim(), author: "Me" }),
     });
     setNewComment("");
-    openView(detail.task.id);
-    load();
+    await openView(detail.task.id);
+    await load();
   }
 
   async function saveOwner(newOwner: string) {
     if (!detail?.task?.id) return;
     await fetch(`/api/kanban/tasks/${detail.task.id}`, {
       method: "PATCH",
-      headers: { "content-type":"application/json" },
+      headers: { "content-type": "application/json" },
       body: JSON.stringify({ owner: newOwner }),
     });
     await openView(detail.task.id);
     await load();
   }
 
-  async function saveDueDateExplicit() {
-    if (!detail?.task?.id) return;
-    const iso = fromLocalInputToISO(dueEdit);
-    await fetch(`/api/kanban/tasks/${detail.task.id}`, {
-      method: "PATCH",
-      headers: { "content-type":"application/json" },
-      body: JSON.stringify({ dueAt: iso }),
-    });
-    await openView(detail.task.id);
-    await load();
+  async function handleOK() {
+    // зберегти dueAt і закрити модалку
+    if (detail?.task?.id !== undefined) {
+      const iso = fromLocalInputToISO(dueEdit);
+      await fetch(`/api/kanban/tasks/${detail!.task.id}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dueAt: iso }),
+      });
+      await load();
+    }
+    setOpen(false);
   }
 
   return (
@@ -231,25 +289,39 @@ export default function TasksPage() {
         <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
           <label className="text-sm">
             <span className="mb-1 inline-block">Title</span>
-            <input value={title} onChange={e=>setTitle(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" placeholder="Add a task..." />
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+              placeholder="Add a task..."
+            />
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Owner</span>
-            <input value={owner} onChange={e=>setOwner(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" placeholder="e.g., Oleh" />
+            <input
+              value={owner}
+              onChange={(e) => setOwner(e.target.value)}
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+              placeholder="e.g., Oleh"
+            />
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Priority</span>
-            <select value={priority} onChange={e=>setPriority(e.target.value as any)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2">
+            <select
+              value={priority}
+              onChange={(e) => setPriority(e.target.value as any)}
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+            >
               <option>Low</option><option>Normal</option><option>High</option><option>Urgent</option>
             </select>
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Column</span>
-            <select value={columnKey} onChange={e=>setColumnKey(e.target.value as any)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2">
+            <select
+              value={columnKey}
+              onChange={(e) => setColumnKey(e.target.value as any)}
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+            >
               <option value="todo">To do</option>
               <option value="inprogress">In progress</option>
               <option value="done">Done</option>
@@ -258,13 +330,21 @@ export default function TasksPage() {
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Due date</span>
-            <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" />
+            <input
+              type="date"
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+            />
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Tags (comma separated)</span>
-            <input value={tags} onChange={e=>setTags(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" placeholder="ai, backend, urgent" />
+            <input
+              value={tags}
+              onChange={(e) => setTags(e.target.value)}
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+              placeholder="ai, backend, urgent"
+            />
           </label>
         </div>
         <div className="mt-3">
@@ -282,39 +362,47 @@ export default function TasksPage() {
 
       {/* Board */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {columns.map(col => {
+        {columns.map((col) => {
           const list = tasksByColumn[col.id] || [];
           return (
-            <div key={col.id}
-                 onDragOver={onDragOver}
-                 onDrop={()=>onDrop(col)}
-                 className="rounded-xl bg-[var(--card)] p-3 border border-white/10 min-h-[300px]">
+            <div
+              key={col.id}
+              onDragOver={onDragOver}
+              onDrop={() => onDrop(col)}
+              className="rounded-xl bg-[var(--card)] p-3 border border-white/10 min-h-[300px]"
+            >
               <div className="flex items-center justify-between mb-2">
                 <div className="font-medium">{col.title}</div>
                 <div className="text-xs text-[var(--muted)]">{list.length}{col.wipLimit ? ` / ${col.wipLimit}` : ""}</div>
               </div>
 
               <div className="space-y-2">
-                {list.map(t => (
-                  <div key={t.id}
-                       draggable
-                       onDragStart={(e)=>onDragStart(e, t.id)}
-                       className="rounded-lg border border-white/10 bg-black/20 p-3">
+                {list.map((t) => (
+                  <div
+                    key={t.id}
+                    draggable
+                    onDragStart={(e) => onDragStart(e, t.id)}
+                    className="rounded-lg border border-white/10 bg-black/20 p-3"
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="font-medium">{t.title}</div>
 
-                        {/* Мета-блок: owner + теги */}
+                        {/* Owner + Tags */}
                         <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[var(--muted)]">
-                          {t.owner ? <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5">Owner: <b>{t.owner}</b></span> : null}
+                          {t.owner ? (
+                            <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5">
+                              Owner: <b>{t.owner}</b>
+                            </span>
+                          ) : null}
                           {Array.isArray(t.tags) && t.tags.length > 0 ? (
                             <span className="inline-flex items-center gap-1.5">
-                              {t.tags.slice(0, 3).map(tag => <TagBadge key={tag} tag={tag} />)}
+                              {t.tags.slice(0, 3).map((tag) => <TagBadge key={tag} tag={tag} />)}
                             </span>
                           ) : null}
                         </div>
 
-                        {/* Дати: Created / Start / Due */}
+                        {/* Dates */}
                         <div className="mt-2 grid grid-cols-3 gap-2 text-[11px] text-[var(--muted)]">
                           <div><span className="opacity-70">Created:</span> {formatDateTime(t.createdAt)}</div>
                           <div><span className="opacity-70">Start:</span> {formatDateTime(t.startAt ?? null)}</div>
@@ -325,22 +413,13 @@ export default function TasksPage() {
                       <PriorityBadge p={t.priority} />
                     </div>
 
-                    {/* Кнопки дій */}
+                    {/* Actions */}
                     <div className="mt-3 flex gap-2">
-                      <button onClick={()=>openView(t.id)}
-                              className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">
-                        View
-                      </button>
+                      <button onClick={() => openView(t.id)} className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">View</button>
                       {t.status !== "Done" && (
-                        <button onClick={()=>markDone(t.id)}
-                                className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">
-                          Mark done
-                        </button>
+                        <button onClick={() => markDone(t.id)} className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">Mark done</button>
                       )}
-                      <button onClick={()=>removeTask(t.id)}
-                              className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">
-                        Delete
-                      </button>
+                      <button onClick={() => removeTask(t.id)} className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">Delete</button>
                     </div>
                   </div>
                 ))}
@@ -352,7 +431,7 @@ export default function TasksPage() {
       </div>
 
       {/* View modal */}
-      <Modal open={open} onClose={()=>setOpen(false)}>
+      <Modal open={open} onClose={() => setOpen(false)}>
         {detail ? (
           <div className="space-y-4">
             <div className="flex items-start justify-between gap-3">
@@ -370,27 +449,20 @@ export default function TasksPage() {
                 <span className="mb-1 inline-block">Owner</span>
                 <input
                   defaultValue={detail.task.owner || ""}
-                  onBlur={(e)=>saveOwner(e.target.value)}
+                  onBlur={(e) => saveOwner(e.target.value)}
                   className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
                 />
               </label>
 
-              {/* редактор дати з кнопкою OK */}
-              <div className="text-sm">
+              <label className="text-sm">
                 <span className="mb-1 inline-block">Due date & time</span>
-                <div className="flex items-center gap-2">
-                  <input
-                    type="datetime-local"
-                    value={dueEdit}
-                    onChange={(e)=>setDueEdit(e.target.value)}
-                    className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                  />
-                  <button onClick={saveDueDateExplicit}
-                          className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10">
-                    OK
-                  </button>
-                </div>
-              </div>
+                <input
+                  type="datetime-local"
+                  value={dueEdit}
+                  onChange={(e) => setDueEdit(e.target.value)}
+                  className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+                />
+              </label>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -411,42 +483,30 @@ export default function TasksPage() {
               </div>
             )}
 
-            <div>
-              <div className="font-medium mb-2">Comments</div>
-              <div className="space-y-2 max-h-64 overflow-auto pr-1">
-                {detail.comments.length ? detail.comments.map((c) => (
-                  <div key={c.id} className="rounded-lg border border-white/10 p-2 bg-black/20">
-                    <div className="text-xs text-[var(--muted)] mb-1">{c.author || "Anon"}</div>
-                    <div className="text-sm whitespace-pre-wrap">{c.body}</div>
-                  </div>
-                )) : <div className="text-sm text-[var(--muted)]">No comments yet.</div>}
-              </div>
-
-              <div className="mt-3 flex gap-2">
-                <input
-                  className="flex-1 rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                  placeholder="Write a comment…"
-                  value={newComment}
-                  onChange={e=>setNewComment(e.target.value)}
-                />
-                <button onClick={addComment}
-                        className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10">
-                  Send
-                </button>
-              </div>
+            {/* Modal footer with OK/Cancel */}
+            <div className="mt-2 flex justify-end gap-2">
+              <button onClick={() => setOpen(false)} className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10">
+                Cancel
+              </button>
+              <button onClick={handleOK} className="rounded-lg px-3 py-2 border border-white/10 bg-white/10 hover:bg-white/20">
+                OK
+              </button>
             </div>
           </div>
-        ) : <div className="text-sm">Loading…</div>}
+        ) : (
+          <div className="text-sm">Loading…</div>
+        )}
       </Modal>
     </div>
   );
 }
 
 // -------------------- visuals --------------------
-function PriorityBadge({ p }: { p: "Low"|"Normal"|"High"|"Urgent" }) {
-  const tone = p === "Urgent" ? "bg-rose-500/20 border-rose-500/40"
-            : p === "High"   ? "bg-amber-500/20 border-amber-500/40"
-            : p === "Low"    ? "bg-sky-500/20 border-sky-500/40"
-            :                  "bg-white/10 border-white/20";
+function PriorityBadge({ p }: { p: "Low" | "Normal" | "High" | "Urgent" }) {
+  const tone =
+    p === "Urgent" ? "bg-rose-500/20 border-rose-500/40"
+    : p === "High"   ? "bg-amber-500/20 border-amber-500/40"
+    : p === "Low"    ? "bg-sky-500/20 border-sky-500/40"
+                     : "bg-white/10 border-white/20";
   return <span className={`text-xs rounded-md px-2 py-0.5 border ${tone}`}>{p}</span>;
 }

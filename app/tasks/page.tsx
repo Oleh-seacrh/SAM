@@ -148,8 +148,9 @@ export default function TasksPage() {
   const [open, setOpen] = useState(false);
   const [detail, setDetail] = useState<TaskDetail | null>(null);
   const [newComment, setNewComment] = useState("");
-  const [dueEdit, setDueEdit] = useState<string>("");
   const [ownerEdit, setOwnerEdit] = useState<string>("");
+  const [priorityEdit, setPriorityEdit] = useState<Priority>("Normal");
+  const [dueEdit, setDueEdit] = useState<string>("");
   const [saving, setSaving] = useState(false);
 
   async function load() {
@@ -246,8 +247,9 @@ export default function TasksPage() {
       const nt = normalizeTask((j as any).task ?? j);
       const comments = Array.isArray((j as any).comments) ? (j as any).comments : [];
       setDetail({ task: nt, comments });
-      setDueEdit(toLocalInputValue(nt.dueAt ?? null));
       setOwnerEdit(nt.owner ?? "");
+      setPriorityEdit(nt.priority ?? "Normal");
+      setDueEdit(toLocalInputValue(nt.dueAt ?? null));
       setOpen(true);
     }
   }
@@ -263,38 +265,19 @@ export default function TasksPage() {
     await load();
   }
 
-  async function saveOwnerExplicit() {
-    if (!detail?.task?.id) return;
-    await fetch(`/api/kanban/tasks/${detail.task.id}`, {
-      method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ owner: ownerEdit.trim() || null }),
-    });
-    await openView(detail.task.id);
-    await load();
-  }
-  // підстрахуємось: збереження і на blur/Enter
-  function onOwnerInputKey(e: React.KeyboardEvent<HTMLInputElement>) {
-    if (e.key === "Enter") void saveOwnerExplicit();
-  }
-
-  async function savePriority(newPriority: Priority) {
-    if (!detail?.task?.id) return;
-    await fetch(`/api/kanban/tasks/${detail.task.id}`, {
-      method: "PATCH", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ priority: newPriority }),
-    });
-    await openView(detail.task.id);
-    await load();
-  }
-
   async function handleOK() {
     if (!detail?.task?.id) { setOpen(false); return; }
     try {
       setSaving(true);
-      const iso = fromLocalInputToISO(dueEdit);
+      const payload: any = {
+        owner: ownerEdit.trim() || null,
+        priority: priorityEdit,
+        dueAt: fromLocalInputToISO(dueEdit),
+      };
       await fetch(`/api/kanban/tasks/${detail.task.id}`, {
-        method: "PATCH", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ dueAt: iso }),
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
       });
       await load();
     } finally {
@@ -450,35 +433,27 @@ export default function TasksPage() {
                 <div className="text-lg font-semibold">{detail.task.title}</div>
                 <div className="text-xs text-[var(--muted)]">Status: <b>{detail.task.status}</b></div>
               </div>
-              <PriorityBadge p={detail.task.priority} />
+              <PriorityBadge p={priorityEdit} />
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
               {/* Owner editable */}
-              <div className="text-sm md:col-span-1">
+              <label className="text-sm md:col-span-1">
                 <span className="mb-1 inline-block">Owner</span>
-                <div className="flex items-center gap-2">
-                  <input
-                    value={ownerEdit}
-                    onChange={(e)=>setOwnerEdit(e.target.value)}
-                    onBlur={saveOwnerExplicit}
-                    onKeyDown={onOwnerInputKey}
-                    className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                    placeholder="Type owner…"
-                  />
-                  <button onClick={saveOwnerExplicit}
-                          className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10">
-                    Save
-                  </button>
-                </div>
-              </div>
+                <input
+                  value={ownerEdit}
+                  onChange={(e)=>setOwnerEdit(e.target.value)}
+                  className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+                  placeholder="Type owner…"
+                />
+              </label>
 
               {/* Priority editable */}
               <label className="text-sm md:col-span-1">
                 <span className="mb-1 inline-block">Priority</span>
                 <select
-                  defaultValue={detail.task.priority}
-                  onChange={(e)=>savePriority(e.target.value as Priority)}
+                  value={priorityEdit}
+                  onChange={(e)=>setPriorityEdit(e.target.value as Priority)}
                   className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
                 >
                   <option>Low</option><option>Normal</option><option>High</option><option>Urgent</option>

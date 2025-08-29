@@ -34,7 +34,7 @@ type Task = {
   updatedAt: string | number;
 };
 
-type BoardPayload = { board: { id: number; name: string; columns: Column[]; tasks: any[] } };
+type BoardPayload = { board?: any; columns?: Column[]; tasks?: any[] };
 
 type Comment = { id: number; author?: string | null; body: string; createdAt: string | number };
 type TaskDetail = { task: Task; comments: Comment[] };
@@ -46,7 +46,7 @@ function toDate(value: number | string | null | undefined): Date | null {
     const ms = value < 1e12 ? value * 1000 : value; // seconds → ms
     return new Date(ms);
   }
-  // PG row like "2025-08-27 10:11:57.32+00" → make it ISOish
+  // PG: "2025-08-27 10:11:57.32+00" → "2025-08-27T10:11:57.32+00"
   const s = value.includes(" ") && !value.includes("T") ? value.replace(" ", "T") : value;
   const t = Date.parse(s);
   return Number.isNaN(t) ? null : new Date(t);
@@ -82,12 +82,7 @@ function fromLocalInputToISO(s: string): string | null {
 function tryParseArray(x: any): string[] | null {
   if (Array.isArray(x)) return x as string[];
   if (typeof x === "string") {
-    try {
-      const j = JSON.parse(x);
-      return Array.isArray(j) ? (j as string[]) : null;
-    } catch {
-      return null;
-    }
+    try { const j = JSON.parse(x); return Array.isArray(j) ? (j as string[]) : null; } catch { return null; }
   }
   return null;
 }
@@ -147,8 +142,18 @@ export default function TasksPage() {
       const r = await fetch("/api/kanban/board", { cache: "no-store" });
       const j: BoardPayload = await r.json();
       if (!r.ok) throw new Error((j as any)?.error || "Failed to load");
-      const tasks = (j.board?.tasks ?? []).map(normalizeTask);
-      setBoard({ id: j.board.id, name: j.board.name, columns: j.board.columns as Column[], tasks });
+
+      // Підтримуємо обидві форми відповіді:
+      const boardObj = j.board ?? { id: 0, name: "Tasks", columns: j.columns ?? [], tasks: j.tasks ?? [] };
+      const tasksRaw = boardObj.tasks ?? j.tasks ?? [];
+      const tasks = tasksRaw.map(normalizeTask);
+
+      setBoard({
+        id: Number(boardObj.id ?? 0),
+        name: String(boardObj.name ?? "Tasks"),
+        columns: (boardObj.columns ?? j.columns ?? []) as Column[],
+        tasks,
+      });
     } catch (e: any) {
       setError(e.message || "Failed");
     } finally {
@@ -179,19 +184,9 @@ export default function TasksPage() {
     const t = title.trim();
     if (!t) return;
     const inputTags = tags.split(",").map((s) => s.trim()).filter(Boolean);
-    const body: any = {
-      title: t,
-      priority,
-      columnKey,
-      tags: inputTags,
-      owner: owner.trim() || null,
-    };
+    const body: any = { title: t, priority, columnKey, tags: inputTags, owner: owner.trim() || null };
     if (dueDate) body.dueAt = new Date(`${dueDate}T00:00:00`).toISOString();
-    await fetch("/api/kanban/tasks", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    await fetch("/api/kanban/tasks", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     setTitle(""); setOwner(""); setTags(""); setDueDate("");
     await load();
   }
@@ -206,21 +201,13 @@ export default function TasksPage() {
   function onDragOver(e: React.DragEvent) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
   async function onDrop(col: Column) {
     if (!dragId) return;
-    await fetch(`/api/kanban/tasks/${dragId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ moveToColumnKey: col.key }),
-    });
+    await fetch(`/api/kanban/tasks/${dragId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ moveToColumnKey: col.key }) });
     setDragId(null);
     await load();
   }
 
   async function markDone(taskId: number) {
-    await fetch(`/api/kanban/tasks/${taskId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ moveToColumnKey: "done" }),
-    });
+    await fetch(`/api/kanban/tasks/${taskId}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ moveToColumnKey: "done" }) });
     await load();
   }
 
@@ -234,7 +221,6 @@ export default function TasksPage() {
     const r = await fetch(`/api/kanban/tasks/${taskId}`, { cache: "no-store" });
     const j = await r.json();
     if (r.ok) {
-      // нормалізуємо деталь теж
       const nt = normalizeTask((j as any).task ?? j);
       const comments = Array.isArray((j as any).comments) ? (j as any).comments : [];
       setDetail({ task: nt, comments });
@@ -245,11 +231,7 @@ export default function TasksPage() {
 
   async function addComment() {
     if (!detail?.task?.id || !newComment.trim()) return;
-    await fetch(`/api/kanban/tasks/${detail.task.id}/comments`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ body: newComment.trim(), author: "Me" }),
-    });
+    await fetch(`/api/kanban/tasks/${detail.task.id}/comments`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ body: newComment.trim(), author: "Me" }) });
     setNewComment("");
     await openView(detail.task.id);
     await load();
@@ -257,11 +239,7 @@ export default function TasksPage() {
 
   async function saveOwner(newOwner: string) {
     if (!detail?.task?.id) return;
-    await fetch(`/api/kanban/tasks/${detail.task.id}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ owner: newOwner }),
-    });
+    await fetch(`/api/kanban/tasks/${detail.task.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ owner: newOwner }) });
     await openView(detail.task.id);
     await load();
   }
@@ -270,11 +248,7 @@ export default function TasksPage() {
     // зберегти dueAt і закрити модалку
     if (detail?.task?.id !== undefined) {
       const iso = fromLocalInputToISO(dueEdit);
-      await fetch(`/api/kanban/tasks/${detail!.task.id}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ dueAt: iso }),
-      });
+      await fetch(`/api/kanban/tasks/${detail!.task.id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ dueAt: iso }) });
       await load();
     }
     setOpen(false);
@@ -289,70 +263,35 @@ export default function TasksPage() {
         <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
           <label className="text-sm">
             <span className="mb-1 inline-block">Title</span>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-              placeholder="Add a task..."
-            />
+            <input value={title} onChange={(e) => setTitle(e.target.value)} className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" placeholder="Add a task..." />
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Owner</span>
-            <input
-              value={owner}
-              onChange={(e) => setOwner(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-              placeholder="e.g., Oleh"
-            />
+            <input value={owner} onChange={(e) => setOwner(e.target.value)} className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" placeholder="e.g., Oleh" />
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Priority</span>
-            <select
-              value={priority}
-              onChange={(e) => setPriority(e.target.value as any)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-            >
+            <select value={priority} onChange={(e) => setPriority(e.target.value as any)} className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2">
               <option>Low</option><option>Normal</option><option>High</option><option>Urgent</option>
             </select>
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Column</span>
-            <select
-              value={columnKey}
-              onChange={(e) => setColumnKey(e.target.value as any)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-            >
-              <option value="todo">To do</option>
-              <option value="inprogress">In progress</option>
-              <option value="done">Done</option>
-              <option value="blocked">Blocked</option>
+            <select value={columnKey} onChange={(e) => setColumnKey(e.target.value as any)} className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2">
+              <option value="todo">To do</option><option value="inprogress">In progress</option><option value="done">Done</option><option value="blocked">Blocked</option>
             </select>
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Due date</span>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(e) => setDueDate(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-            />
+            <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" />
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Tags (comma separated)</span>
-            <input
-              value={tags}
-              onChange={(e) => setTags(e.target.value)}
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-              placeholder="ai, backend, urgent"
-            />
+            <input value={tags} onChange={(e) => setTags(e.target.value)} className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" placeholder="ai, backend, urgent" />
           </label>
         </div>
         <div className="mt-3">
-          <button
-            onClick={createTask}
-            disabled={loading || !title.trim()}
-            className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50"
-          >
+          <button onClick={createTask} disabled={loading || !title.trim()} className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50">
             Add task
           </button>
         </div>
@@ -365,12 +304,7 @@ export default function TasksPage() {
         {columns.map((col) => {
           const list = tasksByColumn[col.id] || [];
           return (
-            <div
-              key={col.id}
-              onDragOver={onDragOver}
-              onDrop={() => onDrop(col)}
-              className="rounded-xl bg-[var(--card)] p-3 border border-white/10 min-h-[300px]"
-            >
+            <div key={col.id} onDragOver={(e) => e.preventDefault()} onDrop={() => onDrop(col)} className="rounded-xl bg-[var(--card)] p-3 border border-white/10 min-h-[300px]">
               <div className="flex items-center justify-between mb-2">
                 <div className="font-medium">{col.title}</div>
                 <div className="text-xs text-[var(--muted)]">{list.length}{col.wipLimit ? ` / ${col.wipLimit}` : ""}</div>
@@ -378,23 +312,14 @@ export default function TasksPage() {
 
               <div className="space-y-2">
                 {list.map((t) => (
-                  <div
-                    key={t.id}
-                    draggable
-                    onDragStart={(e) => onDragStart(e, t.id)}
-                    className="rounded-lg border border-white/10 bg-black/20 p-3"
-                  >
+                  <div key={t.id} draggable onDragStart={(e) => onDragStart(e, t.id)} className="rounded-lg border border-white/10 bg-black/20 p-3">
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="font-medium">{t.title}</div>
 
                         {/* Owner + Tags */}
-                        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-[var(--muted)]">
-                          {t.owner ? (
-                            <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5">
-                              Owner: <b>{t.owner}</b>
-                            </span>
-                          ) : null}
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-xs">
+                          {t.owner ? <span className="rounded-full border border-white/10 bg-white/10 px-2 py-0.5">Owner: <b>{t.owner}</b></span> : null}
                           {Array.isArray(t.tags) && t.tags.length > 0 ? (
                             <span className="inline-flex items-center gap-1.5">
                               {t.tags.slice(0, 3).map((tag) => <TagBadge key={tag} tag={tag} />)}
@@ -416,9 +341,7 @@ export default function TasksPage() {
                     {/* Actions */}
                     <div className="mt-3 flex gap-2">
                       <button onClick={() => openView(t.id)} className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">View</button>
-                      {t.status !== "Done" && (
-                        <button onClick={() => markDone(t.id)} className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">Mark done</button>
-                      )}
+                      {t.status !== "Done" && <button onClick={() => markDone(t.id)} className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">Mark done</button>}
                       <button onClick={() => removeTask(t.id)} className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10 text-xs">Delete</button>
                     </div>
                   </div>
@@ -437,9 +360,7 @@ export default function TasksPage() {
             <div className="flex items-start justify-between gap-3">
               <div>
                 <div className="text-lg font-semibold">{detail.task.title}</div>
-                <div className="text-xs text-[var(--muted)]">
-                  Priority: <b>{detail.task.priority}</b> • Status: <b>{detail.task.status}</b>
-                </div>
+                <div className="text-xs text-[var(--muted)]">Priority: <b>{detail.task.priority}</b> • Status: <b>{detail.task.status}</b></div>
               </div>
               <PriorityBadge p={detail.task.priority} />
             </div>
@@ -447,21 +368,12 @@ export default function TasksPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <label className="text-sm">
                 <span className="mb-1 inline-block">Owner</span>
-                <input
-                  defaultValue={detail.task.owner || ""}
-                  onBlur={(e) => saveOwner(e.target.value)}
-                  className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                />
+                <input defaultValue={detail.task.owner || ""} onBlur={(e) => saveOwner(e.target.value)} className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" />
               </label>
 
               <label className="text-sm">
                 <span className="mb-1 inline-block">Due date & time</span>
-                <input
-                  type="datetime-local"
-                  value={dueEdit}
-                  onChange={(e) => setDueEdit(e.target.value)}
-                  className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                />
+                <input type="datetime-local" value={dueEdit} onChange={(e) => setDueEdit(e.target.value)} className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" />
               </label>
             </div>
 
@@ -483,19 +395,13 @@ export default function TasksPage() {
               </div>
             )}
 
-            {/* Modal footer with OK/Cancel */}
+            {/* Footer */}
             <div className="mt-2 flex justify-end gap-2">
-              <button onClick={() => setOpen(false)} className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10">
-                Cancel
-              </button>
-              <button onClick={handleOK} className="rounded-lg px-3 py-2 border border-white/10 bg-white/10 hover:bg-white/20">
-                OK
-              </button>
+              <button onClick={() => setOpen(false)} className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10">Cancel</button>
+              <button onClick={handleOK} className="rounded-lg px-3 py-2 border border-white/10 bg-white/10 hover:bg-white/20">OK</button>
             </div>
           </div>
-        ) : (
-          <div className="text-sm">Loading…</div>
-        )}
+        ) : <div className="text-sm">Loading…</div>}
       </Modal>
     </div>
   );

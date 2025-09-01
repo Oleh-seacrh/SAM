@@ -261,6 +261,7 @@ export default function TasksPage() {
       body: JSON.stringify({ body: newComment.trim(), author: "Me" }),
     });
     setNewComment("");
+    // перезавантажимо деталі + ленту
     await openView(detail.task.id);
     await load();
   }
@@ -274,11 +275,15 @@ export default function TasksPage() {
         priority: priorityEdit,
         dueAt: fromLocalInputToISO(dueEdit),
       };
-      await fetch(`/api/kanban/tasks/${detail.task.id}`, {
+      const r = await fetch(`/api/kanban/tasks/${detail.task.id}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        setError((j as any)?.error || "Failed to save changes");
+      }
       await load();
     } finally {
       setSaving(false);
@@ -483,13 +488,46 @@ export default function TasksPage() {
               </div>
             </div>
 
-            {/* Description */}
-            {detail.task.description && (
-              <div>
-                <div className="text-sm mb-1">Description</div>
-                <div className="text-sm text-[var(--muted)] whitespace-pre-wrap">{detail.task.description}</div>
+            {/* Comments */}
+            <div>
+              <div className="font-medium mb-2">Comments</div>
+
+              <div className="space-y-2 max-h-64 overflow-auto pr-1">
+                {detail.comments && detail.comments.length ? (
+                  detail.comments.map((c) => (
+                    <div key={c.id} className="rounded-lg border border-white/10 p-2 bg-black/20">
+                      <div className="text-xs text-[var(--muted)] mb-1">
+                        {c.author || "Anon"} • {formatDate(c.createdAt)} {formatTime(c.createdAt)}
+                      </div>
+                      <div className="text-sm whitespace-pre-wrap">{c.body}</div>
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-sm text-[var(--muted)]">No comments yet.</div>
+                )}
               </div>
-            )}
+
+              <div className="mt-3 flex gap-2">
+                <input
+                  className="flex-1 rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+                  placeholder="Write a comment…"
+                  value={newComment}
+                  onChange={(e) => setNewComment(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && newComment.trim()) {
+                      e.preventDefault();
+                      addComment();
+                    }
+                  }}
+                />
+                <button
+                  onClick={addComment}
+                  className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
+                >
+                  Send
+                </button>
+              </div>
+            </div>
 
             {/* Footer */}
             <div className="mt-2 flex justify-end gap-2">

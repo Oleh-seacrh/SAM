@@ -1,183 +1,276 @@
 "use client";
-import { useMemo, useRef, useState } from "react";
-import { useCRM, CRMItem, SizeTag } from "@/hooks/use-crm";
-import { Modal } from "@/components/ui/Modal";
 
-export default function Page() {
-  const { items, remove, update, byProduct } = useCRM();
-  const [open, setOpen] = useState(false);
-  const [current, setCurrent] = useState<CRMItem | null>(null);
-  const [productFilter, setProductFilter] = useState("");
+import * as React from "react";
+import { motion } from "framer-motion";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
+import { Separator } from "@/components/ui/separator";
+import { Badge } from "@/components/ui/badge";
+import {
+  Users,
+  UserRoundSearch,
+  PackageSearch,
+  Search,
+  Globe,
+  CalendarClock,
+  DollarSign,
+  ChevronDown,
+} from "lucide-react";
 
-  const filtered = useMemo(() => byProduct(productFilter), [byProduct, productFilter]);
+// ---- Types ----
+type OrgType = "client" | "prospect" | "supplier";
 
-  const openView = (item: CRMItem) => { setCurrent(item); setOpen(true); };
+interface OrgListItem {
+  id: string;
+  name: string;
+  org_type: OrgType;
+  website?: string | null;
+  country?: string | null;
+  last_contact_at?: string | null;
+  brands?: string | null;
+  products?: string | null;
+  deal_value?: number | null;
+  latest_inquiry_at?: string | null;
+}
+
+// ---- Mock data (replace with API once ready) ----
+const MOCK: OrgListItem[] = [
+  {
+    id: "1",
+    name: "Fuji DI-HT",
+    org_type: "client",
+    website: "https://ima-x.com",
+    country: "AE",
+    products: "X-ray film",
+    brands: "Fujifilm",
+    deal_value: null,
+    last_contact_at: new Date().toISOString(),
+  },
+  {
+    id: "2",
+    name: "Daniel Kimani",
+    org_type: "prospect",
+    website: null,
+    country: "KE",
+    products: "Konica 8x10 film",
+    brands: "Konica",
+    deal_value: null,
+    last_contact_at: null,
+  },
+  {
+    id: "3",
+    name: "Cargo Movers",
+    org_type: "supplier",
+    website: "http://www.cargomovers.co.in",
+    country: "IN",
+    products: "Logistics / Sea freight",
+    brands: null,
+    deal_value: 0,
+    last_contact_at: new Date().toISOString(),
+  },
+];
+
+// ---- Helpers ----
+const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString() : "—");
+const fmtMoney = (v?: number | null) =>
+  v == null ? "—" : new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
+
+// ---- Reusable row card (compact; matches your columns meaning) ----
+function OrgRow({ item }: { item: OrgListItem }) {
+  return (
+    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
+      <Card className="hover:shadow-sm">
+        <CardHeader className="py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <CardTitle className="text-base leading-tight truncate">{item.name}</CardTitle>
+              <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+                <Badge
+                  variant={item.org_type === "client" ? "default" : item.org_type === "prospect" ? "secondary" : "outline"}
+                  className="capitalize"
+                >
+                  {item.org_type}
+                </Badge>
+                {item.country ? <span>• {item.country}</span> : null}
+                <span className="hidden md:inline">• Products: {item.products ?? "—"}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-3 shrink-0">
+              {item.website ? (
+                <a href={item.website} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline inline-flex items-center gap-1">
+                  <Globe className="w-4 h-4" />
+                  Website
+                </a>
+              ) : (
+                <Badge variant="outline" className="text-[10px]">No website</Badge>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+          <div>
+            <div className="text-xs text-muted-foreground mb-1">Brands</div>
+            <div>{item.brands ?? "—"}</div>
+          </div>
+          <div className="md:col-span-2">
+            <div className="text-xs text-muted-foreground mb-1">Products (latest inquiry)</div>
+            <div className="truncate" title={item.products ?? undefined}>{item.products ?? "—"}</div>
+          </div>
+          <div>
+            <div className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+              <DollarSign className="w-3 h-3" /> Deal value
+            </div>
+            <div>{fmtMoney(item.deal_value)}</div>
+          </div>
+          <div className="md:col-span-4 flex items-center justify-between text-xs text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <CalendarClock className="w-4 h-4" />
+              <span>Last contact:</span>
+              <span className="text-foreground font-medium">{fmtDate(item.last_contact_at)}</span>
+            </div>
+            {/* Actions placeholder */}
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary">Open</Button>
+              <Button size="sm" variant="outline">Delete</Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+    </motion.div>
+  );
+}
+
+// ---- Group section (collapsible via details/summary) ----
+function GroupSection({
+  title,
+  icon,
+  items,
+  defaultOpen = true,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  items: OrgListItem[];
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details open={defaultOpen} className="group">
+      <summary className="flex items-center gap-2 cursor-pointer select-none text-sm font-semibold text-muted-foreground mb-3">
+        <div className="p-1 rounded-md bg-muted">{icon}</div>
+        <span>{title}</span>
+        <ChevronDown className="w-4 h-4 ml-1 transition-transform group-open:rotate-180" />
+        <span className="text-xs text-muted-foreground ml-1">({items.length})</span>
+      </summary>
+      <div className="grid grid-cols-1 gap-3 mb-6">
+        {items.length === 0 ? (
+          <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">No records</CardContent></Card>
+        ) : (
+          items.map((it) => <OrgRow key={it.id} item={it} />)
+        )}
+      </div>
+    </details>
+  );
+}
+
+// ---- Toolbar ----
+function Toolbar({
+  viewMode,
+  setViewMode,
+  onCreate,
+}: {
+  viewMode: "tabs" | "sections";
+  setViewMode: (m: "tabs" | "sections") => void;
+  onCreate: () => void;
+}) {
+  const [query, setQuery] = React.useState("");
+  const [sort, setSort] = React.useState<"recent" | "deal" | "name">("recent");
 
   return (
-    <div className="space-y-6">
-      <h1 className="text-2xl font-semibold">Clients (CRM)</h1>
-
-      {/* product filter */}
-      <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
-        <label className="text-sm block">
-          <span className="mb-1 inline-block">Filter by product</span>
-          <input
-            className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-            placeholder="e.g., x-ray film"
-            value={productFilter}
-            onChange={(e)=>setProductFilter(e.target.value)}
-          />
-        </label>
+    <div className="flex flex-col md:flex-row md:items-center gap-3">
+      <div className="relative md:w-96">
+        <Search className="absolute left-2 top-2.5 w-4 h-4 text-muted-foreground" />
+        <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter by product/company…" className="pl-8" />
       </div>
-
-      {filtered.length === 0 ? (
-        <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10 text-[var(--muted)]">
-          No records yet. Add from <b>/searches</b>.
-        </div>
-      ) : (
-        <div className="rounded-xl overflow-hidden border border-white/10">
-          <table className="w-full text-sm">
-            <thead className="bg-white/5">
-              <tr>
-                <th className="text-left px-3 py-2">Company</th>
-                <th className="text-left px-3 py-2">Brand</th>
-                <th className="text-left px-3 py-2">Product</th>
-                <th className="text-left px-3 py-2">Quantity</th>
-                <th className="text-left px-3 py-2">Deal value (USD)</th>
-                <th className="text-left px-3 py-2">Size</th>
-                <th className="text-left px-3 py-2">Tags</th>
-                <th className="text-left px-3 py-2">Status</th>
-                <th className="text-left px-3 py-2">Country</th>
-                <th className="text-left px-3 py-2">Domain</th>
-                <th className="text-left px-3 py-2 w-40">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map(it => (
-                <tr key={it.id} className="border-t border-white/10">
-                  <td className="px-3 py-2">{it.companyName}</td>
-                  <td className="px-3 py-2">{it.brand ?? "-"}</td>
-                  <td className="px-3 py-2">{it.product ?? "-"}</td>
-                  <td className="px-3 py-2">{it.quantity ?? "-"}</td>
-                  <td className="px-3 py-2">{typeof it.dealValueUSD === "number" ? it.dealValueUSD.toLocaleString() : "-"}</td>
-                  <td className="px-3 py-2">{sizeBadge(it.sizeTag)}</td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-1">
-                      {(it.tags ?? []).length ? it.tags.map(t => (
-                        <span key={t} className="rounded-full px-2 py-0.5 text-xs border border-white/10 bg-white/10">{t}</span>
-                      )) : <span className="text-[var(--muted)]">-</span>}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2">{it.status}</td>
-                  <td className="px-3 py-2">{it.country ?? "-"}</td>
-                  <td className="px-3 py-2">
-                    <a href={it.url} target="_blank" rel="noreferrer" className="hover:underline">{it.domain}</a>
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="flex flex-wrap gap-2">
-                      <button className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10"
-                              onClick={()=>openView(it)}>Open</button>
-                      <button className="rounded-md px-2 py-1 border border-white/10 hover:bg-white/10"
-                              onClick={()=>remove(it.id)}>Delete</button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Detail modal */}
-      <Modal open={open && !!current} onClose={()=>setOpen(false)}>
-        {current && (
-          <DetailCard item={current} onChange={(patch)=>update(current.id, patch)} />
-        )}
-      </Modal>
+      <div className="flex items-center gap-2">
+        <Select value={sort} onValueChange={(v: any) => setSort(v)}>
+          <SelectTrigger className="w-36"><SelectValue placeholder="Sort" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="recent">Most recent</SelectItem>
+            <SelectItem value="deal">Deal value</SelectItem>
+            <SelectItem value="name">Name A→Z</SelectItem>
+          </SelectContent>
+        </Select>
+        <Separator orientation="vertical" className="h-6" />
+        <Select value={viewMode} onValueChange={(v: any) => setViewMode(v)}>
+          <SelectTrigger className="w-36"><SelectValue placeholder="View" /></SelectTrigger>
+          <SelectContent>
+            <SelectItem value="tabs">Tabs</SelectItem>
+            <SelectItem value="sections">Sections</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="md:ml-auto">
+        <Button onClick={onCreate}>New Lead</Button>
+      </div>
     </div>
   );
 }
 
-function sizeBadge(tag?: SizeTag) {
-  if (!tag) return <span className="text-[var(--muted)]">-</span>;
-  const base = "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium";
-  if (tag === "BIG") return <span className={`${base} border border-rose-400/40 bg-rose-500/10`}>BIG</span>;
-  return <span className={`${base} border border-sky-400/40 bg-sky-500/10`}>SMALL</span>;
-}
+// ---- Page ----
+export default function ClientsCRMPage() {
+  const [viewMode, setViewMode] = React.useState<"tabs" | "sections">("tabs");
 
-function Row({ label, children }: {label:string; children:any}) {
+  // TODO: replace with real fetchers:
+  // const clients = useSWR<OrgListItem[]>("/api/orgs?org_type=client");
+  // const prospects = useSWR<OrgListItem[]>("/api/orgs?org_type=prospect");
+  // const suppliers = useSWR<OrgListItem[]>("/api/orgs?org_type=supplier");
+
+  const clients = React.useMemo(() => MOCK.filter((x) => x.org_type === "client"), []);
+  const prospects = React.useMemo(() => MOCK.filter((x) => x.org_type === "prospect"), []);
+  const suppliers = React.useMemo(() => MOCK.filter((x) => x.org_type === "supplier"), []);
+
+  const onCreate = () => {
+    // open create-lead modal (org + optional inquiry)
+    alert("Open New Lead modal");
+  };
+
   return (
-    <label className="grid grid-cols-3 gap-3 items-center">
-      <span className="text-sm text-[var(--muted)]">{label}</span>
-      <div className="col-span-2">{children}</div>
-    </label>
-  );
-}
-
-function Inp({ value, onChange, type="text" }:{ value:any; onChange:(v:any)=>void; type?:string}) {
-  return (
-    <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-           value={value ?? ""} onChange={e=>onChange(type==="number" ? Number(e.target.value||0) : e.target.value)} type={type}/>
-  );
-}
-
-function DetailCard({ item, onChange }: { item: CRMItem; onChange: (patch: Partial<CRMItem>) => void }) {
-  const [tagsText, setTagsText] = useState<string>((item.tags ?? []).join(", "));
-  return (
-    <div>
-      <h3 className="text-lg font-semibold mb-3">{item.companyName}</h3>
-
-      <div className="text-sm uppercase tracking-wide text-[var(--muted)] mb-2">Company</div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-        <Row label="Company"><Inp value={item.companyName} onChange={v=>onChange({companyName:v})} /></Row>
-        <Row label="Country"><Inp value={item.country} onChange={v=>onChange({country:v})} /></Row>
-        <Row label="Industry"><Inp value={item.industry} onChange={v=>onChange({industry:v})} /></Row>
-        <Row label="Domain"><Inp value={item.domain} onChange={v=>onChange({domain:v})} /></Row>
-        <Row label="Status">
-          <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                  value={item.status} onChange={e=>onChange({status: e.target.value as any})}>
-            {["New","Contacted","Qualified","Bad Fit"].map(s=><option key={s} value={s}>{s}</option>)}
-          </select>
-        </Row>
+    <div className="p-4 md:p-6 space-y-4">
+      <div>
+        <h1 className="text-xl font-semibold tracking-tight">Clients (CRM)</h1>
       </div>
 
-      <div className="text-sm uppercase tracking-wide text-[var(--muted)] mb-2">Opportunity</div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-        <Row label="Brand"><Inp value={item.brand} onChange={v=>onChange({brand:v})} /></Row>
-        <Row label="Product"><Inp value={item.product} onChange={v=>onChange({product:v})} /></Row>
-        <Row label="Quantity"><Inp value={item.quantity} onChange={v=>onChange({quantity:v})} /></Row>
-        <Row label="Deal value (USD)"><Inp type="number" value={item.dealValueUSD} onChange={v=>onChange({dealValueUSD:v})} /></Row>
-        <Row label="Size">
-          <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                  value={item.sizeTag || ""}
-                  onChange={(e)=>onChange({ sizeTag: (e.target.value || undefined) as SizeTag | undefined })}>
-            <option value="">—</option>
-            <option value="BIG">BIG</option>
-            <option value="SMALL">SMALL</option>
-          </select>
-        </Row>
-        <Row label="Tags">
-          <input
-            className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-            placeholder="comma,separated,tags"
-            value={tagsText}
-            onChange={(e)=>{
-              const v = e.target.value;
-              setTagsText(v);
-              const arr = v.split(",").map(s=>s.trim()).filter(Boolean);
-              onChange({ tags: arr });
-            }}
-          />
-        </Row>
-      </div>
+      <Toolbar viewMode={viewMode} setViewMode={setViewMode} onCreate={onCreate} />
 
-      <div className="text-sm uppercase tracking-wide text-[var(--muted)] mb-2">Notes</div>
-      <textarea className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-28"
-                value={item.note ?? ""} onChange={e=>onChange({note:e.target.value})}/>
+      {viewMode === "tabs" ? (
+        <Tabs defaultValue="clients" className="mt-4">
+          <TabsList className="grid grid-cols-3 w-full md:w-auto">
+            <TabsTrigger value="clients" className="gap-2"><Users className="w-4 h-4" /> Clients</TabsTrigger>
+            <TabsTrigger value="prospects" className="gap-2"><UserRoundSearch className="w-4 h-4" /> Prospects</TabsTrigger>
+            <TabsTrigger value="suppliers" className="gap-2"><PackageSearch className="w-4 h-4" /> Suppliers</TabsTrigger>
+          </TabsList>
 
-      <div className="mt-4 text-xs text-[var(--muted)]">
-        Added: {new Date(item.addedAt).toLocaleString()} • Updated: {new Date(item.updatedAt).toLocaleString()}
-      </div>
+          <TabsContent value="clients" className="mt-4">
+            {clients.map((it) => <OrgRow key={it.id} item={it} />)}
+          </TabsContent>
+          <TabsContent value="prospects" className="mt-4">
+            {prospects.map((it) => <OrgRow key={it.id} item={it} />)}
+          </TabsContent>
+          <TabsContent value="suppliers" className="mt-4">
+            {suppliers.map((it) => <OrgRow key={it.id} item={it} />)}
+          </TabsContent>
+        </Tabs>
+      ) : (
+        <div className="space-y-6 mt-2">
+          <GroupSection title="Clients" icon={<Users className="w-4 h-4" />} items={clients} />
+          <Separator />
+          <GroupSection title="Prospects" icon={<UserRoundSearch className="w-4 h-4" />} items={prospects} />
+          <Separator />
+          <GroupSection title="Suppliers" icon={<PackageSearch className="w-4 h-4" />} items={suppliers} />
+        </div>
+      )}
     </div>
   );
 }

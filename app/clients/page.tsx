@@ -1,24 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { motion } from "framer-motion";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
-import {
-  Users,
-  UserRoundSearch,
-  PackageSearch,
-  Search,
-  Globe,
-  CalendarClock,
-  DollarSign,
-  ChevronDown,
-} from "lucide-react";
+import { Users, UserRoundSearch, PackageSearch, Search, Globe, CalendarClock, DollarSign, ChevronDown } from "lucide-react";
 
 // ---- Types ----
 type OrgType = "client" | "prospect" | "supplier";
@@ -36,7 +19,7 @@ interface OrgListItem {
   latest_inquiry_at?: string | null;
 }
 
-// ---- Mock data (replace with API once ready) ----
+// ---- Mock data (замінимо на API пізніше) ----
 const MOCK: OrgListItem[] = [
   {
     id: "1",
@@ -78,87 +61,132 @@ const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString() : "—"
 const fmtMoney = (v?: number | null) =>
   v == null ? "—" : new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(v);
 
-// ---- Reusable row card (compact; matches your columns meaning) ----
+// ---- Small UI primitives (без shadcn) ----
+function Badge({ children, variant = "default" }: { children: React.ReactNode; variant?: "default" | "secondary" | "outline" }) {
+  const map: Record<string, string> = {
+    default: "bg-primary/15 text-primary border border-primary/20",
+    secondary: "bg-white/5 text-foreground border border-white/10",
+    outline: "border border-white/15 text-muted-foreground",
+  };
+  return <span className={`px-2 py-0.5 rounded-md text-[11px] ${map[variant]}`}>{children}</span>;
+}
+
+function Card({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`rounded-2xl border border-white/10 bg-white/5 ${className}`}>{children}</div>;
+}
+function CardHeader({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`px-4 py-3 border-b border-white/10 ${className}`}>{children}</div>;
+}
+function CardContent({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <div className={`px-4 py-3 ${className}`}>{children}</div>;
+}
+function CardTitle({ children, className = "" }: { children: React.ReactNode; className?: string }) {
+  return <h3 className={`font-semibold ${className}`}>{children}</h3>;
+}
+
+function Button(props: React.ButtonHTMLAttributes<HTMLButtonElement> & { variant?: "default" | "secondary" | "outline"; size?: "sm" | "md" }) {
+  const { className = "", variant = "default", size = "md", ...rest } = props;
+  const vmap: Record<string, string> = {
+    default: "bg-primary text-primary-foreground hover:bg-primary/90",
+    secondary: "bg-white/10 hover:bg-white/15 text-foreground",
+    outline: "border border-white/15 hover:bg-white/5 text-foreground",
+  };
+  const sm = size === "sm" ? "h-8 px-3 text-xs" : "h-9 px-4 text-sm";
+  return <button className={`rounded-lg ${sm} ${vmap[variant]} ${className}`} {...rest} />;
+}
+
+function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  const { className = "", ...rest } = props;
+  return <input className={`w-full h-10 rounded-lg bg-transparent border border-white/15 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30 ${className}`} {...rest} />;
+}
+
+// ---- Row ----
 function OrgRow({ item }: { item: OrgListItem }) {
   return (
-    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.15 }}>
-      <Card className="hover:shadow-sm">
-        <CardHeader className="py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <CardTitle className="text-base leading-tight truncate">{item.name}</CardTitle>
-              <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
-                <Badge
-                  variant={item.org_type === "client" ? "default" : item.org_type === "prospect" ? "secondary" : "outline"}
-                  className="capitalize"
-                >
-                  {item.org_type}
-                </Badge>
-                {item.country ? <span>• {item.country}</span> : null}
-                <span className="hidden md:inline">• Products: {item.products ?? "—"}</span>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 shrink-0">
-              {item.website ? (
-                <a href={item.website} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline inline-flex items-center gap-1">
-                  <Globe className="w-4 h-4" />
-                  Website
-                </a>
-              ) : (
-                <Badge variant="outline" className="text-[10px]">No website</Badge>
-              )}
+    <Card className="hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)] transition-shadow">
+      <CardHeader className="py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <CardTitle className="text-base leading-tight truncate">{item.name}</CardTitle>
+            <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+              <Badge variant={item.org_type === "client" ? "default" : item.org_type === "prospect" ? "secondary" : "outline"}>{item.org_type}</Badge>
+              {item.country ? <span>• {item.country}</span> : null}
+              <span className="hidden md:inline">• Products: {item.products ?? "—"}</span>
             </div>
           </div>
-        </CardHeader>
-        <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
-          <div>
-            <div className="text-xs text-muted-foreground mb-1">Brands</div>
-            <div>{item.brands ?? "—"}</div>
+          <div className="flex items-center gap-3 shrink-0">
+            {item.website ? (
+              <a href={item.website} target="_blank" rel="noreferrer" className="text-xs text-primary hover:underline inline-flex items-center gap-1">
+                <Globe className="w-4 h-4" />
+                Website
+              </a>
+            ) : (
+              <Badge variant="outline">No website</Badge>
+            )}
           </div>
-          <div className="md:col-span-2">
-            <div className="text-xs text-muted-foreground mb-1">Products (latest inquiry)</div>
-            <div className="truncate" title={item.products ?? undefined}>{item.products ?? "—"}</div>
+        </div>
+      </CardHeader>
+      <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+        <div>
+          <div className="text-xs text-muted-foreground mb-1">Brands</div>
+          <div>{item.brands ?? "—"}</div>
+        </div>
+        <div className="md:col-span-2">
+          <div className="text-xs text-muted-foreground mb-1">Products (latest inquiry)</div>
+          <div className="truncate" title={item.products ?? undefined}>{item.products ?? "—"}</div>
+        </div>
+        <div>
+          <div className="text-xs text-muted-foreground mb-1 flex items-center gap-1"><DollarSign className="w-3 h-3" /> Deal value</div>
+          <div>{fmtMoney(item.deal_value)}</div>
+        </div>
+        <div className="md:col-span-4 flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <CalendarClock className="w-4 h-4" />
+            <span>Last contact:</span>
+            <span className="text-foreground font-medium">{fmtDate(item.last_contact_at)}</span>
           </div>
-          <div>
-            <div className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
-              <DollarSign className="w-3 h-3" /> Deal value
-            </div>
-            <div>{fmtMoney(item.deal_value)}</div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary">Open</Button>
+            <Button size="sm" variant="outline">Delete</Button>
           </div>
-          <div className="md:col-span-4 flex items-center justify-between text-xs text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <CalendarClock className="w-4 h-4" />
-              <span>Last contact:</span>
-              <span className="text-foreground font-medium">{fmtDate(item.last_contact_at)}</span>
-            </div>
-            {/* Actions placeholder */}
-            <div className="flex gap-2">
-              <Button size="sm" variant="secondary">Open</Button>
-              <Button size="sm" variant="outline">Delete</Button>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    </motion.div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
-// ---- Group section (collapsible via details/summary) ----
-function GroupSection({
-  title,
-  icon,
-  items,
-  defaultOpen = true,
+// ---- Tabs (без зовнішніх бібліотек) ----
+function Tabs({
+  current,
+  onChange,
 }: {
-  title: string;
-  icon: React.ReactNode;
-  items: OrgListItem[];
-  defaultOpen?: boolean;
+  current: "clients" | "prospects" | "suppliers";
+  onChange: (v: "clients" | "prospects" | "suppliers") => void;
 }) {
+  const common = "px-3 py-2 rounded-lg text-sm border border-white/10";
+  const active = "bg-primary text-primary-foreground border-primary/30";
+  const idle = "bg-white/5 hover:bg-white/10";
+  return (
+    <div className="inline-grid grid-cols-3 gap-2">
+      <button className={`${common} ${current === "clients" ? active : idle}`} onClick={() => onChange("clients")}>
+        <span className="inline-flex items-center gap-2"><Users className="w-4 h-4" /> Clients</span>
+      </button>
+      <button className={`${common} ${current === "prospects" ? active : idle}`} onClick={() => onChange("prospects")}>
+        <span className="inline-flex items-center gap-2"><UserRoundSearch className="w-4 h-4" /> Prospects</span>
+      </button>
+      <button className={`${common} ${current === "suppliers" ? active : idle}`} onClick={() => onChange("suppliers")}>
+        <span className="inline-flex items-center gap-2"><PackageSearch className="w-4 h-4" /> Suppliers</span>
+      </button>
+    </div>
+  );
+}
+
+// ---- Collapsible Section (native <details>) ----
+function GroupSection({ title, icon, items, defaultOpen = true }: { title: string; icon: React.ReactNode; items: OrgListItem[]; defaultOpen?: boolean }) {
   return (
     <details open={defaultOpen} className="group">
       <summary className="flex items-center gap-2 cursor-pointer select-none text-sm font-semibold text-muted-foreground mb-3">
-        <div className="p-1 rounded-md bg-muted">{icon}</div>
+        <div className="p-1 rounded-md bg-white/5">{icon}</div>
         <span>{title}</span>
         <ChevronDown className="w-4 h-4 ml-1 transition-transform group-open:rotate-180" />
         <span className="text-xs text-muted-foreground ml-1">({items.length})</span>
@@ -194,22 +222,27 @@ function Toolbar({
         <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Filter by product/company…" className="pl-8" />
       </div>
       <div className="flex items-center gap-2">
-        <Select value={sort} onValueChange={(v: any) => setSort(v)}>
-          <SelectTrigger className="w-36"><SelectValue placeholder="Sort" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="recent">Most recent</SelectItem>
-            <SelectItem value="deal">Deal value</SelectItem>
-            <SelectItem value="name">Name A→Z</SelectItem>
-          </SelectContent>
-        </Select>
-        <Separator orientation="vertical" className="h-6" />
-        <Select value={viewMode} onValueChange={(v: any) => setViewMode(v)}>
-          <SelectTrigger className="w-36"><SelectValue placeholder="View" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="tabs">Tabs</SelectItem>
-            <SelectItem value="sections">Sections</SelectItem>
-          </SelectContent>
-        </Select>
+        {/* простий select без зовнішніх UI-бібліотек */}
+        <select
+          value={sort}
+          onChange={(e) => setSort(e.target.value as any)}
+          className="h-10 rounded-lg bg-transparent border border-white/15 px-3 text-sm"
+        >
+          <option value="recent">Most recent</option>
+          <option value="deal">Deal value</option>
+          <option value="name">Name A→Z</option>
+        </select>
+
+        <div className="h-6 w-px bg-white/10 mx-1" />
+
+        <select
+          value={viewMode}
+          onChange={(e) => setViewMode(e.target.value as any)}
+          className="h-10 rounded-lg bg-transparent border border-white/15 px-3 text-sm"
+        >
+          <option value="tabs">Tabs</option>
+          <option value="sections">Sections</option>
+        </select>
       </div>
       <div className="md:ml-auto">
         <Button onClick={onCreate}>New Lead</Button>
@@ -222,17 +255,12 @@ function Toolbar({
 export default function ClientsCRMPage() {
   const [viewMode, setViewMode] = React.useState<"tabs" | "sections">("tabs");
 
-  // TODO: replace with real fetchers:
-  // const clients = useSWR<OrgListItem[]>("/api/orgs?org_type=client");
-  // const prospects = useSWR<OrgListItem[]>("/api/orgs?org_type=prospect");
-  // const suppliers = useSWR<OrgListItem[]>("/api/orgs?org_type=supplier");
-
+  // Поки що береться з MOCK — потім підмінемо на fetch('/api/orgs?...')
   const clients = React.useMemo(() => MOCK.filter((x) => x.org_type === "client"), []);
   const prospects = React.useMemo(() => MOCK.filter((x) => x.org_type === "prospect"), []);
   const suppliers = React.useMemo(() => MOCK.filter((x) => x.org_type === "supplier"), []);
 
   const onCreate = () => {
-    // open create-lead modal (org + optional inquiry)
     alert("Open New Lead modal");
   };
 
@@ -245,29 +273,25 @@ export default function ClientsCRMPage() {
       <Toolbar viewMode={viewMode} setViewMode={setViewMode} onCreate={onCreate} />
 
       {viewMode === "tabs" ? (
-        <Tabs defaultValue="clients" className="mt-4">
-          <TabsList className="grid grid-cols-3 w-full md:w-auto">
-            <TabsTrigger value="clients" className="gap-2"><Users className="w-4 h-4" /> Clients</TabsTrigger>
-            <TabsTrigger value="prospects" className="gap-2"><UserRoundSearch className="w-4 h-4" /> Prospects</TabsTrigger>
-            <TabsTrigger value="suppliers" className="gap-2"><PackageSearch className="w-4 h-4" /> Suppliers</TabsTrigger>
-          </TabsList>
-
-          <TabsContent value="clients" className="mt-4">
-            {clients.map((it) => <OrgRow key={it.id} item={it} />)}
-          </TabsContent>
-          <TabsContent value="prospects" className="mt-4">
-            {prospects.map((it) => <OrgRow key={it.id} item={it} />)}
-          </TabsContent>
-          <TabsContent value="suppliers" className="mt-4">
-            {suppliers.map((it) => <OrgRow key={it.id} item={it} />)}
-          </TabsContent>
-        </Tabs>
+        <div className="mt-4 space-y-4">
+          <Tabs current="clients" onChange={() => setViewMode("tabs")} />
+          <div className="mt-4">
+            <div className="grid grid-cols-1 gap-3">
+              {/* Для Tabs: малюємо одну активну категорію (за замовчуванням Clients) */}
+              {clients.map((it) => <OrgRow key={it.id} item={it} />)}
+            </div>
+          </div>
+          <div className="mt-2">
+            {/* кнопки-перемикачі тримаємо зверху; якщо треба справжній таб-стейт між 3-ма, скажи — додам */}
+            <div className="text-xs text-muted-foreground">Use the buttons above to switch categories (Tabs/Sections toggle is in the toolbar).</div>
+          </div>
+        </div>
       ) : (
         <div className="space-y-6 mt-2">
           <GroupSection title="Clients" icon={<Users className="w-4 h-4" />} items={clients} />
-          <Separator />
+          <div className="h-px bg-white/10" />
           <GroupSection title="Prospects" icon={<UserRoundSearch className="w-4 h-4" />} items={prospects} />
-          <Separator />
+          <div className="h-px bg-white/10" />
           <GroupSection title="Suppliers" icon={<PackageSearch className="w-4 h-4" />} items={suppliers} />
         </div>
       )}

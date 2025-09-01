@@ -1,39 +1,53 @@
+export const runtime = "nodejs";
+
 import { NextRequest, NextResponse } from "next/server";
-import { sql } from "@/lib/db";
+import { getSql } from "@/lib/db";
 
 export async function GET(_: NextRequest, { params }: { params: { id: string } }) {
-  const id = params.id;
+  try {
+    const sql = getSql();
+    const id = params.id;
 
-  const orgs = await sql/*sql*/`select * from organizations where id = ${id} limit 1;` as any;
-  if (orgs.length === 0) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const org = (await sql/*sql*/`
+      select id, name, org_type, website, country, last_contact_at, created_at
+      from organizations
+      where id = ${id}
+      limit 1;
+    ` as any)[0];
+    if (!org) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-  // Повна історія заявок з позиціями
-  const inquiries = await sql/*sql*/`
-    select i.id, i.summary, i.created_at
-    from inquiries i
-    where i.org_id = ${id}
-    order by i.created_at desc;
-  ` as any;
-
-  let items: Record<string, any[]> = {};
-  if (inquiries.length > 0) {
-    const ids = inquiries.map((r: any) => r.id);
-    const rows = await sql/*sql*/`
-      select inquiry_id, id, brand, product, quantity, unit, unit_price, created_at
-      from inquiry_items
-      where inquiry_id = any(${ids});
+    const inquiries = await sql/*sql*/`
+      select id, summary, created_at
+      from inquiries
+      where org_id = ${id}
+      order by created_at desc;
     ` as any;
-    for (const r of rows) {
-      if (!items[r.inquiry_id]) items[r.inquiry_id] = [];
-      items[r.inquiry_id].push(r);
-    }
-  }
 
-  return NextResponse.json({ org: orgs[0], inquiries, items });
+    let items: Record<string, any[]> = {};
+    if (inquiries.length) {
+      const ids = inquiries.map((r: any) => r.id);
+      const rows = await sql/*sql*/`
+        select inquiry_id, id, brand, product, quantity, unit, unit_price, created_at
+        from inquiry_items
+        where inquiry_id = any(${ids});
+      ` as any;
+      for (const r of rows) {
+        (items[r.inquiry_id] ??= []).push(r);
+      }
+    }
+
+    return NextResponse.json({ org, inquiries, items });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
+  }
 }
 
 export async function DELETE(_: NextRequest, { params }: { params: { id: string } }) {
-  const id = params.id;
-  await sql/*sql*/`delete from organizations where id = ${id};`;
-  return NextResponse.json({ ok: true });
+  try {
+    const sql = getSql();
+    await sql/*sql*/`delete from organizations where id = ${params.id};`;
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
+  }
 }

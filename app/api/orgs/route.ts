@@ -4,19 +4,47 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
+// GET /api/orgs?org_type=client|prospect|supplier (або без фільтра)
 export async function GET(req: NextRequest) {
   try {
     const sql = getSql();
-    const { searchParams } = new URL(req.url);
-    const orgType = searchParams.get("org_type"); // client|prospect|supplier|null
 
-    const rows = await sql/*sql*/`
-      select
-        o.id, o.name, o.org_type, o.website, o.country, o.last_contact_at, o.created_at
-      from organizations o
-      where (${orgType} is null or o.org_type = ${orgType})
-      order by coalesce(o.last_contact_at, o.created_at) desc nulls last;
-    ` as any;
+    const { searchParams } = new URL(req.url);
+    const orgTypeRaw = searchParams.get("org_type");
+    const orgType =
+      orgTypeRaw && ["client", "prospect", "supplier"].includes(orgTypeRaw)
+        ? (orgTypeRaw as "client" | "prospect" | "supplier")
+        : null;
+
+    let rows: any[] = [];
+    if (orgType) {
+      rows = await sql/*sql*/`
+        select
+          o.id,
+          o.name,
+          o.org_type,
+          o.website,
+          o.country,
+          o.last_contact_at,
+          o.created_at
+        from organizations o
+        where o.org_type = ${orgType}
+        order by coalesce(o.last_contact_at, o.created_at) desc nulls last;
+      `;
+    } else {
+      rows = await sql/*sql*/`
+        select
+          o.id,
+          o.name,
+          o.org_type,
+          o.website,
+          o.country,
+          o.last_contact_at,
+          o.created_at
+        from organizations o
+        order by coalesce(o.last_contact_at, o.created_at) desc nulls last;
+      `;
+    }
 
     return NextResponse.json({ data: rows ?? [] });
   } catch (e: any) {
@@ -24,20 +52,23 @@ export async function GET(req: NextRequest) {
   }
 }
 
+// POST /api/orgs  (створення організації)
+// body: { name: string, org_type?: "client"|"prospect"|"supplier", website?: string|null, country?: string|null }
 export async function POST(req: NextRequest) {
   try {
     const sql = getSql();
-    const body = await req.json().catch(() => ({}));
+
+    const body = await req.json().catch(() => ({} as any));
     const id = crypto.randomUUID();
 
     const name = (body.name ?? "").trim();
-    const org_type = body.org_type ?? "prospect";
+    const org_type: "client" | "prospect" | "supplier" =
+      ["client", "prospect", "supplier"].includes(body.org_type) ? body.org_type : "prospect";
     const website = body.website ?? null;
     const country = body.country ?? null;
 
-    if (!name) return NextResponse.json({ error: "Name is required" }, { status: 400 });
-    if (!["client", "prospect", "supplier"].includes(org_type)) {
-      return NextResponse.json({ error: "org_type must be client|prospect|supplier" }, { status: 400 });
+    if (!name) {
+      return NextResponse.json({ error: "Name is required" }, { status: 400 });
     }
 
     await sql/*sql*/`

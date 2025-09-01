@@ -1,25 +1,36 @@
+// app/api/kanban/tasks/[id]/comments/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const fetchCache = "force-no-store";
 
-import { NextRequest } from "next/server";
 import { getSql } from "@/lib/db";
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+type Params = { params: { id: string } };
+
+export async function POST(req: Request, { params }: Params) {
   const sql = getSql();
   const taskId = Number(params.id);
-  if (!taskId) return Response.json({ error: "Bad id" }, { status: 400 });
 
-  const body = await req.json().catch(() => ({}));
-  const text = (body.body || "").toString().trim();
-  if (!text) return Response.json({ error: "Empty body" }, { status: 400 });
+  let body: any = {};
+  try { body = await req.json(); } catch {}
 
-  const author = typeof body.author === "string" ? body.author : "Me";
+  const text = (body?.body ?? "").toString().trim();
+  const author = (body?.author ?? null) as string | null;
+
+  if (!taskId || !text) {
+    return new Response(JSON.stringify({ error: "Invalid payload" }), { status: 400 });
+  }
 
   const rows = await sql/* sql */`
-    INSERT INTO kanban_comments(task_id, author, body)
+    INSERT INTO kanban_comments (task_id, author, body)
     VALUES (${taskId}, ${author}, ${text})
-    RETURNING id;
+    RETURNING
+      id,
+      author,
+      body,
+      to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt";
   `;
-  return Response.json({ id: rows[0].id }, { status: 201 });
+
+  return Response.json({ comment: rows[0] });
 }

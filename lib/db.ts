@@ -1,7 +1,7 @@
-// /lib/db.ts
+// lib/db.ts
 import { neon } from "@neondatabase/serverless";
 
-// Лінива ініціалізація: створюємо клієнт лише в тілі хендлера
+// Лінива ініціалізація: створюємо клієнт у хендлері
 export function getSql() {
   const url = process.env.DATABASE_URL;
   if (!url) throw new Error("Missing DATABASE_URL");

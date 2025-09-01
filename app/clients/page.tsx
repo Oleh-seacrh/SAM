@@ -1,21 +1,20 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import React, { useEffect, useMemo, useState } from "react";
 import {
-  Globe,
-  Clock,
-  DollarSign,
   Users,
+  UserRoundSearch,
+  PackageSearch,
   Search,
-  Package,
+  Globe,
+  CalendarClock,
+  DollarSign,
+  ChevronDown,
   ExternalLink,
+  X,
 } from "lucide-react";
 
-/* ============================== Types =============================== */
+/* ===================== Types ===================== */
 
 type OrgType = "client" | "prospect" | "supplier";
 
@@ -50,7 +49,9 @@ type Detail = {
 
 type ViewMode = "tabs" | "sections";
 
-/* ============================== Helpers ============================= */
+/* ===================== Helpers / API ===================== */
+
+const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString() : "—");
 
 async function fetchList(org_type: OrgType) {
   const r = await fetch(`/api/orgs?org_type=${org_type}`, { cache: "no-store" });
@@ -67,17 +68,532 @@ async function fetchDetail(id: string) {
   return j as Detail;
 }
 
-function formatDate(s?: string | null) {
-  if (!s) return "";
-  try {
-    const d = new Date(s);
-    return d.toLocaleDateString();
-  } catch {
-    return "";
-  }
+/* ===================== Mini UI (old look) ===================== */
+
+function Badge({ children }: { children: React.ReactNode }) {
+  return (
+    <span className="px-2 py-0.5 rounded-md text-[11px] bg-white/5 text-foreground border border-white/10">
+      {children}
+    </span>
+  );
 }
 
-/* ================================ UI ================================ */
+function Button(
+  props: React.ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: "default" | "secondary" | "outline" | "ghost" | "destructive";
+    size?: "sm" | "md";
+  }
+) {
+  const { className = "", variant = "default", size = "md", ...rest } = props;
+  const vmap: Record<string, string> = {
+    default: "bg-primary text-primary-foreground hover:bg-primary/90",
+    secondary: "bg-white/10 hover:bg-white/15 text-foreground",
+    outline: "border border-white/15 hover:bg-white/5 text-foreground",
+    ghost: "hover:bg-white/10 text-foreground",
+    destructive:
+      "bg-red-600/80 text-white hover:bg-red-600 border border-red-500/40",
+  };
+  const sm = size === "sm" ? "h-8 px-3 text-xs" : "h-9 px-4 text-sm";
+  return (
+    <button
+      className={`rounded-lg transition ${sm} ${vmap[variant]} ${className}`}
+      {...rest}
+    />
+  );
+}
+
+function Input(props: React.InputHTMLAttributes<HTMLInputElement>) {
+  const { className = "", ...rest } = props;
+  return (
+    <input
+      className={`h-10 w-full rounded-lg bg-transparent border border-white/15 px-3 text-sm outline-none focus:ring-2 focus:ring-primary/30 ${className}`}
+      {...rest}
+    />
+  );
+}
+
+function Card({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div
+      className={`rounded-2xl border border-white/10 bg-white/5 ${className}`}
+    >
+      {children}
+    </div>
+  );
+}
+function CardHeader({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={`px-4 py-3 border-b border-white/10 ${className}`}>
+      {children}
+    </div>
+  );
+}
+function CardContent({
+  children,
+  className = "",
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return <div className={`px-4 py-3 ${className}`}>{children}</div>;
+}
+
+function Divider() {
+  return <div className="h-px w-full bg-white/10" />;
+}
+
+function Modal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative z-[61] w-[min(920px,96vw)] rounded-2xl border border-white/10 bg-background">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+          <h3 className="font-semibold">{title}</h3>
+          <button
+            onClick={onClose}
+            className="p-1 rounded-md hover:bg-white/10"
+            aria-label="Close"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ===================== Rows / Sections ===================== */
+
+function Row({
+  item,
+  onOpen,
+  onDelete,
+}: {
+  item: OrgListItem;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <Card className="hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)] transition-shadow">
+      <CardHeader className="py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="font-semibold leading-tight truncate">
+              {item.name}
+            </div>
+            <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+              <Badge>{item.org_type}</Badge>
+              {item.country ? <span>• {item.country}</span> : <span>• —</span>}
+              <span className="hidden md:inline">
+                • Products: {item.products || "—"}
+              </span>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3 shrink-0">
+            {item.website ? (
+              <a
+                href={item.website}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-primary hover:underline inline-flex items-center gap-1"
+                title={item.website || undefined}
+              >
+                <Globe className="w-4 h-4" />
+                Website
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            ) : (
+              <span className="text-xs text-muted-foreground border border-white/10 rounded-md px-2 py-0.5">
+                No website
+              </span>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+        <div>
+          <div className="text-xs text-muted-foreground mb-1">Brands</div>
+          <div>{item.brands || "—"}</div>
+        </div>
+        <div className="md:col-span-2">
+          <div className="text-xs text-muted-foreground mb-1">
+            Products (latest inquiry)
+          </div>
+          <div className="truncate" title={item.products || undefined}>
+            {item.products || "—"}
+          </div>
+        </div>
+        <div>
+          <div className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+            <DollarSign className="w-3 h-3" /> Deal value
+          </div>
+          <div>—</div>
+        </div>
+
+        <div className="md:col-span-4 flex items-center justify-between text-xs text-muted-foreground">
+          <div className="flex items-center gap-2">
+            <CalendarClock className="w-4 h-4" />
+            <span>Last contact:</span>
+            <span className="text-foreground font-medium">
+              {fmtDate(item.last_contact_at)}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => onOpen(item.id)}>
+              Open
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => onDelete(item.id)}>
+              Delete
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function GroupSection({
+  title,
+  icon,
+  items,
+  defaultOpen = true,
+  onOpen,
+  onDelete,
+}: {
+  title: string;
+  icon: React.ReactNode;
+  items: OrgListItem[];
+  defaultOpen?: boolean;
+  onOpen: (id: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <details open={defaultOpen} className="group">
+      <summary className="flex items-center gap-2 cursor-pointer select-none text-sm font-semibold text-muted-foreground mb-3">
+        <div className="p-1 rounded-md bg-white/5">{icon}</div>
+        <span>{title}</span>
+        <ChevronDown className="w-4 h-4 ml-1 transition-transform group-open:rotate-180" />
+        <span className="text-xs text-muted-foreground ml-1">({items.length})</span>
+      </summary>
+      <div className="grid grid-cols-1 gap-3 mb-6">
+        {items.length === 0 ? (
+          <Card>
+            <CardContent className="py-8 text-center text-sm text-muted-foreground">
+              No records
+            </CardContent>
+          </Card>
+        ) : (
+          items.map((it) => (
+            <Row key={it.id} item={it} onOpen={onOpen} onDelete={onDelete} />
+          ))
+        )}
+      </div>
+    </details>
+  );
+}
+
+/* ===================== New Lead ===================== */
+
+function NewLeadModal({
+  onClose,
+  onCreated,
+}: {
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [type, setType] = useState<OrgType>("prospect");
+  const [website, setWebsite] = useState("");
+  const [country, setCountry] = useState("");
+
+  type Item = {
+    product: string;
+    brand?: string;
+    quantity?: number;
+    unit?: string;
+    unit_price?: number;
+  };
+  const [items, setItems] = useState<Item[]>([]);
+  const addItem = () => setItems((p) => [...p, { product: "" }]);
+  const updItem = (i: number, patch: Partial<Item>) =>
+    setItems((p) => p.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
+  const rmItem = (i: number) =>
+    setItems((p) => p.filter((_, idx) => idx !== i));
+
+  const [saving, setSaving] = useState(false);
+
+  const create = async () => {
+    if (!name.trim()) {
+      alert("Name is required");
+      return;
+    }
+    try {
+      setSaving(true);
+      const r = await fetch("/api/orgs", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          org_type: type,
+          website: website.trim() || null,
+          country: country.trim() || null,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(j?.error || "Create org error");
+        return;
+      }
+
+      if (items.length) {
+        const r2 = await fetch("/api/inquiries", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            org_id: j.id,
+            summary: "Manual inquiry",
+            items,
+          }),
+        });
+        const j2 = await r2.json().catch(() => ({}));
+        if (!r2.ok) {
+          alert(j2?.error || "Create inquiry error");
+          return;
+        }
+      }
+
+      onCreated();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="New Lead" onClose={onClose}>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div>
+          <div className="text-xs text-muted-foreground mb-1">Name *</div>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Company or contact name"
+          />
+        </div>
+        <div>
+          <div className="text-xs text-muted-foreground mb-1">Type</div>
+          <div className="flex gap-2">
+            {(["prospect", "client", "supplier"] as OrgType[]).map((t) => (
+              <button
+                key={t}
+                onClick={() => setType(t)}
+                className={`px-3 py-2 rounded-md text-sm ${
+                  type === t
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-white/10 text-foreground hover:bg-white/15"
+                }`}
+              >
+                {t[0].toUpperCase() + t.slice(1)}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div>
+          <div className="text-xs text-muted-foreground mb-1">Website</div>
+          <Input
+            value={website}
+            onChange={(e) => setWebsite(e.target.value)}
+            placeholder="https://…"
+          />
+        </div>
+        <div>
+          <div className="text-xs text-muted-foreground mb-1">Country</div>
+          <Input
+            value={country}
+            onChange={(e) => setCountry(e.target.value)}
+            placeholder="UA / AE / …"
+          />
+        </div>
+      </div>
+
+      <Divider />
+
+      <div className="flex items-center justify-between mb-2">
+        <div className="font-medium">Inquiry items (optional)</div>
+        <Button variant="secondary" onClick={addItem}>
+          Add item
+        </Button>
+      </div>
+
+      {items.length === 0 ? (
+        <div className="text-sm text-muted-foreground">No items yet.</div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((it, i) => (
+            <Card key={i}>
+              <CardContent className="grid grid-cols-1 md:grid-cols-6 gap-3">
+                <div className="md:col-span-2">
+                  <div className="text-xs text-muted-foreground mb-1">
+                    Product *
+                  </div>
+                  <Input
+                    value={it.product}
+                    onChange={(e) => updItem(i, { product: e.target.value })}
+                    placeholder="e.g., X-ray film 8x10"
+                  />
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground mb-1">
+                    Brand
+                  </div>
+                  <Input
+                    value={it.brand || ""}
+                    onChange={(e) => updItem(i, { brand: e.target.value })}
+                    placeholder="Fujifilm / Konica"
+                  />
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground mb-1">Qty</div>
+                  <Input
+                    type="number"
+                    value={it.quantity ?? ""}
+                    onChange={(e) =>
+                      updItem(i, {
+                        quantity: e.currentTarget.valueAsNumber || undefined,
+                      })
+                    }
+                    placeholder="200"
+                  />
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground mb-1">Unit</div>
+                  <Input
+                    value={it.unit || ""}
+                    onChange={(e) => updItem(i, { unit: e.target.value })}
+                    placeholder="boxes / pcs"
+                  />
+                </div>
+                <div className="flex items-end justify-end">
+                  <Button variant="outline" onClick={() => rmItem(i)}>
+                    Remove
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
+      <div className="pt-3 flex justify-end gap-2">
+        <Button variant="outline" onClick={onClose}>
+          Cancel
+        </Button>
+        <Button onClick={create} disabled={saving}>
+          {saving ? "Creating…" : "Create"}
+        </Button>
+      </div>
+    </Modal>
+  );
+}
+
+/* ===================== Detail ===================== */
+
+function DetailModal({
+  loading,
+  detail,
+  onClose,
+}: {
+  loading: boolean;
+  detail: Detail | null;
+  onClose: () => void;
+}) {
+  return (
+    <Modal title="Details" onClose={onClose}>
+      {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
+      {!loading && detail && (
+        <div className="space-y-4">
+          <div className="text-base font-semibold">{detail.org.name}</div>
+          <div className="text-xs text-muted-foreground">
+            {detail.org.org_type} • {detail.org.country || "—"} •{" "}
+            {detail.org.website || "—"}
+          </div>
+
+          <Divider />
+
+          <div className="font-medium">Inquiries</div>
+          {detail.inquiries.length === 0 ? (
+            <div className="text-sm text-muted-foreground">No inquiries yet.</div>
+          ) : (
+            <div className="space-y-3">
+              {detail.inquiries.map((inq) => (
+                <Card key={inq.id}>
+                  <CardHeader className="py-2 flex items-center justify-between">
+                    <div className="text-sm">
+                      {inq.summary || "(no summary)"}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {fmtDate(inq.created_at)}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="text-sm">
+                    {(detail.items[inq.id] ?? []).length === 0 ? (
+                      <div className="text-muted-foreground">No items</div>
+                    ) : (
+                      detail.items[inq.id].map((it) => (
+                        <div
+                          key={it.id}
+                          className="flex justify-between gap-3 py-1"
+                        >
+                          <div className="truncate">
+                            {it.brand ? `${it.brand} — ` : ""}
+                            {it.product}
+                          </div>
+                          <div className="text-muted-foreground">
+                            {it.quantity ?? "—"} {it.unit ?? ""}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+/* ===================== Page ===================== */
 
 export default function ClientsPage() {
   const [view, setView] = useState<ViewMode>("tabs");
@@ -130,16 +646,22 @@ export default function ClientsPage() {
     const q = query.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((r) => {
-      const hay = `${r.name} ${r.country ?? ""} ${r.website ?? ""} ${r.products ?? ""} ${r.brands ?? ""}`.toLowerCase();
+      const hay = `${r.name} ${r.country ?? ""} ${r.website ?? ""} ${
+        r.products ?? ""
+      } ${r.brands ?? ""}`.toLowerCase();
       return hay.includes(q);
     });
   };
 
   const clients = useMemo(() => filterRows(data.client), [data.client, query]);
-  const prospects = useMemo(() => filterRows(data.prospect), [data.prospect, query]);
-  const suppliers = useMemo(() => filterRows(data.supplier), [data.supplier, query]);
-
-  /* ------------------------------ actions --------------------------- */
+  const prospects = useMemo(
+    () => filterRows(data.prospect),
+    [data.prospect, query]
+  );
+  const suppliers = useMemo(
+    () => filterRows(data.supplier),
+    [data.supplier, query]
+  );
 
   const onOpen = async (id: string) => {
     setOpenId(id);
@@ -166,98 +688,137 @@ export default function ClientsPage() {
     await reload(t);
   };
 
-  /* -------------------------------- UI -------------------------------- */
-
   return (
-    <div className="px-6 py-6 space-y-5">
-      {/* header */}
+    <div className="p-4 md:p-6 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Clients (CRM)</h1>
+        <h1 className="text-xl font-semibold tracking-tight">Clients (CRM)</h1>
         <Button onClick={() => setShowNew(true)}>New Lead</Button>
       </div>
 
       {/* toolbar */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative">
+      <div className="flex flex-col md:flex-row md:items-center gap-3">
+        <div className="relative md:w-96">
+          <Search className="absolute left-2 top-2.5 w-4 h-4 text-muted-foreground" />
           <Input
-            placeholder="Filter by product/company..."
-            className="pl-9 w-[360px] max-w-[92vw]"
+            placeholder="Filter by product/company…"
+            className="pl-8"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
         </div>
 
         <div className="flex items-center gap-2">
           <select
-            className="h-10 rounded-md border border-input bg-background px-3 text-sm"
             value={view}
             onChange={(e) => setView(e.target.value as ViewMode)}
+            className="h-10 rounded-lg bg-transparent border border-white/15 px-3 text-sm"
           >
             <option value="tabs">Tabs</option>
             <option value="sections">Sections</option>
           </select>
 
+          {/* old-style tab buttons */}
           {view === "tabs" && (
-            <Tabs value={tab} onValueChange={(v) => setTab(v as OrgType)}>
-              <TabsList>
-                <TabsTrigger value="client">Clients</TabsTrigger>
-                <TabsTrigger value="prospect">Prospects</TabsTrigger>
-                <TabsTrigger value="supplier">Suppliers</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            <div className="inline-grid grid-cols-3 gap-2 ml-1">
+              <button
+                className={`px-3 py-2 rounded-lg text-sm border ${
+                  tab === "client"
+                    ? "bg-primary text-primary-foreground border-primary/30"
+                    : "bg-white/5 hover:bg-white/10 border-white/10"
+                }`}
+                onClick={() => setTab("client")}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <Users className="w-4 h-4" /> Clients
+                </span>
+              </button>
+              <button
+                className={`px-3 py-2 rounded-lg text-sm border ${
+                  tab === "prospect"
+                    ? "bg-primary text-primary-foreground border-primary/30"
+                    : "bg-white/5 hover:bg-white/10 border-white/10"
+                }`}
+                onClick={() => setTab("prospect")}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <UserRoundSearch className="w-4 h-4" /> Prospects
+                </span>
+              </button>
+              <button
+                className={`px-3 py-2 rounded-lg text-sm border ${
+                  tab === "supplier"
+                    ? "bg-primary text-primary-foreground border-primary/30"
+                    : "bg-white/5 hover:bg-white/10 border-white/10"
+                }`}
+                onClick={() => setTab("supplier")}
+              >
+                <span className="inline-flex items-center gap-2">
+                  <PackageSearch className="w-4 h-4" /> Suppliers
+                </span>
+              </button>
+            </div>
           )}
         </div>
       </div>
 
       {/* content */}
-      {err && <div className="text-sm text-red-500">{err}</div>}
-      {loading && <div className="text-sm text-gray-400">Loading…</div>}
+      {err && <div className="text-sm text-red-400">{err}</div>}
+      {loading && (
+        <div className="text-sm text-muted-foreground">Loading…</div>
+      )}
 
       {!loading && !err && (
         <>
           {view === "tabs" ? (
-            <div className="space-y-3">
-              <SectionList
-                title={tabTitle(tab)}
-                icon={tabIcon(tab)}
-                rows={tab === "client" ? clients : tab === "prospect" ? prospects : suppliers}
-                onOpen={onOpen}
-                onDelete={onDelete}
-              />
+            <div className="grid grid-cols-1 gap-3">
+              {(tab === "client" ? clients : tab === "prospect" ? prospects : suppliers).map(
+                (it) => (
+                  <Row
+                    key={it.id}
+                    item={it}
+                    onOpen={onOpen}
+                    onDelete={(id) => onDelete(id, it.org_type)}
+                  />
+                )
+              )}
+              {((tab === "client" ? clients : tab === "prospect" ? prospects : suppliers).length === 0) && (
+                <Card>
+                  <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                    No records
+                  </CardContent>
+                </Card>
+              )}
             </div>
           ) : (
-            <div className="space-y-6">
-              <SectionList
+            <div className="space-y-6 mt-2">
+              <GroupSection
                 title="Clients"
-                icon={<Users className="h-4 w-4" />}
-                rows={clients}
+                icon={<Users className="w-4 h-4" />}
+                items={clients}
                 onOpen={onOpen}
-                onDelete={onDelete}
-                type="client"
+                onDelete={(id) => onDelete(id, "client")}
               />
-              <SectionList
+              <Divider />
+              <GroupSection
                 title="Prospects"
-                icon={<Search className="h-4 w-4" />}
-                rows={prospects}
+                icon={<UserRoundSearch className="w-4 h-4" />}
+                items={prospects}
                 onOpen={onOpen}
-                onDelete={onDelete}
-                type="prospect"
+                onDelete={(id) => onDelete(id, "prospect")}
               />
-              <SectionList
+              <Divider />
+              <GroupSection
                 title="Suppliers"
-                icon={<Package className="h-4 w-4" />}
-                rows={suppliers}
+                icon={<PackageSearch className="w-4 h-4" />}
+                items={suppliers}
                 onOpen={onOpen}
-                onDelete={onDelete}
-                type="supplier"
+                onDelete={(id) => onDelete(id, "supplier")}
               />
             </div>
           )}
         </>
       )}
 
-      {/* New Lead modal */}
       {showNew && (
         <NewLeadModal
           onClose={() => setShowNew(false)}
@@ -268,7 +829,6 @@ export default function ClientsPage() {
         />
       )}
 
-      {/* Detail modal */}
       {openId && (
         <DetailModal
           loading={openLoading}
@@ -279,470 +839,6 @@ export default function ClientsPage() {
           }}
         />
       )}
-    </div>
-  );
-}
-
-/* =========================== Sections/Rows =========================== */
-
-function tabTitle(t: OrgType) {
-  if (t === "client") return "Clients";
-  if (t === "prospect") return "Prospects";
-  return "Suppliers";
-}
-function tabIcon(t: OrgType) {
-  if (t === "client") return <Users className="h-4 w-4" />;
-  if (t === "prospect") return <Search className="h-4 w-4" />;
-  return <Package className="h-4 w-4" />;
-}
-
-/** Маленький сірий бейдж у старому стилі */
-function Badge({ children }: { children: React.ReactNode }) {
-  return (
-    <span className="px-2 py-0.5 rounded-full bg-gray-800 text-gray-200 text-[11px] border border-gray-700">
-      {children}
-    </span>
-  );
-}
-
-function SectionList({
-  title,
-  icon,
-  rows,
-  onOpen,
-  onDelete,
-  type,
-}: {
-  title: string;
-  icon: JSX.Element;
-  rows: OrgListItem[];
-  onOpen: (id: string) => void;
-  onDelete: (id: string, t: OrgType) => void;
-  type?: OrgType;
-}) {
-  return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2 text-sm text-gray-300">
-        <div className="flex items-center gap-2">
-          {icon}
-          <span className="font-medium">{title}</span>
-        </div>
-        <span className="text-gray-500">({rows.length})</span>
-      </div>
-
-      {rows.length === 0 ? (
-        <Card className="border border-gray-700/50">
-          <CardContent className="py-8 text-center text-sm text-gray-500">
-            No records
-          </CardContent>
-        </Card>
-      ) : (
-        rows.map((it) => (
-          <Card
-            key={it.id}
-            className="border border-gray-700/50 hover:border-gray-500/60 transition"
-          >
-            <CardContent className="p-4">
-              <OrgRow item={it} onOpen={onOpen} onDelete={onDelete} />
-            </CardContent>
-          </Card>
-        ))
-      )}
-    </div>
-  );
-}
-
-/** Рядок організації у «старому» сіро-скляному стилі */
-function OrgRow({
-  item,
-  onOpen,
-  onDelete,
-}: {
-  item: OrgListItem;
-  onOpen: (id: string) => void;
-  onDelete: (id: string, t: OrgType) => void;
-}) {
-  return (
-    <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between">
-        {/* left */}
-        <div className="min-w-0">
-          <div className="font-medium truncate">{item.name}</div>
-          <div className="mt-1 flex items-center gap-2 text-xs text-gray-400">
-            <Badge>{item.org_type}</Badge>
-            <span>•</span>
-            <span>{item.country || "—"}</span>
-            <span>•</span>
-            <span>
-              Products:{" "}
-              <span className="text-gray-300">{item.products || "—"}</span>
-            </span>
-          </div>
-        </div>
-
-        {/* right */}
-        <div className="flex items-center gap-3">
-          {/* Website pill */}
-          <a
-            href={item.website || "#"}
-            target="_blank"
-            rel="noreferrer"
-            title={item.website || undefined}
-            className={`inline-flex items-center gap-1 text-xs px-2 h-7 rounded-md border
-              ${
-                item.website
-                  ? "bg-slate-800/60 border-slate-700 text-slate-200 hover:bg-slate-700/60"
-                  : "bg-slate-900/40 border-slate-800 text-slate-600 pointer-events-none"
-              }`}
-          >
-            <Globe className="h-4 w-4" />
-            Website
-            <ExternalLink className="h-3 w-3" />
-          </a>
-
-          {/* Deal preview */}
-          <div className="hidden sm:flex items-center gap-1 text-xs text-gray-400">
-            <DollarSign className="h-4 w-4" /> Deal value{" "}
-            <span className="text-gray-300">—</span>
-          </div>
-
-          {/* Last contact */}
-          <div className="hidden sm:flex items-center gap-1 text-xs text-gray-400">
-            <Clock className="h-4 w-4" /> Last contact{" "}
-            <span className="text-gray-300">
-              {formatDate(item.last_contact_at) || "—"}
-            </span>
-          </div>
-
-          {/* Actions */}
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={() => onOpen(item.id)}>
-              Open
-            </Button>
-            <Button
-              variant="destructive"
-              size="sm"
-              onClick={() => onDelete(item.id, item.org_type)}
-            >
-              Delete
-            </Button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ============================== New Lead ============================= */
-
-function NewLeadModal({
-  onClose,
-  onCreated,
-}: {
-  onClose: () => void;
-  onCreated: () => void;
-}) {
-  const [name, setName] = useState("");
-  const [type, setType] = useState<OrgType>("prospect");
-  const [website, setWebsite] = useState("");
-  const [country, setCountry] = useState("");
-  type Item = {
-    product: string;
-    brand?: string;
-    quantity?: number;
-    unit?: string;
-    unit_price?: number;
-  };
-  const [items, setItems] = useState<Item[]>([]);
-
-  const addItem = () => setItems((p) => [...p, { product: "" }]);
-  const updateItem = (i: number, patch: Partial<Item>) =>
-    setItems((p) => p.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
-  const removeItem = (i: number) =>
-    setItems((p) => p.filter((_, idx) => idx !== i));
-
-  const [saving, setSaving] = useState(false);
-
-  const create = async () => {
-    if (!name.trim()) {
-      alert("Name is required");
-      return;
-    }
-    try {
-      setSaving(true);
-      // 1) create org
-      const r = await fetch("/api/orgs", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          name: name.trim(),
-          org_type: type,
-          website: website.trim() || null,
-          country: country.trim() || null,
-        }),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        alert(j?.error || "Create org error");
-        return;
-      }
-
-      // 2) optional inquiry
-      if (items.length) {
-        const r2 = await fetch("/api/inquiries", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            org_id: j.id,
-            summary: "Manual inquiry",
-            items,
-          }),
-        });
-        const j2 = await r2.json().catch(() => ({}));
-        if (!r2.ok) {
-          alert(j2?.error || "Create inquiry error");
-          return;
-        }
-      }
-
-      onCreated();
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="absolute left-1/2 top-16 -translate-x-1/2 w-[820px] max-w-[92vw]">
-        <Card className="border border-gray-700/50">
-          <CardContent className="p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-medium">New Lead</div>
-              <Button variant="ghost" onClick={onClose}>
-                Close
-              </Button>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-2">
-                <div className="text-xs text-gray-400">Name *</div>
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Company or contact name"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-xs text-gray-400">Type</div>
-                <div className="flex gap-2">
-                  {(["prospect", "client", "supplier"] as OrgType[]).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => setType(t)}
-                      className={`px-3 py-2 rounded-md text-sm ${
-                        type === t
-                          ? "bg-blue-600 text-white"
-                          : "bg-gray-800 text-gray-300 hover:bg-gray-700"
-                      }`}
-                    >
-                      {t[0].toUpperCase() + t.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-xs text-gray-400">Website</div>
-                <Input
-                  value={website}
-                  onChange={(e) => setWebsite(e.target.value)}
-                  placeholder="https://…"
-                />
-              </div>
-
-              <div className="space-y-2">
-                <div className="text-xs text-gray-400">Country</div>
-                <Input
-                  value={country}
-                  onChange={(e) => setCountry(e.target.value)}
-                  placeholder="UA / AE / …"
-                />
-              </div>
-            </div>
-
-            <div className="pt-2">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-sm font-medium">Inquiry items (optional)</div>
-                <Button variant="outline" onClick={addItem}>
-                  Add item
-                </Button>
-              </div>
-
-              {items.length === 0 ? (
-                <div className="text-xs text-gray-500">No items yet.</div>
-              ) : (
-                <div className="space-y-2">
-                  {items.map((it, i) => (
-                    <div key={i} className="grid grid-cols-12 gap-2">
-                      <div className="col-span-4">
-                        <Input
-                          placeholder="Product *"
-                          value={it.product}
-                          onChange={(e) =>
-                            updateItem(i, { product: e.target.value })
-                          }
-                        />
-                      </div>
-                      <div className="col-span-3">
-                        <Input
-                          placeholder="Brand"
-                          value={it.brand || ""}
-                          onChange={(e) =>
-                            updateItem(i, { brand: e.target.value })
-                          }
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <Input
-                          placeholder="Qty"
-                          type="number"
-                          value={it.quantity ?? ""}
-                          onChange={(e) =>
-                            updateItem(i, {
-                              quantity: Number(e.target.value) || undefined,
-                            })
-                          }
-                        />
-                      </div>
-                      <div className="col-span-2">
-                        <Input
-                          placeholder="Unit"
-                          value={it.unit || ""}
-                          onChange={(e) =>
-                            updateItem(i, { unit: e.target.value })
-                          }
-                        />
-                      </div>
-                      <div className="col-span-1 flex items-center justify-end">
-                        <Button
-                          variant="destructive"
-                          onClick={() => removeItem(i)}
-                        >
-                          ×
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            <div className="pt-3 flex justify-end gap-2">
-              <Button variant="outline" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button onClick={create} disabled={saving}>
-                {saving ? "Creating…" : "Create"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-    </div>
-  );
-}
-
-/* ============================== Details ============================== */
-
-function DetailModal({
-  loading,
-  detail,
-  onClose,
-}: {
-  loading: boolean;
-  detail: Detail | null;
-  onClose: () => void;
-}) {
-  return (
-    <div className="fixed inset-0 z-50">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="absolute left-1/2 top-16 -translate-x-1/2 w-[920px] max-w-[94vw]">
-        <Card className="border border-gray-700/50">
-          <CardContent className="p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="text-lg font-medium">Details</div>
-              <Button variant="ghost" onClick={onClose}>
-                Close
-              </Button>
-            </div>
-
-            {loading && <div className="text-sm text-gray-400">Loading…</div>}
-
-            {!loading && detail && (
-              <div className="space-y-4">
-                <div className="text-base font-semibold">
-                  {detail.org.name}
-                </div>
-                <div className="text-xs text-gray-400">
-                  {detail.org.org_type} • {detail.org.country || "—"} •{" "}
-                  {detail.org.website || "—"}
-                </div>
-
-                <div className="space-y-3">
-                  {detail.inquiries.length === 0 ? (
-                    <div className="text-sm text-gray-500">No inquiries yet.</div>
-                  ) : (
-                    detail.inquiries.map((inq) => (
-                      <div
-                        key={inq.id}
-                        className="rounded border border-gray-700/50 p-3"
-                      >
-                        <div className="text-sm font-medium">
-                          Inquiry • {new Date(inq.created_at).toLocaleString()}
-                        </div>
-                        <div className="mt-1 text-xs text-gray-400">
-                          {inq.summary || "—"}
-                        </div>
-                        <div className="mt-2 space-y-1">
-                          {(detail.items[inq.id] ?? []).map((it) => (
-                            <div key={it.id} className="text-sm">
-                              <span className="text-gray-400">Product:</span>{" "}
-                              {it.product || "—"}
-                              {it.brand ? (
-                                <>
-                                  {" "}
-                                  <span className="text-gray-400">• Brand:</span>{" "}
-                                  {it.brand}
-                                </>
-                              ) : null}
-                              {typeof it.quantity === "number" ? (
-                                <>
-                                  {" "}
-                                  <span className="text-gray-400">• Qty:</span>{" "}
-                                  {it.quantity} {it.unit || ""}
-                                </>
-                              ) : null}
-                              {typeof it.unit_price === "number" ? (
-                                <>
-                                  {" "}
-                                  <span className="text-gray-400">• Price:</span>{" "}
-                                  {it.unit_price}
-                                </>
-                              ) : null}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
     </div>
   );
 }

@@ -1,105 +1,170 @@
+// app/api/kanban/tasks/[id]/route.ts
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
+export const fetchCache = "force-no-store";
 
-import { NextRequest } from "next/server";
-import { getSql, toPgTextArray } from "@/lib/db";
+import { getSql } from "@/lib/db";
 
-function statusFromKey(key: string): "Todo" | "In Progress" | "Done" | "Blocked" {
-  const k = (key || "").toLowerCase();
-  if (k === "inprogress") return "In Progress";
-  if (k === "done") return "Done";
-  if (k === "blocked") return "Blocked";
-  return "Todo";
+type Params = { params: { id: string } };
+
+// ---- helpers ----
+function statusByColKey(key: string | null | undefined): string {
+  switch (key) {
+    case "inprogress": return "In Progress";
+    case "done": return "Done";
+    case "blocked": return "Blocked";
+    default: return "Todo";
+  }
 }
 
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  const sql = getSql();
+// ---- GET: деталі таски + коменти ----
+export async function GET(_req: Request, { params }: Params) {
   const id = Number(params.id);
-  if (!id) return Response.json({ error: "Bad id" }, { status: 400 });
+  const sql = getSql();
 
-  const taskRows = await sql/* sql */`
+  const tasks = await sql/* sql */`
     SELECT
       id,
-      board_id        AS "boardId",
-      column_id       AS "columnId",
-      title, description, owner, priority, status,
-      assignees, tags, progress,
-      start_at        AS "startAt",
-      due_at          AS "dueAt",
-      position, archived,
-      extract(epoch from created_at)*1000 AS "createdAt",
-      extract(epoch from updated_at)*1000 AS "updatedAt"
+      board_id  AS "boardId",
+      column_id AS "columnId",
+      title,
+      description,
+      owner,
+      priority,
+      status,
+      assignees,
+      tags,
+      progress,
+      CASE WHEN start_at IS NULL THEN NULL
+           ELSE to_char(start_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      END AS "startAt",
+      CASE WHEN due_at IS NULL THEN NULL
+           ELSE to_char(due_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      END AS "dueAt",
+      position,
+      archived,
+      to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+      to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "updatedAt"
     FROM kanban_tasks
     WHERE id=${id}
     LIMIT 1;
   `;
-  if (!taskRows.length) return Response.json({ error: "Not found" }, { status: 404 });
+  if (!tasks.length) {
+    return new Response(JSON.stringify({ error: "Task not found" }), { status: 404 });
+  }
 
   const comments = await sql/* sql */`
     SELECT
-      id, author, body,
-      extract(epoch from created_at)*1000 AS "createdAt"
+      id,
+      author,
+      body,
+      to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt"
     FROM kanban_comments
     WHERE task_id=${id}
-    ORDER BY created_at ASC;
+    ORDER BY created_at DESC;
   `;
 
-  return Response.json({ task: taskRows[0], comments });
+  return Response.json({ task: tasks[0], comments });
 }
 
-export async function PATCH(req: NextRequest, { params }: { params: { id: string } }) {
+// ---- PATCH: оновлення полів / переміщення колонки ----
+export async function PATCH(req: Request, { params }: Params) {
+  const id = Number(params.id);
   const sql = getSql();
-  const taskId = Number(params.id);
-  if (!taskId) return Response.json({ error: "Bad id" }, { status: 400 });
 
-  const body = await req.json().catch(() => ({}));
+  let payload: any = {};
+  try {
+    payload = await req.json();
+  } catch {
+    // порожнє тіло — не критично
+  }
 
-  const cur = await sql/* sql */`SELECT board_id FROM kanban_tasks WHERE id=${taskId} LIMIT 1;`;
-  if (!cur.length) return Response.json({ error: "Not found" }, { status: 404 });
-  const boardId = cur[0].board_id;
+  const { moveToColumnKey, owner, priority, dueAt } = payload ?? {};
 
-  if (body.moveToColumnKey) {
-    const cols = await sql/* sql */`SELECT id, key FROM kanban_columns WHERE board_id=${boardId};`;
-    const col = cols.find((c: any) => c.key === String(body.moveToColumnKey).toLowerCase());
-    if (!col) return Response.json({ error: "Bad column" }, { status: 400 });
-
-    const nextPos = await sql/* sql */`
-      SELECT COALESCE(MAX(position)+1, 0) AS pos
-      FROM kanban_tasks
-      WHERE board_id=${boardId} AND column_id=${col.id};
+  // 1) Переміщення між колонками (за key)
+  if (moveToColumnKey) {
+    const columns = await sql/* sql */`
+      SELECT id FROM kanban_columns WHERE key=${moveToColumnKey} LIMIT 1;
     `;
-    const position = Number(nextPos?.[0]?.pos ?? 0);
+    if (!columns.length) {
+      return new Response(JSON.stringify({ error: "Column not found" }), { status: 400 });
+    }
+    const colId = columns[0].id;
+    const newStatus = statusByColKey(moveToColumnKey);
+
     await sql/* sql */`
       UPDATE kanban_tasks
-      SET column_id=${col.id}, status=${statusFromKey(col.key)}, position=${position}, updated_at=NOW()
-      WHERE id=${taskId};
+      SET column_id=${colId},
+          status=${newStatus},
+          updated_at=NOW()
+      WHERE id=${id};
     `;
   }
 
-  const patch: string[] = [];
-  if (typeof body.title === "string")        patch.push(`title=${sql.escape(body.title)}`);
-  if (typeof body.description === "string")  patch.push(`description=${sql.escape(body.description)}`);
-  if (typeof body.owner === "string")        patch.push(`owner=${sql.escape(body.owner)}`);
-  if (["Low","Normal","High","Urgent"].includes(body.priority)) patch.push(`priority=${sql.escape(body.priority)}`);
-  if (Number.isFinite(Number(body.progress))) patch.push(`progress=${Math.max(0,Math.min(100,Number(body.progress)))}`);
-  if (Array.isArray(body.tags))       patch.push(`tags=${sql.raw(`${toPgTextArray(body.tags)}::text[]`)}`);
-  if (Array.isArray(body.assignees))  patch.push(`assignees=${sql.raw(`${toPgTextArray(body.assignees)}::text[]`)}`);
-  if (body.startAt)                   patch.push(`start_at=${sql.escape(new Date(body.startAt))}`);
-  if (body.dueAt)                     patch.push(`due_at=${sql.escape(new Date(body.dueAt))}`);
-
-  if (patch.length) {
-    await sql/* sql */`UPDATE kanban_tasks SET ${sql.raw(patch.join(","))}, updated_at=NOW() WHERE id=${taskId};`;
+  // 2) Окремі оновлення: owner / priority / due_at (будь-яка комбінація)
+  //    Робимо окремими апдейтами — просто і надійно.
+  if (owner !== undefined) {
+    await sql/* sql */`
+      UPDATE kanban_tasks
+      SET owner=${owner}, updated_at=NOW()
+      WHERE id=${id};
+    `;
+  }
+  if (priority !== undefined) {
+    await sql/* sql */`
+      UPDATE kanban_tasks
+      SET priority=${priority}, updated_at=NOW()
+      WHERE id=${id};
+    `;
+  }
+  if (dueAt !== undefined) {
+    // ISO строка або null — Postgres з'їсть
+    await sql/* sql */`
+      UPDATE kanban_tasks
+      SET due_at=${dueAt}, updated_at=NOW()
+      WHERE id=${id};
+    `;
   }
 
-  return Response.json({ ok: true });
+  // 3) Повертаємо оновлену таску (в ISO-датах)
+  const tasks = await sql/* sql */`
+    SELECT
+      id,
+      board_id  AS "boardId",
+      column_id AS "columnId",
+      title,
+      description,
+      owner,
+      priority,
+      status,
+      assignees,
+      tags,
+      progress,
+      CASE WHEN start_at IS NULL THEN NULL
+           ELSE to_char(start_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      END AS "startAt",
+      CASE WHEN due_at IS NULL THEN NULL
+           ELSE to_char(due_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+      END AS "dueAt",
+      position,
+      archived,
+      to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "createdAt",
+      to_char(updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS "updatedAt"
+    FROM kanban_tasks
+    WHERE id=${id}
+    LIMIT 1;
+  `;
+  return Response.json({ task: tasks[0] });
 }
 
-export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
+// ---- DELETE: видалення таски ----
+export async function DELETE(_req: Request, { params }: Params) {
+  const id = Number(params.id);
   const sql = getSql();
-  const taskId = Number(params.id);
-  if (!taskId) return Response.json({ error: "Bad id" }, { status: 400 });
 
-  await sql/* sql */`DELETE FROM kanban_tasks WHERE id=${taskId};`;
+  await sql/* sql */`DELETE FROM kanban_comments WHERE task_id=${id};`;
+  await sql/* sql */`DELETE FROM kanban_tasks WHERE id=${id};`;
+
   return Response.json({ ok: true });
 }

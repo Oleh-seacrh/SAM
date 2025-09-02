@@ -13,7 +13,6 @@ import {
   ExternalLink,
   X,
 } from "lucide-react";
-import { useState } from "react";
 import { useRouter } from "next/navigation";
 import OpenOrganizationModal from "@/components/modals/OpenOrganizationModal";
 
@@ -241,7 +240,6 @@ function Row({
           </div>
         </div>
       </CardHeader>
-
 
       <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
         <div>
@@ -872,4 +870,3 @@ export default function ClientsPage() {
         />
       )}
       */}
-

@@ -13,6 +13,9 @@ import {
   ExternalLink,
   X,
 } from "lucide-react";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import OpenOrganizationModal from "@/components/modals/OpenOrganizationModal";
 
 /* ===================== Types ===================== */
 
@@ -220,14 +223,14 @@ function Row({
           <div className="flex items-center gap-3 shrink-0">
             {item.domain ? (
               <a
-                href={item.domain}
+                href={`https://${item.domain}`}
                 target="_blank"
-                rel="noreferrer"
+                rel="noopener noreferrer"
                 className="text-xs text-primary hover:underline inline-flex items-center gap-1"
-                title={item.website || undefined}
+                title={item.domain}
               >
                 <Globe className="w-4 h-4" />
-                Website
+                {item.domain}
                 <ExternalLink className="w-3 h-3" />
               </a>
             ) : (
@@ -238,6 +241,7 @@ function Row({
           </div>
         </div>
       </CardHeader>
+
 
       <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
         <div>
@@ -332,7 +336,7 @@ function NewLeadModal({
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState<OrgType>("prospect");
-  const [website, setWebsite] = useState("");
+  const [domain, setDomain] = useState("");
   const [country, setCountry] = useState("");
 
   type Item = {
@@ -364,7 +368,7 @@ function NewLeadModal({
         body: JSON.stringify({
           name: name.trim(),
           org_type: type,
-          website: website.trim() || null,
+          domain: domain.trim() || null,
           country: country.trim() || null,
         }),
       });
@@ -427,10 +431,10 @@ function NewLeadModal({
           </div>
         </div>
         <div>
-          <div className="text-xs text-muted-foreground mb-1">Website</div>
+          <div className="text-xs text-muted-foreground mb-1">Domain</div>
           <Input
-            value={website}
-            onChange={(e) => setWebsite(e.target.value)}
+            value={domain}
+            onChange={(e) => setDomain(e.target.value)}
             placeholder="https://…"
           />
         </div>
@@ -543,7 +547,7 @@ function DetailModal({
           <div className="text-base font-semibold">{detail.org.name}</div>
           <div className="text-xs text-muted-foreground">
             {detail.org.org_type} • {detail.org.country || "—"} •{" "}
-            {detail.org.website || "—"}
+            {detail.org.domain || "—"}
           </div>
 
           <Divider />
@@ -596,6 +600,10 @@ function DetailModal({
 /* ===================== Page ===================== */
 
 export default function ClientsPage() {
+  const router = useRouter();
+  const [openOrg, setOpenOrg] = useState(false);
+  const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
+  
   const [view, setView] = useState<ViewMode>("tabs");
   const [tab, setTab] = useState<OrgType>("client");
   const [query, setQuery] = useState("");
@@ -646,7 +654,7 @@ export default function ClientsPage() {
     const q = query.trim().toLowerCase();
     if (!q) return rows;
     return rows.filter((r) => {
-      const hay = `${r.name} ${r.country ?? ""} ${r.website ?? ""} ${
+      const hay = `${r.name} ${r.country ?? ""} ${r.domain ?? ""} ${
         r.products ?? ""
       } ${r.brands ?? ""}`.toLowerCase();
       return hay.includes(q);
@@ -776,7 +784,10 @@ export default function ClientsPage() {
                   <Row
                     key={it.id}
                     item={it}
-                    onOpen={onOpen}
+                    onOpen={(id) => {
+                      setSelectedOrgId(id);
+                      setOpenOrg(true);
+                    }}
                     onDelete={(id) => onDelete(id, it.org_type)}
                   />
                 )
@@ -795,7 +806,10 @@ export default function ClientsPage() {
                 title="Clients"
                 icon={<Users className="w-4 h-4" />}
                 items={clients}
-                onOpen={onOpen}
+                onOpen={(id) => {
+                  setSelectedOrgId(id);
+                  setOpenOrg(true);
+                }}
                 onDelete={(id) => onDelete(id, "client")}
               />
               <Divider />
@@ -803,7 +817,10 @@ export default function ClientsPage() {
                 title="Prospects"
                 icon={<UserRoundSearch className="w-4 h-4" />}
                 items={prospects}
-                onOpen={onOpen}
+                onOpen={(id) => {
+                  setSelectedOrgId(id);
+                  setOpenOrg(true);
+                }}
                 onDelete={(id) => onDelete(id, "prospect")}
               />
               <Divider />
@@ -811,7 +828,10 @@ export default function ClientsPage() {
                 title="Suppliers"
                 icon={<PackageSearch className="w-4 h-4" />}
                 items={suppliers}
-                onOpen={onOpen}
+                onOpen={(id) => {
+                  setSelectedOrgId(id);
+                  setOpenOrg(true);
+                }}
                 onDelete={(id) => onDelete(id, "supplier")}
               />
             </div>
@@ -828,7 +848,19 @@ export default function ClientsPage() {
           }}
         />
       )}
+      
+      {selectedOrgId && (
+        <OpenOrganizationModal
+          open={openOrg}
+          onOpenChange={(v) => {
+            setOpenOrg(v);
+            if (!v) router.refresh(); // після OK оновлюємо список
+          }}
+          orgId={selectedOrgId}
+        />
+      )}
 
+      {/*
       {openId && (
         <DetailModal
           loading={openLoading}
@@ -839,6 +871,5 @@ export default function ClientsPage() {
           }}
         />
       )}
-    </div>
-  );
-}
+      */}
+

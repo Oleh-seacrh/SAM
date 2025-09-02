@@ -20,7 +20,7 @@ export async function GET(
     const id = params.id;
 
     const org = (await sql/*sql*/`
-      select id, name, org_type, website, country, last_contact_at, created_at
+      select id, name, org_type, domain, country, last_contact_at, created_at
       from organizations
       where id = ${id}
       limit 1;

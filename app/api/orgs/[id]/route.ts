@@ -19,28 +19,37 @@ export async function GET(
     const sql = getSql();
     const id = params.id;
 
-    const org = (await sql/*sql*/`
-      select id, name, org_type, domain, country, last_contact_at, created_at
-      from organizations
-      where id = ${id}
-      limit 1;
-    ` as any)[0];
+    const org = (
+      (await sql/*sql*/`
+        select
+          id,
+          name,
+          org_type,
+          domain,
+          country,
+          last_contact_at,
+          created_at
+        from organizations
+        where id = ${id}
+        limit 1;
+      `) as any
+    )[0];
 
     if (!org) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const inquiries = await sql/*sql*/`
+    const inquiries = (await sql/*sql*/`
       select id, summary, created_at
       from inquiries
       where org_id = ${id}
       order by created_at desc;
-    ` as any;
+    `) as any;
 
-    let items: Record<string, any[]> = {};
+    const items: Record<string, any[]> = {};
     if (inquiries.length) {
       const ids = inquiries.map((r: any) => r.id);
-      const rows = await sql/*sql*/`
+      const rows = (await sql/*sql*/`
         select
           inquiry_id,
           id,
@@ -52,7 +61,7 @@ export async function GET(
           created_at
         from inquiry_items
         where inquiry_id = any(${ids});
-      ` as any;
+      `) as any;
 
       for (const r of rows) {
         (items[r.inquiry_id] ??= []).push(r);
@@ -70,8 +79,7 @@ export async function GET(
 
 /**
  * DELETE /api/orgs/:id
- * Видаляє організацію (каскад залежить від схеми; якщо FK без cascade,
- * і є пов’язані записи, Postgres кине помилку).
+ * Видаляє організацію
  */
 export async function DELETE(
   _req: NextRequest,

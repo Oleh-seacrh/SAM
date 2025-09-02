@@ -270,7 +270,7 @@ function Row({
             </span>
           </div>
           <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={() => { setSelectedOrgId(item.id); setOpenOrg(true); }}>
+            <Button size="sm" variant="secondary" onClick={() => { onOpen(item.id); }}>
               Open
             </Button>
             <Button size="sm" variant="outline" onClick={() => onDelete(item.id)}>

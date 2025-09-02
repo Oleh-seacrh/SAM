@@ -270,7 +270,7 @@ function Row({
             </span>
           </div>
           <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={() => onOpen(item.id)}>
+            <Button size="sm" variant="secondary" onClick={() => { setSelectedOrgId(item.id); setOpenOrg(true); }}>
               Open
             </Button>
             <Button size="sm" variant="outline" onClick={() => onDelete(item.id)}>
@@ -601,7 +601,7 @@ export default function ClientsPage() {
   const router = useRouter();
   const [openOrg, setOpenOrg] = useState(false);
   const [selectedOrgId, setSelectedOrgId] = useState<string | null>(null);
-  
+
   const [view, setView] = useState<ViewMode>("tabs");
   const [tab, setTab] = useState<OrgType>("client");
   const [query, setQuery] = useState("");
@@ -782,10 +782,7 @@ export default function ClientsPage() {
                   <Row
                     key={it.id}
                     item={it}
-                    onOpen={(id) => {
-                      setSelectedOrgId(id);
-                      setOpenOrg(true);
-                    }}
+                    onOpen={(id) => { setSelectedOrgId(id); setOpenOrg(true); }}
                     onDelete={(id) => onDelete(id, it.org_type)}
                   />
                 )
@@ -804,10 +801,7 @@ export default function ClientsPage() {
                 title="Clients"
                 icon={<Users className="w-4 h-4" />}
                 items={clients}
-                onOpen={(id) => {
-                  setSelectedOrgId(id);
-                  setOpenOrg(true);
-                }}
+                onOpen={(id) => { setSelectedOrgId(id); setOpenOrg(true); }}
                 onDelete={(id) => onDelete(id, "client")}
               />
               <Divider />
@@ -815,10 +809,7 @@ export default function ClientsPage() {
                 title="Prospects"
                 icon={<UserRoundSearch className="w-4 h-4" />}
                 items={prospects}
-                onOpen={(id) => {
-                  setSelectedOrgId(id);
-                  setOpenOrg(true);
-                }}
+                onOpen={(id) => { setSelectedOrgId(id); setOpenOrg(true); }}
                 onDelete={(id) => onDelete(id, "prospect")}
               />
               <Divider />
@@ -826,10 +817,7 @@ export default function ClientsPage() {
                 title="Suppliers"
                 icon={<PackageSearch className="w-4 h-4" />}
                 items={suppliers}
-                onOpen={(id) => {
-                  setSelectedOrgId(id);
-                  setOpenOrg(true);
-                }}
+                onOpen={(id) => { setSelectedOrgId(id); setOpenOrg(true); }}
                 onDelete={(id) => onDelete(id, "supplier")}
               />
             </div>
@@ -846,27 +834,18 @@ export default function ClientsPage() {
           }}
         />
       )}
-      
+
+      {/* Open modal */}
       {selectedOrgId && (
         <OpenOrganizationModal
           open={openOrg}
           onOpenChange={(v) => {
             setOpenOrg(v);
-            if (!v) router.refresh(); // після OK оновлюємо список
+            if (!v) router.refresh();
           }}
           orgId={selectedOrgId}
         />
       )}
-
-      {/*
-      {openId && (
-        <DetailModal
-          loading={openLoading}
-          detail={detail}
-          onClose={() => {
-            setOpenId(null);
-            setDetail(null);
-          }}
-        />
-      )}
-      */}
+    </div>
+  );
+}

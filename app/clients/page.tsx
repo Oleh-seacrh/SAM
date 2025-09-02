@@ -22,7 +22,7 @@ type OrgListItem = {
   id: string;
   name: string;
   org_type: OrgType;
-  website?: string | null;
+  domain?: string | null;
   country?: string | null;
   last_contact_at?: string | null;
   created_at: string;
@@ -218,9 +218,9 @@ function Row({
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
-            {item.website ? (
+            {item.domain ? (
               <a
-                href={item.website}
+                href={item.domain}
                 target="_blank"
                 rel="noreferrer"
                 className="text-xs text-primary hover:underline inline-flex items-center gap-1"

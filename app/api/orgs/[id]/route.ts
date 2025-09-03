@@ -1,12 +1,11 @@
 // app/api/orgs/[id]/route.ts
-// Next.js Route Handlers: GET / PUT / DELETE / OPTIONS для організацій
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
-// --------- helpers ----------
+/* ------------ helpers ------------ */
 function normalizeDomain(raw?: string | null) {
   if (!raw) return null;
   try {
@@ -19,11 +18,11 @@ function normalizeDomain(raw?: string | null) {
   }
 }
 
-// =====================================
-// GET /api/orgs/:id
-// Повертає { org, inquiries, items }
-// items: map { inquiry_id -> inquiry_items[] }
-// =====================================
+/* =====================================
+   GET /api/orgs/:id
+   Повертає { org, inquiries, items }
+   items: map { inquiry_id -> inquiry_items[] }
+===================================== */
 export async function GET(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -65,7 +64,7 @@ export async function GET(
       inquiries = [];
     }
 
-    // 3) позиції — через JOIN (без IN/ANY/масивів)
+    // 3) позиції заявок (JOIN без IN/ANY)
     const items: Record<string, any[]> = {};
     if (inquiries.length) {
       try {
@@ -103,10 +102,9 @@ export async function GET(
   }
 }
 
-// =====================================
-// PUT /api/orgs/:id
-// Оновлює організацію; повертає оновлений рядок
-// =====================================
+/* =====================================
+   PUT /api/orgs/:id  — оновлення організації
+===================================== */
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const sql = getSql();
   const id = params?.id;
@@ -151,12 +149,9 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
         brand           = ${body.brand ?? null},
         product         = ${body.product ?? null},
         quantity        = ${body.quantity ?? null},
-        deal_value_usd  = ${dealValue},
-        last_contact_at = ${lastContactISO},
-        tags            = CASE
-                            WHEN ${tagsCsv} IS NULL OR ${tagsCsv} = '' THEN NULL
-                            ELSE string_to_array(${tagsCsv}, ',')
-                          END,
+        deal_value_usd  = ${dealValue}::numeric,
+        last_contact_at = ${lastContactISO}::timestamptz,
+        tags            = string_to_array(NULLIF(${tagsCsv}::text, ''), ','),
         updated_at      = now()
       WHERE id = ${id}
       RETURNING *;
@@ -176,9 +171,9 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   }
 }
 
-// =====================================
-// DELETE /api/orgs/:id
-// =====================================
+/* =====================================
+   DELETE /api/orgs/:id
+===================================== */
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: { id: string } }
@@ -199,9 +194,9 @@ export async function DELETE(
   }
 }
 
-// =====================================
-// OPTIONS /api/orgs/:id  (щоб preflight не ламався)
-// =====================================
+/* =====================================
+   OPTIONS /api/orgs/:id  (на випадок preflight)
+===================================== */
 export function OPTIONS() {
   return new NextResponse(null, {
     status: 204,

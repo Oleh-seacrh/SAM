@@ -60,21 +60,21 @@ export async function GET(
 
     const items: Record<string, any[]> = {};
     if (inquiries.length) {
-      const ids = inquiries.map((r: any) => r.id);
-      // ГАРАНТОВАНО ПРАВИЛЬНО: sql(ids) для IN (...)
-      const rows = await sqlInstance/*sql*/`
+      const rows = (await sqlInstance/*sql*/`
         select
-          inquiry_id,
-          id,
-          brand,
-          product,
-          quantity,
-          unit,
-          unit_price,
-          created_at
-        from inquiry_items
-        where inquiry_id in ${sql(ids)}
-      ` as any;
+          ii.inquiry_id,
+          ii.id,
+          ii.brand,
+          ii.product,
+          ii.quantity,
+          ii.unit,
+          ii.unit_price,
+          ii.created_at
+        from public.inquiry_items ii
+        join public.inquiries iq on iq.id = ii.inquiry_id
+        where iq.org_id = ${id}
+        order by ii.created_at desc
+      `) as any;
 
       for (const r of rows) {
         (items[r.inquiry_id] ??= []).push(r);

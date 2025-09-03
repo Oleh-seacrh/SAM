@@ -1,7 +1,12 @@
-// app/api/orgs/[id]/route.ts  — тільки PUT
-import { NextResponse } from "next/server";
+// app/api/orgs/[id]/route.ts
+// Next.js Route Handlers: GET / PUT / DELETE / OPTIONS для організацій
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
+// --------- helpers ----------
 function normalizeDomain(raw?: string | null) {
   if (!raw) return null;
   try {
@@ -14,6 +19,94 @@ function normalizeDomain(raw?: string | null) {
   }
 }
 
+// =====================================
+// GET /api/orgs/:id
+// Повертає { org, inquiries, items }
+// items: map { inquiry_id -> inquiry_items[] }
+// =====================================
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const sql = getSql();
+    const id = params?.id;
+    if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+
+    // 1) організація
+    const orgRows = (await sql/*sql*/`
+      select
+        id,
+        name,
+        org_type,
+        domain,
+        country,
+        last_contact_at,
+        created_at
+      from public.organizations
+      where id = ${id}
+      limit 1;
+    `) as any[];
+
+    const org = orgRows?.[0];
+    if (!org) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    // 2) заявки
+    let inquiries: any[] = [];
+    try {
+      inquiries = (await sql/*sql*/`
+        select id, summary, created_at
+        from public.inquiries
+        where org_id = ${id}
+        order by created_at desc;
+      `) as any[];
+    } catch (e) {
+      console.error("GET inquiries failed:", e);
+      inquiries = [];
+    }
+
+    // 3) позиції — через JOIN (без IN/ANY/масивів)
+    const items: Record<string, any[]> = {};
+    if (inquiries.length) {
+      try {
+        const rows = (await sql/*sql*/`
+          select
+            ii.inquiry_id,
+            ii.id,
+            ii.brand,
+            ii.product,
+            ii.quantity,
+            ii.unit,
+            ii.unit_price,
+            ii.created_at
+          from public.inquiry_items ii
+          join public.inquiries iq on iq.id = ii.inquiry_id
+          where iq.org_id = ${id}
+          order by ii.created_at desc;
+        `) as any[];
+
+        for (const r of rows) {
+          (items[r.inquiry_id] ??= []).push(r);
+        }
+      } catch (e) {
+        console.error("GET inquiry_items failed:", e);
+      }
+    }
+
+    return NextResponse.json({ org, inquiries, items }, { status: 200 });
+  } catch (e: any) {
+    console.error("GET /api/orgs/[id] failed:", e);
+    return NextResponse.json(
+      { error: e?.message ?? "Server error" },
+      { status: 500 }
+    );
+  }
+}
+
+// =====================================
+// PUT /api/orgs/:id
+// Оновлює організацію; повертає оновлений рядок
+// =====================================
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const sql = getSql();
   const id = params?.id;
@@ -74,7 +167,6 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     }
     return NextResponse.json(rows[0], { status: 200 });
   } catch (e: any) {
-    // Дуже важливо для дебагу: повертаємо текст помилки
     const msg = e?.detail || e?.message || String(e);
     console.error("PUT /api/orgs/[id] failed:", e);
     return new NextResponse(JSON.stringify({ error: msg }), {
@@ -82,4 +174,37 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       headers: { "content-type": "application/json" },
     });
   }
+}
+
+// =====================================
+// DELETE /api/orgs/:id
+// =====================================
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const sql = getSql();
+    await sql/*sql*/`
+      delete from public.organizations
+      where id = ${params.id};
+    `;
+    return NextResponse.json({ ok: true }, { status: 200 });
+  } catch (e: any) {
+    console.error("DELETE /api/orgs/[id] failed:", e);
+    return NextResponse.json(
+      { error: e?.message ?? "Server error" },
+      { status: 500 }
+    );
+  }
+}
+
+// =====================================
+// OPTIONS /api/orgs/:id  (щоб preflight не ламався)
+// =====================================
+export function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: { Allow: "GET,PUT,DELETE,OPTIONS" },
+  });
 }

@@ -207,13 +207,13 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId }: Pro
       aria-labelledby="org-modal-title"
     >
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-[color:var(--overlay,#000)]/70 backdrop-blur-[2px]"
         onClick={() => onOpenChange(false)}
       />
       <div className="absolute inset-0 flex items-start justify-center overflow-y-auto">
-        <div className="mx-3 my-8 w-full max-w-3xl rounded-2xl bg-white shadow-2xl dark:bg-zinc-900">
+        <div className="mx-3 my-8 w-full max-w-3xl rounded-2xl border shadow-2xl bg-[var(--bg)] text-[var(--text)] border-[var(--border)]">
           {/* Header */}
-          <div className="flex items-center justify-between border-b px-5 py-4 dark:border-zinc-800">
+          <div className="flex items-center justify-between border-b px-5 py-4 border-[var(--border)]">
             <h2 id="org-modal-title" className="text-lg font-semibold">
               {data?.name || "Organization"}
             </h2>
@@ -432,7 +432,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId }: Pro
           </div>
 
           {/* Footer */}
-          <div className="flex items-center justify-end gap-2 border-t px-5 py-3 dark:border-zinc-800">
+          <div className="flex items-center justify-end gap-2 border-t px-5 py-3 border-[var(--border)]">
             <button
               type="button"
               onClick={() => onOpenChange(false)}
@@ -444,7 +444,8 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId }: Pro
               type="button"
               disabled={disabled}
               onClick={onOk}
-              className="rounded-lg bg-black px-4 py-2 text-sm text-white hover:bg-black/90 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-white/90"
+              className="rounded-lg px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50
+                bg-[var(--accent,#2563eb)] hover:opacity-90"
             >
               {saving ? "Saving…" : "OK"}
             </button>
@@ -497,18 +498,28 @@ const base =
   "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none ring-0 placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zin[...]";
 const labelBase = "text-xs font-medium text-zinc-600 dark:text-zinc-300";
 
+// Updated theme variables for .input and .label
 const style = `
-.input{${[
-  "width:100%",
-  "border-radius:0.5rem",
-  "border-width:1px",
-  "padding:0.5rem 0.75rem",
-  "font-size:0.875rem",
-].join(";")}}
+.input{
+  width:100%;
+  border-radius:0.5rem;
+  border-width:1px;
+  padding:0.5rem 0.75rem;
+  font-size:0.875rem;
+
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border);
+}
+.label{
+  font-size:.75rem;
+  font-weight:600;
+  color: var(--text);
+  opacity:.75;
+}
 `;
 
 // Utility classes via Tailwind; add small CSS classNames mapping
-// (we still prefer Tailwind utility classes above; label class for consistency)
 (Object.assign as any)(Field, {});
 // attach classNames for reuse
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

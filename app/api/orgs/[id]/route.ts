@@ -40,8 +40,24 @@ export async function GET(
         org_type,
         domain,
         country,
+        industry,
+        general_email,
+        contact_name,
+        contact_email,
+        contact_phone,
+        status,
+        size_tag,
+        source,
+        note,
+        brand,
+        product,
+        quantity,
+        deal_value_usd,
         last_contact_at,
-        created_at
+        tags,
+        array_to_string(tags, ',') as tags_csv,  -- на випадок, якщо інпут очікує CSV
+        created_at,
+        updated_at
       from public.organizations
       where id = ${id}
       limit 1;

@@ -1,11 +1,8 @@
-// app/api/orgs/[id]/route.ts
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
-/* ------------ helpers ------------ */
 function normalizeDomain(raw?: string | null) {
   if (!raw) return null;
   try {
@@ -18,99 +15,48 @@ function normalizeDomain(raw?: string | null) {
   }
 }
 
-/* =====================================
-   GET /api/orgs/:id
-   Повертає { org, inquiries, items }
-   items: map { inquiry_id -> inquiry_items[] }
-===================================== */
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+const strOrNull = (v: any) => {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s === "" ? null : s;
+};
+const numOrNull = (v: any) => (v === "" || v === null || v === undefined ? null : Number(v));
+const isoOrNull = (v: any) => {
+  if (v === undefined || v === null || v === "") return null;
+  try {
+    return new Date(v).toISOString();
+  } catch {
+    return null;
+  }
+};
+
+export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const sql = getSql();
-    const id = params?.id;
-    if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    const id = params.id;
 
-    // 1) організація
-    const orgRows = (await sql/*sql*/`
-      select
-        id,
-        name,
-        org_type,
-        domain,
-        country,
-        industry,
-        general_email,
-        contact_name,
-        contact_email,
-        contact_phone,
-        status,
-        size_tag,
-        source,
-        note,
-        brand,
-        product,
-        quantity,
-        deal_value_usd,
-        last_contact_at,
-        tags,
-        array_to_string(tags, ',') as tags_csv,  -- на випадок, якщо інпут очікує CSV
-        created_at,
-        updated_at
-      from public.organizations
-      where id = ${id}
-      limit 1;
-    `) as any[];
+    const org = (
+      (await sql/*sql*/`
+        select
+          id, name, org_type, domain,
+          country, industry,
+          general_email, contact_name, contact_email, contact_phone,
+          status, size_tag, source, note,
+          brand, product, quantity, deal_value_usd,
+          last_contact_at, created_at, updated_at,
+          tags
+        from organizations
+        where id = ${id}
+        limit 1;
+      `) as any
+    )[0];
 
-    const org = orgRows?.[0];
-    if (!org) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-    // 2) заявки
-    let inquiries: any[] = [];
-    try {
-      inquiries = (await sql/*sql*/`
-        select id, summary, created_at
-        from public.inquiries
-        where org_id = ${id}
-        order by created_at desc;
-      `) as any[];
-    } catch (e) {
-      console.error("GET inquiries failed:", e);
-      inquiries = [];
+    if (!org) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    // 3) позиції заявок (JOIN без IN/ANY)
-    const items: Record<string, any[]> = {};
-    if (inquiries.length) {
-      try {
-        const rows = (await sql/*sql*/`
-          select
-            ii.inquiry_id,
-            ii.id,
-            ii.brand,
-            ii.product,
-            ii.quantity,
-            ii.unit,
-            ii.unit_price,
-            ii.created_at
-          from public.inquiry_items ii
-          join public.inquiries iq on iq.id = ii.inquiry_id
-          where iq.org_id = ${id}
-          order by ii.created_at desc;
-        `) as any[];
-
-        for (const r of rows) {
-          (items[r.inquiry_id] ??= []).push(r);
-        }
-      } catch (e) {
-        console.error("GET inquiry_items failed:", e);
-      }
-    }
-
-    return NextResponse.json({ org, inquiries, items }, { status: 200 });
+    return NextResponse.json({ org }, { status: 200 });
   } catch (e: any) {
-    console.error("GET /api/orgs/[id] failed:", e);
     return NextResponse.json(
       { error: e?.message ?? "Server error" },
       { status: 500 }
@@ -118,9 +64,7 @@ export async function GET(
   }
 }
 
-/* =====================================
-   PUT /api/orgs/:id  — оновлення організації
-===================================== */
+/** Повне оновлення: пусті строки -> NULL (очищення поля) */
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const sql = getSql();
   const id = params?.id;
@@ -134,46 +78,64 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   }
 
   try {
-    const tagsCsv =
-      Array.isArray(body.tags) ? body.tags.join(",")
-      : typeof body.tags === "string" ? body.tags
-      : null;
+    const name            = strOrNull(body.name);
+    const domain          = normalizeDomain(strOrNull(body.domain));
+    const country         = strOrNull(body.country);
+    const industry        = strOrNull(body.industry);
 
-    const dealValue =
-      body.deal_value_usd === "" || body.deal_value_usd == null
-        ? null
-        : Number(body.deal_value_usd);
+    const general_email   = strOrNull(body.general_email);
+    const contact_name    = strOrNull(body.contact_name);
+    const contact_email   = strOrNull(body.contact_email);
+    const contact_phone   = strOrNull(body.contact_phone);
 
-    const lastContactISO =
-      body.last_contact_at ? new Date(body.last_contact_at).toISOString() : null;
+    const status          = strOrNull(body.status);
+    const size_tag        = strOrNull(body.size_tag);
+    const source          = strOrNull(body.source);
+
+    const note            = strOrNull(body.note);
+    const brand           = strOrNull(body.brand);
+    const product         = strOrNull(body.product);
+
+    const quantity        = numOrNull(body.quantity);
+    const deal_value_usd  = numOrNull(body.deal_value_usd);
+    const last_contact_at = isoOrNull(body.last_contact_at);
+
+    let tagsCsv: string | null = null;
+    if (Array.isArray(body.tags)) {
+      const arr = body.tags.map((x: any) => String(x).trim()).filter(Boolean);
+      tagsCsv = arr.length ? arr.join(",") : null;
+    } else if (typeof body.tags === "string") {
+      const arr = body.tags.split(",").map(s => s.trim()).filter(Boolean);
+      tagsCsv = arr.length ? arr.join(",") : null;
+    }
 
     const rows = await sql/*sql*/`
       UPDATE public.organizations
       SET
-        name            = ${body.name ?? null},
-        domain          = ${normalizeDomain(body.domain)},
-        country         = ${body.country ?? null},
-        industry        = ${body.industry ?? null},
-        general_email   = ${body.general_email ?? null},
-        contact_name    = ${body.contact_name ?? null},
-        contact_email   = ${body.contact_email ?? null},
-        contact_phone   = ${body.contact_phone ?? null},
-        status          = ${body.status ?? null},
-        size_tag        = ${body.size_tag ?? null},
-        source          = ${body.source ?? null},
-        note            = ${body.note ?? null},
-        brand           = ${body.brand ?? null},
-        product         = ${body.product ?? null},
-        quantity        = ${body.quantity ?? null},
-        deal_value_usd  = ${dealValue}::numeric,
-        last_contact_at = ${lastContactISO}::timestamptz,
-        tags            = string_to_array(NULLIF(${tagsCsv}::text, ''), ','),
+        name            = ${name},
+        domain          = ${domain},
+        country         = ${country},
+        industry        = ${industry},
+        general_email   = ${general_email},
+        contact_name    = ${contact_name},
+        contact_email   = ${contact_email},
+        contact_phone   = ${contact_phone},
+        status          = ${status},
+        size_tag        = ${size_tag},
+        source          = ${source},
+        note            = ${note},
+        brand           = ${brand},
+        product         = ${product},
+        quantity        = ${quantity},
+        deal_value_usd  = ${deal_value_usd},
+        last_contact_at = ${last_contact_at},
+        tags            = ${tagsCsv === null ? null : sql/*sql*/`string_to_array(${tagsCsv}, ',')`},
         updated_at      = now()
       WHERE id = ${id}
       RETURNING *;
     `;
 
-    if (!rows || !rows.length) {
+    if (!rows?.length) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     return NextResponse.json(rows[0], { status: 200 });
@@ -187,35 +149,12 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   }
 }
 
-/* =====================================
-   DELETE /api/orgs/:id
-===================================== */
-export async function DELETE(
-  _req: NextRequest,
-  { params }: { params: { id: string } }
-) {
+export async function DELETE(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const sql = getSql();
-    await sql/*sql*/`
-      delete from public.organizations
-      where id = ${params.id};
-    `;
-    return NextResponse.json({ ok: true }, { status: 200 });
+    await sql/*sql*/`delete from organizations where id = ${params.id};`;
+    return NextResponse.json({ ok: true });
   } catch (e: any) {
-    console.error("DELETE /api/orgs/[id] failed:", e);
-    return NextResponse.json(
-      { error: e?.message ?? "Server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
   }
-}
-
-/* =====================================
-   OPTIONS /api/orgs/:id  (на випадок preflight)
-===================================== */
-export function OPTIONS() {
-  return new NextResponse(null, {
-    status: 204,
-    headers: { Allow: "GET,PUT,DELETE,OPTIONS" },
-  });
 }

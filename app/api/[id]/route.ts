@@ -1,4 +1,3 @@
-// app/api/orgs/[id]/route.ts
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -29,11 +28,11 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const sql = getSql();
+    const sqlInstance = getSql();
     const id = params.id;
 
     const org = (
-      (await sql/*sql*/`
+      (await sqlInstance/*sql*/`
         select
           id,
           name,
@@ -52,7 +51,7 @@ export async function GET(
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    const inquiries = (await sql/*sql*/`
+    const inquiries = (await sqlInstance/*sql*/`
       select id, summary, created_at
       from inquiries
       where org_id = ${id}
@@ -62,7 +61,8 @@ export async function GET(
     const items: Record<string, any[]> = {};
     if (inquiries.length) {
       const ids = inquiries.map((r: any) => r.id);
-      const rows = (await sql/*sql*/`
+      // ГАРАНТОВАНО ПРАВИЛЬНО: sql(ids) для IN (...)
+      const rows = await sqlInstance/*sql*/`
         select
           inquiry_id,
           id,
@@ -73,8 +73,8 @@ export async function GET(
           unit_price,
           created_at
         from inquiry_items
-        where inquiry_id = any(${ids});
-      `) as any;
+        where inquiry_id in ${sql(ids)}
+      ` as any;
 
       for (const r of rows) {
         (items[r.inquiry_id] ??= []).push(r);
@@ -83,6 +83,7 @@ export async function GET(
 
     return NextResponse.json({ org, inquiries, items });
   } catch (e: any) {
+    console.error("GET organization error:", e);
     return NextResponse.json(
       { error: e?.message ?? "Server error" },
       { status: 500 }
@@ -156,13 +157,14 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    const sql = getSql();
-    await sql/*sql*/`
+    const sqlInstance = getSql();
+    await sqlInstance/*sql*/`
       delete from organizations
       where id = ${params.id};
     `;
     return NextResponse.json({ ok: true });
   } catch (e: any) {
+    console.error("DELETE organization error:", e);
     return NextResponse.json(
       { error: e?.message ?? "Server error" },
       { status: 500 }

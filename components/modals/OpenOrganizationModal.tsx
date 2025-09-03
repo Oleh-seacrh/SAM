@@ -106,7 +106,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId }: Pro
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/organizations/${orgId}`, { cache: "no-store" });
+        const res = await fetch(`/api/orgs/${orgId}`, { cache: "no-store" });
         if (!res.ok) throw new Error(`GET failed: ${res.status}`);
         const row = (await res.json()) as Organization;
         if (cancelled) return;
@@ -176,7 +176,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId }: Pro
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/organizations/${orgId}`, {
+      const res = await fetch(`/api/orgs/${orgId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -494,7 +494,7 @@ declare global {
 }
 
 const base =
-  "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none ring-0 placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zinc-100";
+  "w-full rounded-lg border border-zinc-300 bg-white px-3 py-2 text-sm shadow-sm outline-none ring-0 placeholder:text-zinc-400 focus:border-zinc-400 dark:border-zinc-700 dark:bg-zinc-950 dark:text-zin[...]";
 const labelBase = "text-xs font-medium text-zinc-600 dark:text-zinc-300";
 
 const style = `

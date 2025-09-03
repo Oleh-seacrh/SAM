@@ -1,9 +1,10 @@
-import { NextResponse } from "next/server";
-import { sql } from "@/lib/db";
-
+// app/api/orgs/[id]/route.ts
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic"; // не кешуємо
 
+import { NextRequest, NextResponse } from "next/server";
+import { getSql, sql } from "@/lib/db";
+
+// Нормалізація домену
 function normalizeDomain(raw?: string | null) {
   if (!raw) return null;
   try {
@@ -16,14 +17,83 @@ function normalizeDomain(raw?: string | null) {
   }
 }
 
-export async function GET(_req: Request, { params }: { params: { id: string } }) {
-  const { id } = params;
-  const rows =
-    await sql/*sql*/`SELECT * FROM public.organizations WHERE id = ${id} LIMIT 1`;
-  if (!rows?.length) return NextResponse.json({ error: "Not found" }, { status: 404 });
-  return NextResponse.json(rows[0]);
+/**
+ * GET /api/orgs/:id
+ * Повертає:
+ *  - org: дані організації
+ *  - inquiries: список заявок (останнє зверху)
+ *  - items: map { inquiry_id -> масив позицій }
+ */
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const sql = getSql();
+    const id = params.id;
+
+    const org = (
+      (await sql/*sql*/`
+        select
+          id,
+          name,
+          org_type,
+          domain,
+          country,
+          last_contact_at,
+          created_at
+        from organizations
+        where id = ${id}
+        limit 1;
+      `) as any
+    )[0];
+
+    if (!org) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    const inquiries = (await sql/*sql*/`
+      select id, summary, created_at
+      from inquiries
+      where org_id = ${id}
+      order by created_at desc;
+    `) as any;
+
+    const items: Record<string, any[]> = {};
+    if (inquiries.length) {
+      const ids = inquiries.map((r: any) => r.id);
+      const rows = (await sql/*sql*/`
+        select
+          inquiry_id,
+          id,
+          brand,
+          product,
+          quantity,
+          unit,
+          unit_price,
+          created_at
+        from inquiry_items
+        where inquiry_id = any(${ids});
+      `) as any;
+
+      for (const r of rows) {
+        (items[r.inquiry_id] ??= []).push(r);
+      }
+    }
+
+    return NextResponse.json({ org, inquiries, items });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message ?? "Server error" },
+      { status: 500 }
+    );
+  }
 }
 
+/**
+ * PUT /api/orgs/:id
+ * Оновлює організацію
+ */
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   const { id } = params;
 
@@ -75,4 +145,27 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     return NextResponse.json({ ok: false, error: "Not found" }, { status: 404 });
   }
   return NextResponse.json({ ok: true, data: rows[0] });
+}
+
+/**
+ * DELETE /api/orgs/:id
+ * Видаляє організацію
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  try {
+    const sql = getSql();
+    await sql/*sql*/`
+      delete from organizations
+      where id = ${params.id};
+    `;
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    return NextResponse.json(
+      { error: e?.message ?? "Server error" },
+      { status: 500 }
+    );
+  }
 }

@@ -9,56 +9,61 @@ import { getSql } from "@/lib/db";
  * Повертає список організацій з прев’ю (останній inquiry: brands/products, latest_inquiry_at)
  */
 export async function GET(req: NextRequest) {
-  try {
-    const sql = getSql();
-    const { searchParams } = new URL(req.url);
-    const orgType = searchParams.get("org_type") as
-      | "client"
-      | "prospect"
-      | "supplier"
-      | null;
+  const sql = getSql();
+  const { searchParams } = new URL(req.url);
+  const orgType = searchParams.get("org_type"); // "client" | "prospect" | "supplier" | null
 
-    let rows;
-    if (orgType) {
-      rows = await sql/*sql*/`
-        select
-          o.id,
-          o.name,
-          o.org_type,
-          o.domain,
-          o.country,
-          o.last_contact_at,
-          o.created_at,
-          i.created_at as latest_inquiry_at,
-          string_agg(distinct ii.brand, ', ')  filter (where ii.brand   is not null) as brands,
-          string_agg(distinct ii.product, ', ') filter (where ii.product is not null) as products
-        from organizations o
-        left join inquiries i     on i.org_id     = o.id
-        left join inquiry_items ii on ii.inquiry_id = i.id
-        where o.org_type = ${orgType}
-        group by o.id, i.created_at
-        order by o.created_at desc;
-      `;
-    } else {
-      rows = await sql/*sql*/`
-        select
-          o.id,
-          o.name,
-          o.org_type,
-          o.domain,
-          o.country,
-          o.last_contact_at,
-          o.created_at,
-          i.created_at as latest_inquiry_at,
-          string_agg(distinct ii.brand, ', ')  filter (where ii.brand   is not null) as brands,
-          string_agg(distinct ii.product, ', ') filter (where ii.product is not null) as products
-        from organizations o
-        left join inquiries i     on i.org_id     = o.id
-        left join inquiry_items ii on ii.inquiry_id = i.id
-        group by o.id, i.created_at
-        order by o.created_at desc;
-      `;
-    }
+  try {
+    // last inquiry per org -> aggregate its items (brands/products)
+    const rows = await sql/*sql*/`
+      WITH last_inq AS (
+        SELECT i.org_id, MAX(i.created_at) AS last_dt
+        FROM inquiries i
+        GROUP BY i.org_id
+      ),
+      last_inq_rows AS (
+        SELECT i.id, i.org_id
+        FROM inquiries i
+        JOIN last_inq li
+          ON li.org_id = i.org_id
+         AND li.last_dt = i.created_at
+      ),
+      agg AS (
+        SELECT
+          lir.org_id,
+          -- бренди/продукти з останнього inquiry (уникнемо null/порожніх)
+          array_to_string(
+            array_remove(array_agg(DISTINCT ii.brand) FILTER (WHERE ii.brand IS NOT NULL AND ii.brand <> ''), NULL),
+            ', '
+          ) AS brands,
+          array_to_string(
+            array_remove(array_agg(DISTINCT ii.product) FILTER (WHERE ii.product IS NOT NULL AND ii.product <> ''), NULL),
+            ', '
+          ) AS products
+        FROM last_inq_rows lir
+        LEFT JOIN inquiry_items ii ON ii.inquiry_id = lir.id
+        GROUP BY lir.org_id
+      )
+      SELECT
+        o.id,
+        o.name,
+        o.org_type,
+        o.domain,
+        o.country,
+        o.industry,
+        o.status,
+        o.size_tag,
+        o.source,
+        o.deal_value_usd,
+        o.last_contact_at,
+        o.created_at,
+        a.brands,
+        a.products
+      FROM organizations o
+      LEFT JOIN agg a ON a.org_id = o.id
+      WHERE (${orgType}::text IS NULL OR o.org_type = ${orgType})
+      ORDER BY o.created_at DESC NULLS LAST;
+    `;
 
     return NextResponse.json({ data: rows });
   } catch (e: any) {

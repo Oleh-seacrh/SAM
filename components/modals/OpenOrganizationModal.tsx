@@ -1,13 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 type OrgDto = {
   id: string;
@@ -55,10 +50,10 @@ type Form = {
   note: string;
   brand: string;
   product: string;
-  quantity: string;        // у формі як текст
-  deal_value_usd: string;  // у формі як текст
-  last_contact_at: string; // локальний рядок або ISO
-  tags: string;            // csv у формі
+  quantity: string;        // текст у формі
+  deal_value_usd: string;  // текст у формі
+  last_contact_at: string; // ISO або локальний рядок
+  tags: string;            // CSV у формі
 };
 
 const emptyForm: Form = {
@@ -88,6 +83,16 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Form>(emptyForm);
 
+  // Закрити по Escape
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onOpenChange(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onOpenChange]);
+
   // Підтягнути дані при відкритті
   useEffect(() => {
     if (!open || !orgId) return;
@@ -96,9 +101,10 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     (async () => {
       setLoading(true);
       try {
-        const r = await fetch(`/api/orgs/${orgId}`);
+        const r = await fetch(`/api/orgs/${orgId}`, { cache: "no-store" });
         if (!r.ok) throw new Error(`GET ${r.status}`);
-        const { org }: { org: OrgDto } = await r.json();
+        const data = await r.json();
+        const org: OrgDto = data?.org ?? data; // підтримує {org,...} або plain-row
 
         if (!cancelled) {
           setForm({
@@ -132,11 +138,9 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     return () => { cancelled = true; };
   }, [open, orgId]);
 
-  const set = (k: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setForm((s) => ({ ...s, [k]: e.target.value }));
-
-  const setSelect = (k: keyof Form) => (v: string) =>
-    setForm((s) => ({ ...s, [k]: v }));
+  const set = (k: keyof Form) =>
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
+      setForm((s) => ({ ...s, [k]: e.target.value }));
 
   const submit = async () => {
     if (!orgId) return;
@@ -176,9 +180,8 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
         throw new Error(err?.error || `PUT failed: ${r.status}`);
       }
 
-      // Можна оновити локально за відповіддю, але ми все одно робимо refresh
       onOpenChange(false);
-      router.refresh();
+      router.refresh(); // одразу побачиш зміни у списку/картках
     } catch (e) {
       console.error(e);
       alert(String(e));
@@ -187,120 +190,162 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     }
   };
 
+  if (!open) return null;
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-        </DialogHeader>
-
-        {/* Форма */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div>
-            <label className="text-sm text-muted-foreground">Company name</label>
-            <Input value={form.name} onChange={set("name")} />
-          </div>
-          <div>
-            <label className="text-sm text-muted-foreground">Domain</label>
-            <Input placeholder="example.com" value={form.domain} onChange={set("domain")} />
-          </div>
-
-          <div>
-            <label className="text-sm text-muted-foreground">Country</label>
-            <Input value={form.country} onChange={set("country")} />
-          </div>
-          <div>
-            <label className="text-sm text-muted-foreground">Industry</label>
-            <Input value={form.industry} onChange={set("industry")} />
-          </div>
-
-          <div>
-            <label className="text-sm text-muted-foreground">General email</label>
-            <Input value={form.general_email} onChange={set("general_email")} />
-          </div>
-          <div>
-            <label className="text-sm text-muted-foreground">Contact person</label>
-            <Input value={form.contact_name} onChange={set("contact_name")} />
-          </div>
-
-          <div>
-            <label className="text-sm text-muted-foreground">Personal email</label>
-            <Input value={form.contact_email} onChange={set("contact_email")} />
-          </div>
-          <div>
-            <label className="text-sm text-muted-foreground">Phone</label>
-            <Input value={form.contact_phone} onChange={set("contact_phone")} />
-          </div>
-
-          <div>
-            <label className="text-sm text-muted-foreground">Status</label>
-            <Select value={form.status} onValueChange={setSelect("status")}>
-              <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">—</SelectItem>
-                <SelectItem value="New">New</SelectItem>
-                <SelectItem value="In progress">In progress</SelectItem>
-                <SelectItem value="Won">Won</SelectItem>
-                <SelectItem value="Lost">Lost</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div>
-            <label className="text-sm text-muted-foreground">Size tag (S/M/L)</label>
-            <Select value={form.size_tag} onValueChange={setSelect("size_tag")}>
-              <SelectTrigger><SelectValue placeholder="—" /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">—</SelectItem>
-                <SelectItem value="S">S</SelectItem>
-                <SelectItem value="M">M</SelectItem>
-                <SelectItem value="L">L</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div>
-            <label className="text-sm text-muted-foreground">Source</label>
-            <Input value={form.source} onChange={set("source")} />
-          </div>
-          <div>
-            <label className="text-sm text-muted-foreground">Tags (comma separated)</label>
-            <Input value={form.tags} onChange={set("tags")} />
-          </div>
-
-          <div>
-            <label className="text-sm text-muted-foreground">Last contact at</label>
-            <Input value={form.last_contact_at} onChange={set("last_contact_at")} />
-          </div>
-          <div>
-            <label className="text-sm text-muted-foreground">Brand</label>
-            <Input value={form.brand} onChange={set("brand")} />
-          </div>
-
-          <div>
-            <label className="text-sm text-muted-foreground">Product</label>
-            <Input value={form.product} onChange={set("product")} />
-          </div>
-          <div>
-            <label className="text-sm text-muted-foreground">Quantity</label>
-            <Input value={form.quantity} onChange={set("quantity")} />
-          </div>
-
-          <div>
-            <label className="text-sm text-muted-foreground">Deal value USD</label>
-            <Input value={form.deal_value_usd} onChange={set("deal_value_usd")} />
-          </div>
-
-          <div className="md:col-span-2">
-            <label className="text-sm text-muted-foreground">Notes</label>
-            <Textarea value={form.note} onChange={set("note")} rows={4} />
-          </div>
+    <div className="fixed inset-0 z-[9999]">
+      {/* Overlay */}
+      <div
+        className="absolute inset-0 bg-black/70 backdrop-blur-[2px]"
+        onClick={() => onOpenChange(false)}
+      />
+      {/* Card */}
+      <div className="relative mx-auto my-8 w-full max-w-3xl rounded-2xl border shadow-2xl bg-[var(--bg,#0b0b0d)] text-[var(--text,#e5e7eb)] border-[var(--border,#1f2937)]">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b px-5 py-4 border-[var(--border,#1f2937)]">
+          <h2 className="text-lg font-semibold">{title}</h2>
+          <button
+            onClick={() => onOpenChange(false)}
+            className="rounded-md px-2 py-1 text-sm hover:bg-white/10"
+          >
+            ✕
+          </button>
         </div>
 
-        <DialogFooter className="mt-4">
-          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
-          <Button onClick={submit} disabled={saving}>{saving ? "Saving..." : "OK"}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+        {/* Body */}
+        <div className="px-5 py-4 max-h-[70vh] overflow-y-auto">
+          {loading ? (
+            <div className="text-sm text-zinc-400">Loading…</div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <L label="Company name">
+                <input className="input" value={form.name} onChange={set("name")} />
+              </L>
+              <L label="Domain">
+                <input className="input" placeholder="example.com" value={form.domain} onChange={set("domain")} />
+              </L>
+
+              <L label="Country">
+                <input className="input" value={form.country} onChange={set("country")} />
+              </L>
+              <L label="Industry">
+                <input className="input" value={form.industry} onChange={set("industry")} />
+              </L>
+
+              <L label="General email">
+                <input className="input" value={form.general_email} onChange={set("general_email")} />
+              </L>
+              <L label="Contact person">
+                <input className="input" value={form.contact_name} onChange={set("contact_name")} />
+              </L>
+
+              <L label="Personal email">
+                <input className="input" value={form.contact_email} onChange={set("contact_email")} />
+              </L>
+              <L label="Phone">
+                <input className="input" value={form.contact_phone} onChange={set("contact_phone")} />
+              </L>
+
+              <L label="Status">
+                <select className="input" value={form.status} onChange={set("status")}>
+                  <option value="">—</option>
+                  <option value="New">New</option>
+                  <option value="In progress">In progress</option>
+                  <option value="Won">Won</option>
+                  <option value="Lost">Lost</option>
+                </select>
+              </L>
+              <L label="Size tag (S/M/L)">
+                <select className="input" value={form.size_tag} onChange={set("size_tag")}>
+                  <option value="">—</option>
+                  <option value="S">S</option>
+                  <option value="M">M</option>
+                  <option value="L">L</option>
+                </select>
+              </L>
+
+              <L label="Source">
+                <input className="input" value={form.source} onChange={set("source")} />
+              </L>
+              <L label="Tags (comma separated)">
+                <input className="input" value={form.tags} onChange={set("tags")} />
+              </L>
+
+              <L label="Last contact at">
+                <input className="input" placeholder="YYYY-MM-DD or ISO" value={form.last_contact_at} onChange={set("last_contact_at")} />
+              </L>
+              <L label="Brand">
+                <input className="input" value={form.brand} onChange={set("brand")} />
+              </L>
+
+              <L label="Product">
+                <input className="input" value={form.product} onChange={set("product")} />
+              </L>
+              <L label="Quantity">
+                <input className="input" value={form.quantity} onChange={set("quantity")} />
+              </L>
+
+              <L label="Deal value USD">
+                <input className="input" value={form.deal_value_usd} onChange={set("deal_value_usd")} />
+              </L>
+
+              <div className="md:col-span-2">
+                <label className="label">Notes</label>
+                <textarea className="input min-h-[120px]" value={form.note} onChange={set("note")} />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 border-t px-5 py-3 border-[var(--border,#1f2937)]">
+          <button
+            onClick={() => onOpenChange(false)}
+            className="rounded-lg px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-50"
+            disabled={saving}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            className="rounded-lg px-4 py-2 text-sm text-white disabled:opacity-50 bg-[var(--accent,#2563eb)] hover:opacity-90"
+            disabled={saving}
+          >
+            {saving ? "Saving..." : "OK"}
+          </button>
+        </div>
+      </div>
+
+      <style jsx>{`
+        .input{
+          width:100%;
+          border-radius:0.5rem;
+          border-width:1px;
+          padding:0.5rem 0.75rem;
+          font-size:0.875rem;
+          background: var(--bg,#0b0b0d);
+          color: var(--text,#e5e7eb);
+          border-color: var(--border,#1f2937);
+          outline: none;
+        }
+        .label{
+          display:block;
+          font-size:.75rem;
+          font-weight:600;
+          color: var(--text,#e5e7eb);
+          opacity:.75;
+          margin-bottom: .25rem;
+        }
+      `}</style>
+    </div>
+  );
+}
+
+function L({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="label">{label}</label>
+      {children}
+    </div>
   );
 }

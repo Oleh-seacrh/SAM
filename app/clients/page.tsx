@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
+import { Globe, Calendar, DollarSign } from "lucide-react";
 import {
   Users,
   UserRoundSearch,
@@ -15,6 +16,59 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import OpenOrganizationModal from "@/components/modals/OpenOrganizationModal";
+
+// ===== Milestone-0 helpers (display only) =====
+
+type OrgType = "client" | "prospect" | "supplier" | string | null | undefined;
+
+const typeColor = (t: OrgType) => {
+  switch (t) {
+    case "client":
+      return "bg-emerald-500";
+    case "prospect":
+      return "bg-amber-500";
+    case "supplier":
+      return "bg-sky-500";
+    default:
+      return "bg-zinc-600/70";
+  }
+};
+
+function formatMoney(n?: number | null) {
+  if (n === null || n === undefined || Number.isNaN(n)) return "—";
+  try {
+    return new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: "USD",
+      maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    return `$${n}`;
+  }
+}
+
+function formatDate(iso?: string | null) {
+  if (!iso) return "—";
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return "—";
+    return d.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function domainHref(domain?: string | null) {
+  if (!domain) return null;
+  const clean = domain.replace(/^https?:\/\//, "");
+  return `https://${clean}`;
+}
 
 /* ===================== Types ===================== */
 
@@ -50,6 +104,118 @@ type Detail = {
 };
 
 type ViewMode = "tabs" | "sections";
+
+type OrgCardProps = {
+  item: {
+    id: string;
+    name?: string | null;
+    org_type?: OrgType;
+    domain?: string | null;
+    country?: string | null;
+    industry?: string | null;
+    status?: string | null;
+    size_tag?: string | null;
+    source?: string | null;
+    last_contact_at?: string | null;
+    deal_value_usd?: number | null;
+  };
+  onOpen: () => void;
+  onDelete?: () => void;
+  RightActions?: React.ReactNode; // якщо у вас є власні кнопки (Open/Delete), можна передати тут
+};
+
+function OrgCard({ item, onOpen, onDelete, RightActions }: OrgCardProps) {
+  const href = domainHref(item.domain);
+
+  return (
+    <div
+      className="relative rounded-md border border-zinc-800/60 bg-zinc-900/40 p-4 hover:bg-zinc-900/60 transition-colors"
+    >
+      {/* Ліва тонка смужка */}
+      <span
+        className={`absolute left-0 top-0 h-full w-[3px] rounded-l ${typeColor(
+          item.org_type
+        )}`}
+        aria-hidden
+      />
+
+      {/* Верхній ряд: Назва + домен справа */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="truncate text-base font-medium">
+            {item.name || "—"}
+          </div>
+          <div className="mt-0.5 line-clamp-1 text-xs text-zinc-400">
+            {[item.country, item.industry].filter(Boolean).join(" • ") || " "}
+          </div>
+        </div>
+
+        {/* Праворуч: домен-лінк та/або ваші кнопки */}
+        <div className="flex items-center gap-2 shrink-0">
+          {href && (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-zinc-300 hover:text-white"
+              title={item.domain || undefined}
+            >
+              <Globe className="h-4 w-4" />
+              <span className="hidden sm:inline">{item.domain}</span>
+            </a>
+          )}
+
+          {/* Якщо хочете лишити ваші існуючі кнопки (Open/Delete) — передайте їх через RightActions,
+              або просто видаліть цей блок і намалюйте кнопки тут */}
+          {RightActions}
+        </div>
+      </div>
+
+      {/* Чіпси: статус / size / source */}
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
+        {item.status && (
+          <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 text-zinc-300">
+            {item.status}
+          </span>
+        )}
+        {item.size_tag && (
+          <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 text-zinc-300">
+            Size: {item.size_tag}
+          </span>
+        )}
+        {item.source && (
+          <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 text-zinc-300">
+            Source: {item.source}
+          </span>
+        )}
+      </div>
+
+      {/* Нижній ряд: last contact + deal value */}
+      <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-zinc-400">
+        <div className="inline-flex items-center gap-1">
+          <Calendar className="h-4 w-4" />
+          <span>Last contact: {formatDate(item.last_contact_at)}</span>
+        </div>
+        <div className="inline-flex items-center gap-1">
+          <DollarSign className="h-4 w-4" />
+          <span>{formatMoney(item.deal_value_usd)}</span>
+        </div>
+      </div>
+
+      {/* Клік по картці — відкрити (якщо так задумано).
+          Якщо у вас вже є кнопка Open — можете пропустити onClick тут. */}
+      <button
+        type="button"
+        onClick={onOpen}
+        className="absolute inset-0"
+        aria-label="Open"
+        title="Open"
+        style={{ background: "transparent" }}
+      />
+    </div>
+  );
+}
+
 
 /* ===================== Helpers / API ===================== */
 
@@ -459,60 +625,31 @@ function NewLeadModal({
         <div className="text-sm text-muted-foreground">No items yet.</div>
       ) : (
         <div className="space-y-2">
-          {items.map((it, i) => (
-            <Card key={i}>
-              <CardContent className="grid grid-cols-1 md:grid-cols-6 gap-3">
-                <div className="md:col-span-2">
-                  <div className="text-xs text-muted-foreground mb-1">
-                    Product *
-                  </div>
-                  <Input
-                    value={it.product}
-                    onChange={(e) => updItem(i, { product: e.target.value })}
-                    placeholder="e.g., X-ray film 8x10"
-                  />
-                </div>
-                <div>
-                  <div className="text-xs text-muted-foreground mb-1">
-                    Brand
-                  </div>
-                  <Input
-                    value={it.brand || ""}
-                    onChange={(e) => updItem(i, { brand: e.target.value })}
-                    placeholder="Fujifilm / Konica"
-                  />
-                </div>
-                <div>
-                  <div className="text-xs text-muted-foreground mb-1">Qty</div>
-                  <Input
-                    type="number"
-                    value={it.quantity ?? ""}
-                    onChange={(e) =>
-                      updItem(i, {
-                        quantity: e.currentTarget.valueAsNumber || undefined,
-                      })
-                    }
-                    placeholder="200"
-                  />
-                </div>
-                <div>
-                  <div className="text-xs text-muted-foreground mb-1">Unit</div>
-                  <Input
-                    value={it.unit || ""}
-                    onChange={(e) => updItem(i, { unit: e.target.value })}
-                    placeholder="boxes / pcs"
-                  />
-                </div>
-                <div className="flex items-end justify-end">
-                  <Button variant="outline" onClick={() => rmItem(i)}>
-                    Remove
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
+          {items.map((item) => (
+        <OrgCard
+          key={item.id}
+          item={item}
+          onOpen={() => openOrg(item.id)}            // ← використайте ваш існуючий хендлер
+          RightActions={
+            <div className="flex items-center gap-2">
+              {/* Приклад: якщо у вас були ці кнопки */}
+              <button
+                onClick={(e) => { e.stopPropagation(); openOrg(item.id); }}
+                className="rounded-md bg-zinc-800 px-2 py-1 text-xs hover:bg-zinc-700"
+              >
+                Open
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); onDeleteItem(item.id); }}
+                className="rounded-md bg-zinc-900/60 px-2 py-1 text-xs text-red-300 hover:bg-zinc-900"
+              >
+                Delete
+              </button>
+            </div>
+          }
+        />
+      ))}
+
 
       <div className="pt-3 flex justify-end gap-2">
         <Button variant="outline" onClick={onClose}>

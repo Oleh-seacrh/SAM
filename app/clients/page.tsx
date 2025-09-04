@@ -7,7 +7,6 @@ import {
   PackageSearch,
   Search,
   Globe,
-  Calendar,
   CalendarClock,
   DollarSign,
   ChevronDown,
@@ -17,12 +16,13 @@ import {
 import { useRouter } from "next/navigation";
 import OpenOrganizationModal from "@/components/modals/OpenOrganizationModal";
 
-/* ============== Helpers (display only) ============== */
+/* =========================================================
+ * Small helpers for display
+ * =======================================================*/
 
 type OrgType = "client" | "prospect" | "supplier";
-type PillOrgType = OrgType | null | undefined;
 
-const typeColor = (t: PillOrgType) => {
+const typeColor = (t?: OrgType | string | null) => {
   switch (t) {
     case "client":
       return "bg-emerald-500";
@@ -48,22 +48,8 @@ function formatMoney(n?: number | null) {
   }
 }
 
-function formatDate(iso?: string | null) {
-  if (!iso) return "—";
-  try {
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return "—";
-    return d.toLocaleString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  } catch {
-    return iso;
-  }
-}
+const fmtDate = (v?: string | null) =>
+  v ? new Date(v).toLocaleString() : "—";
 
 function domainHref(domain?: string | null) {
   if (!domain) return null;
@@ -71,21 +57,30 @@ function domainHref(domain?: string | null) {
   return `https://${clean}`;
 }
 
-const fmtDate = (v?: string | null) => (v ? new Date(v).toLocaleString() : "—");
-
-/* ===================== Types ===================== */
+/* =========================================================
+ * Types
+ * =======================================================*/
 
 type OrgListItem = {
   id: string;
   name: string;
   org_type: OrgType;
+
   domain?: string | null;
   country?: string | null;
+  industry?: string | null;
+
+  status?: string | null;
+  size_tag?: string | null;
+  source?: string | null;
+
   last_contact_at?: string | null;
   created_at: string;
+
   latest_inquiry_at?: string | null;
   brands?: string | null;
   products?: string | null;
+  deal_value_usd?: number | null; // опційно, якщо є — покажемо
 };
 
 type Detail = {
@@ -106,7 +101,28 @@ type Detail = {
 
 type ViewMode = "tabs" | "sections";
 
-/* ============== Mini UI (local primitives) ============== */
+/* =========================================================
+ * API
+ * =======================================================*/
+
+async function fetchList(org_type: OrgType) {
+  const r = await fetch(`/api/orgs?org_type=${org_type}`, { cache: "no-store" });
+  const txt = await r.text();
+  const j = txt ? JSON.parse(txt) : {};
+  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+  return (j.data ?? []) as OrgListItem[];
+}
+
+async function fetchDetail(id: string) {
+  const r = await fetch(`/api/orgs/${id}`, { cache: "no-store" });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+  return j as Detail;
+}
+
+/* =========================================================
+ * Tiny UI primitives (unstyled)
+ * =======================================================*/
 
 function Badge({ children }: { children: React.ReactNode }) {
   return (
@@ -223,124 +239,9 @@ function Modal({
   );
 }
 
-/* ============== Optional pill-card (not used by list, safe to keep) ============== */
-
-function OrgCard({
-  item,
-  onOpen,
-  RightActions,
-}: {
-  item: {
-    id: string;
-    name?: string | null;
-    org_type?: PillOrgType;
-    domain?: string | null;
-    country?: string | null;
-    industry?: string | null;
-    status?: string | null;
-    size_tag?: string | null;
-    source?: string | null;
-    last_contact_at?: string | null;
-    deal_value_usd?: number | null;
-  };
-  onOpen: () => void;
-  RightActions?: React.ReactNode;
-}) {
-  const href = domainHref(item.domain);
-
-  return (
-    <div className="relative rounded-md border border-zinc-800/60 bg-zinc-900/40 p-4 hover:bg-zinc-900/60 transition-colors">
-      <span
-        className={`absolute left-0 top-0 h-full w-[3px] rounded-l ${typeColor(
-          item.org_type
-        )}`}
-        aria-hidden
-      />
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <div className="truncate text-base font-medium">
-            {item.name || "—"}
-          </div>
-          <div className="mt-0.5 line-clamp-1 text-xs text-zinc-400">
-            {[item.country, item.industry].filter(Boolean).join(" • ") || " "}
-          </div>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {href && (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-zinc-300 hover:text-white"
-              title={item.domain || undefined}
-            >
-              <Globe className="h-4 w-4" />
-              <span className="hidden sm:inline">{item.domain}</span>
-            </a>
-          )}
-          {RightActions}
-        </div>
-      </div>
-
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[11px]">
-        {item.status && (
-          <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 text-zinc-300">
-            {item.status}
-          </span>
-        )}
-        {item.size_tag && (
-          <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 text-zinc-300">
-            Size: {item.size_tag}
-          </span>
-        )}
-        {item.source && (
-          <span className="rounded bg-zinc-800/70 px-1.5 py-0.5 text-zinc-300">
-            Source: {item.source}
-          </span>
-        )}
-      </div>
-
-      <div className="mt-2 flex flex-wrap items-center gap-4 text-xs text-zinc-400">
-        <div className="inline-flex items-center gap-1">
-          <Calendar className="h-4 w-4" />
-          <span>Last contact: {formatDate(item.last_contact_at)}</span>
-        </div>
-        <div className="inline-flex items-center gap-1">
-          <DollarSign className="h-4 w-4" />
-          <span>{formatMoney(item.deal_value_usd)}</span>
-        </div>
-      </div>
-
-      <button
-        type="button"
-        onClick={onOpen}
-        className="absolute inset-0"
-        aria-label="Open"
-        title="Open"
-        style={{ background: "transparent" }}
-      />
-    </div>
-  );
-}
-
-/* ===================== API helpers ===================== */
-
-async function fetchList(org_type: OrgType) {
-  const r = await fetch(`/api/orgs?org_type=${org_type}`, { cache: "no-store" });
-  const txt = await r.text();
-  const j = txt ? JSON.parse(txt) : {};
-  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-  return (j.data ?? []) as OrgListItem[];
-}
-
-async function fetchDetail(id: string) {
-  const r = await fetch(`/api/orgs/${id}`, { cache: "no-store" });
-  const j = await r.json();
-  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
-  return j as Detail;
-}
-
-/* ===================== Rows / Sections ===================== */
+/* =========================================================
+ * Row (Preview card) — UPDATED styles & content
+ * =======================================================*/
 
 function Row({
   item,
@@ -351,34 +252,64 @@ function Row({
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
 }) {
+  const href = domainHref(item.domain);
+
   return (
-    <Card className="hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)] transition-shadow">
+    <Card className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+      {/* Left color strip */}
+      <span
+        className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(
+          item.org_type
+        )}`}
+        aria-hidden
+      />
+
       <CardHeader className="py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="font-semibold leading-tight truncate">
-              {item.name}
+            {/* Name bigger */}
+            <div className="text-lg font-semibold leading-tight truncate">
+              {item.name || "—"}
             </div>
-            <div className="text-xs text-muted-foreground mt-1 flex items-center gap-2">
+
+            {/* Meta: type/country/industry */}
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
               <Badge>{item.org_type}</Badge>
               {item.country ? <span>• {item.country}</span> : <span>• —</span>}
-              <span className="hidden md:inline">
-                • Products: {item.products || "—"}
-              </span>
+              {item.industry ? <span>• {item.industry}</span> : null}
+              {/* optional chips */}
+              <div className="inline-flex gap-1">
+                {item.status ? (
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                    {item.status}
+                  </span>
+                ) : null}
+                {item.size_tag ? (
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                    Size: {item.size_tag}
+                  </span>
+                ) : null}
+                {item.source ? (
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                    Source: {item.source}
+                  </span>
+                ) : null}
+              </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3 shrink-0">
-            {item.domain ? (
+          {/* Domain on the right */}
+          <div className="flex items-center gap-2 shrink-0">
+            {href ? (
               <a
-                href={`https://${item.domain}`}
+                href={href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="text-xs text-primary hover:underline inline-flex items-center gap-1"
-                title={item.domain}
+                className="inline-flex items-center gap-1 text-xs text-zinc-300 hover:text-white"
+                title={item.domain || undefined}
               >
                 <Globe className="w-4 h-4" />
-                {item.domain}
+                <span className="hidden sm:inline">{item.domain}</span>
                 <ExternalLink className="w-3 h-3" />
               </a>
             ) : (
@@ -390,28 +321,38 @@ function Row({
         </div>
       </CardHeader>
 
-      <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-3 text-sm">
+      <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 text-[13px]">
+        {/* Brands */}
         <div>
-          <div className="text-xs text-muted-foreground mb-1">Brands</div>
-          <div>{item.brands || "—"}</div>
+          <div className="text-[11px] text-muted-foreground mb-1">Brands</div>
+          <div className="truncate" title={item.brands || undefined}>
+            {item.brands || "—"}
+          </div>
         </div>
+
+        {/* Products */}
         <div className="md:col-span-2">
-          <div className="text-xs text-muted-foreground mb-1">
+          <div className="text-[11px] text-muted-foreground mb-1">
             Products (latest inquiry)
           </div>
           <div className="truncate" title={item.products || undefined}>
             {item.products || "—"}
           </div>
         </div>
+
+        {/* Deal value */}
         <div>
-          <div className="text-xs text-muted-foreground mb-1 flex items-center gap-1">
+          <div className="text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
             <DollarSign className="w-3 h-3" /> Deal value
           </div>
-          <div>—</div>
+          <div className="truncate" title={item.deal_value_usd?.toString()}>
+            {formatMoney(item.deal_value_usd)}
+          </div>
         </div>
 
-        <div className="md:col-span-4 flex items-center justify-between text-xs text-muted-foreground">
-          <div className="flex items-center gap-2">
+        {/* Footer line */}
+        <div className="md:col-span-4 mt-1 flex items-center justify-between text-[12px] text-muted-foreground">
+          <div className="inline-flex items-center gap-2">
             <CalendarClock className="w-4 h-4" />
             <span>Last contact:</span>
             <span className="text-foreground font-medium">
@@ -431,6 +372,10 @@ function Row({
     </Card>
   );
 }
+
+/* =========================================================
+ * Sections view
+ * =======================================================*/
 
 function GroupSection({
   title,
@@ -472,7 +417,9 @@ function GroupSection({
   );
 }
 
-/* ===================== New Lead ===================== */
+/* =========================================================
+ * New Lead (без змін у логіці; мінімальний UI)
+ * =======================================================*/
 
 function NewLeadModal({
   onClose,
@@ -486,6 +433,7 @@ function NewLeadModal({
   const [domain, setDomain] = useState("");
   const [country, setCountry] = useState("");
 
+  // Optional inquiry items
   type Item = {
     product: string;
     brand?: string;
@@ -607,88 +555,72 @@ function NewLeadModal({
       {items.length === 0 ? (
         <div className="text-sm text-muted-foreground">No items yet.</div>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-3">
           {items.map((it, i) => (
-            <Card key={i}>
-              <CardContent className="grid grid-cols-1 md:grid-cols-6 gap-3">
-                <div className="md:col-span-2">
-                  <div className="text-xs text-muted-foreground mb-1">
-                    Product *
-                  </div>
-                  <Input
-                    value={it.product}
-                    onChange={(e) => updItem(i, { product: e.target.value })}
-                    placeholder="e.g., X-ray film 8×10"
-                  />
-                </div>
-
-                <div>
-                  <div className="text-xs text-muted-foreground mb-1">Brand</div>
-                  <Input
-                    value={it.brand ?? ""}
-                    onChange={(e) => updItem(i, { brand: e.target.value })}
-                    placeholder="Fujifilm / Konica"
-                  />
-                </div>
-
-                <div>
-                  <div className="text-xs text-muted-foreground mb-1">Qty</div>
-                  <Input
-                    type="number"
-                    value={it.quantity ?? ""}
-                    onChange={(e) =>
-                      updItem(i, {
-                        quantity:
-                          e.target.value === "" ? undefined : Number(e.target.value),
-                      })
-                    }
-                  />
-                </div>
-
-                <div>
+            <div key={i} className="grid grid-cols-1 md:grid-cols-5 gap-2">
+              <div className="md:col-span-2">
+                <div className="text-xs text-muted-foreground mb-1">Product *</div>
+                <Input
+                  value={it.product}
+                  onChange={(e) => updItem(i, { product: e.target.value })}
+                  placeholder="e.g., X-ray film 8x10"
+                />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">Brand</div>
+                <Input
+                  value={it.brand ?? ""}
+                  onChange={(e) => updItem(i, { brand: e.target.value })}
+                  placeholder="Fujifilm / Konica"
+                />
+              </div>
+              <div>
+                <div className="text-xs text-muted-foreground mb-1">Qty</div>
+                <Input
+                  type="number"
+                  value={it.quantity ?? ""}
+                  onChange={(e) => updItem(i, { quantity: Number(e.target.value || 0) })}
+                  placeholder="1000"
+                />
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
                   <div className="text-xs text-muted-foreground mb-1">Unit</div>
                   <Input
                     value={it.unit ?? ""}
                     onChange={(e) => updItem(i, { unit: e.target.value })}
-                    placeholder="pcs / box / pack"
+                    placeholder="box / set / …"
                   />
                 </div>
-
-                <div>
-                  <div className="text-xs text-muted-foreground mb-1">
-                    Unit price
-                  </div>
+                <div className="flex-1">
+                  <div className="text-xs text-muted-foreground mb-1">Unit price</div>
                   <Input
                     type="number"
                     value={it.unit_price ?? ""}
                     onChange={(e) =>
-                      updItem(i, {
-                        unit_price:
-                          e.target.value === ""
-                            ? undefined
-                            : Number(e.target.value),
-                      })
+                      updItem(i, { unit_price: Number(e.target.value || 0) })
                     }
+                    placeholder="5"
                   />
                 </div>
+              </div>
 
-                <div className="flex items-end">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => rmItem(i)}
-                    className="w-full md:w-auto"
-                  >
-                    Remove
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+              <div className="md:col-span-5 flex justify-end">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => rmItem(i)}
+                  className="mt-1"
+                >
+                  Remove
+                </Button>
+              </div>
+            </div>
           ))}
         </div>
       )}
 
-      <div className="pt-3 flex justify-end gap-2">
+      <div className="pt-4 flex justify-end gap-2">
         <Button variant="outline" onClick={onClose}>
           Cancel
         </Button>
@@ -700,7 +632,9 @@ function NewLeadModal({
   );
 }
 
-/* ===================== Detail (read-only) ===================== */
+/* =========================================================
+ * Detail modal (unchanged)
+ * =======================================================*/
 
 function DetailModal({
   loading,
@@ -769,7 +703,9 @@ function DetailModal({
   );
 }
 
-/* ===================== Page ===================== */
+/* =========================================================
+ * Page
+ * =======================================================*/
 
 export default function ClientsPage() {
   const router = useRouter();
@@ -789,7 +725,6 @@ export default function ClientsPage() {
   const [err, setErr] = useState<string | null>(null);
 
   const [showNew, setShowNew] = useState(false);
-
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<Detail | null>(null);
   const [openLoading, setOpenLoading] = useState(false);
@@ -897,6 +832,7 @@ export default function ClientsPage() {
             <option value="sections">Sections</option>
           </select>
 
+          {/* old-style tab buttons */}
           {view === "tabs" && (
             <div className="inline-grid grid-cols-3 gap-2 ml-1">
               <button
@@ -942,9 +878,7 @@ export default function ClientsPage() {
 
       {/* content */}
       {err && <div className="text-sm text-red-400">{err}</div>}
-      {loading && (
-        <div className="text-sm text-muted-foreground">Loading…</div>
-      )}
+      {loading && <div className="text-sm text-muted-foreground">Loading…</div>}
 
       {!loading && !err && (
         <>
@@ -956,6 +890,7 @@ export default function ClientsPage() {
                     key={it.id}
                     item={it}
                     onOpen={(id) => {
+                      // відкриваємо вашу велику модалку редагування
                       setSelectedOrgId(id);
                       setOpenOrg(true);
                     }}
@@ -1020,7 +955,7 @@ export default function ClientsPage() {
         />
       )}
 
-      {/* Open modal */}
+      {/* Ваша існуюча модалка редагування організації */}
       {selectedOrgId && (
         <OpenOrganizationModal
           open={openOrg}

@@ -3,117 +3,146 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
-/* =============== helpers =============== */
+/* -------------------- helpers -------------------- */
 
-// Приводимо до набору, який очікує БД: 'low' | 'normal' | 'urgent'
-function normalizePriority(v: unknown): "low" | "normal" | "urgent" {
+type Sql = ReturnType<typeof getSql>;
+
+function normalizePriority(v: unknown): "Low" | "Normal" | "High" | "Urgent" {
   const s = String(v ?? "").trim().toLowerCase();
-  if (["low", "низький"].includes(s)) return "low";
-  if (["urgent", "high", "високий", "срочно"].includes(s)) return "urgent";
-  // normal за замовчуванням + синоніми
-  if (["normal", "norm", "норм", "medium", "mid"].includes(s)) return "normal";
-  return "normal";
+  if (s === "low") return "Low";
+  if (s === "high") return "High";
+  if (s === "urgent") return "Urgent";
+  return "Normal";
 }
 
-// Якщо у вас є constraint на статус — теж у нижній регістр
-function normalizeStatus(v: unknown): string {
-  const s = String(v ?? "").trim().toLowerCase();
-  return s || "open";
+function statusFromColumnTitle(title: string): "Todo" | "In Progress" | "Done" | "Blocked" {
+  const s = title.trim().toLowerCase();
+  if (s.includes("progress")) return "In Progress";
+  if (s.includes("done")) return "Done";
+  if (s.includes("block")) return "Blocked";
+  return "Todo";
 }
 
-/** Повертає будь-який наявний board_id (або той, що в body). */
-async function resolveBoardId(sql: any, body: any): Promise<number> {
+function toIsoDate(input: unknown): string | null {
+  if (!input) return null;
+  try {
+    const d = new Date(String(input));
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString();
+  } catch {
+    return null;
+  }
+}
+
+/** "ai, backend" | ["ai","backend"] -> TEXT[] | null */
+function toTextArray(input: unknown): string[] | null {
+  if (input == null) return null;
+  if (Array.isArray(input)) {
+    const arr = input.map((x) => String(x).trim()).filter(Boolean);
+    return arr.length ? arr : null;
+  }
+  const s = String(input);
+  const arr = s
+    .split(",")
+    .map((x) => x.trim())
+    .filter(Boolean);
+  return arr.length ? arr : null;
+}
+
+/** Повертає id борду "Tasks" або 1, або значення з body */
+async function resolveBoardId(sql: Sql, body: any): Promise<number> {
   if (body?.board_id != null) return Number(body.board_id);
 
-  const row = (await sql/*sql*/`
-    SELECT id
-    FROM kanban_boards
-    ORDER BY id
-    LIMIT 1;
-  `) as Array<{ id: number }>;
-  if (row?.length) return row[0].id;
-
-  const ins = (await sql/*sql*/`
-    INSERT INTO kanban_boards (name)
-    VALUES ('Tasks')
-    RETURNING id;
-  `) as Array<{ id: number }>;
-  return ins[0].id;
-}
-
-/** Визначає column_id:
- *  - column_id
- *  - column_key ("todo"|"inprogress"|"done"|"blocked")
- *  - column_title / column ("To do"|"In progress"|...)
- *  - або перша колонка дошки
- */
-async function resolveColumnId(sql: any, body: any, boardId: number): Promise<number | null> {
-  if (body?.column_id) return Number(body.column_id);
-
-  if (body?.column_key) {
-    const key = String(body.column_key).trim().toLowerCase();
-    const rows = (await sql/*sql*/`
-      SELECT id
-      FROM kanban_columns
-      WHERE board_id = ${boardId}
-        AND lower(key) = ${key}
-      LIMIT 1;
-    `) as Array<{ id: number }>;
-    if (rows?.length) return rows[0].id;
-  }
-
-  const titleLike = body?.column_title ?? body?.column ?? null;
-  if (titleLike != null) {
-    const t = String(titleLike).trim().toLowerCase();
-    const rows = (await sql/*sql*/`
-      SELECT id
-      FROM kanban_columns
-      WHERE board_id = ${boardId}
-        AND lower(title) = ${t}
-      LIMIT 1;
-    `) as Array<{ id: number }>;
-    if (rows?.length) return rows[0].id;
-  }
-
-  const anyCol = (await sql/*sql*/`
-    SELECT id
-    FROM kanban_columns
-    WHERE board_id = ${boardId}
-    ORDER BY position NULLS LAST, id
-    LIMIT 1;
-  `) as Array<{ id: number }>;
-  return anyCol?.[0]?.id ?? null;
-}
-
-/* =============== GET =============== */
-/** GET /api/kanban/tasks — список задач з даними колонки */
-export async function GET(_req: NextRequest) {
-  const sql = getSql();
-  try {
-    const boardRow = (await sql/*sql*/`
-      SELECT id
-      FROM kanban_boards
+  const r =
+    (await sql/*sql*/`
+      SELECT id FROM kanban_boards
+      WHERE lower(name) = 'tasks'
       ORDER BY id
       LIMIT 1;
     `) as Array<{ id: number }>;
-    const boardId = boardRow?.[0]?.id ?? 1;
+  if (r?.length) return r[0].id;
 
-    const rows = await sql/*sql*/`
-      SELECT
-        t.id,
-        t.board_id,
-        t.column_id,
-        t.title,
-        t.description,
-        t.priority,
-        t.status,
-        c.key   AS column_key,
-        c.title AS column_title
-      FROM kanban_tasks t
-      LEFT JOIN kanban_columns c ON c.id = t.column_id
-      WHERE t.board_id = ${boardId}
-      ORDER BY t.id DESC;
-    `;
+  // fallback – частіше за все це 1
+  return 1;
+}
+
+/** column_id по id / key / title */
+async function resolveColumnId(sql: Sql, boardId: number, body: any): Promise<number | null> {
+  if (body?.column_id != null) return Number(body.column_id);
+
+  const raw = String(body?.column ?? body?.column_key ?? body?.column_title ?? "").trim();
+  if (!raw) {
+    // перша колонка борду
+    const anyCol =
+      (await sql/*sql*/`
+        SELECT id
+        FROM kanban_columns
+        WHERE board_id = ${boardId}
+        ORDER BY position, id
+        LIMIT 1;
+      `) as Array<{ id: number }>;
+    return anyCol?.[0]?.id ?? null;
+  }
+
+  // пробуємо знайти за key або за title
+  const q = raw.toLowerCase();
+  const rows =
+    (await sql/*sql*/`
+      SELECT id
+      FROM kanban_columns
+      WHERE board_id = ${boardId}
+        AND (lower(key) = ${q} OR lower(title) = ${q})
+      LIMIT 1;
+    `) as Array<{ id: number }>;
+
+  if (rows?.length) return rows[0].id;
+
+  // fallback: перша колонка
+  const anyCol =
+    (await sql/*sql*/`
+      SELECT id FROM kanban_columns
+      WHERE board_id = ${boardId}
+      ORDER BY position, id
+      LIMIT 1;
+    `) as Array<{ id: number }>;
+  return anyCol?.[0]?.id ?? null;
+}
+
+/* -------------------- GET /api/kanban/tasks -------------------- */
+/** Повертає задачі + назви колонки та борду (для фронту зручно). */
+export async function GET(_req: NextRequest) {
+  const sql = getSql();
+  try {
+    const rows =
+      (await sql/*sql*/`
+        SELECT
+          t.id,
+          t.board_id,
+          b.name  AS board_name,
+          t.column_id,
+          c.key   AS column_key,
+          c.title AS column_title,
+          t.title,
+          t.description,
+          t.priority,
+          t.status,
+          t.owner,
+          t.assignees,
+          t.tags,
+          t.progress,
+          t.start_at,
+          t.due_at,
+          t.position,
+          t.archived,
+          t.created_at,
+          t.updated_at
+        FROM kanban_tasks t
+        LEFT JOIN kanban_columns c ON c.id = t.column_id
+        LEFT JOIN kanban_boards  b ON b.id = t.board_id
+        WHERE t.archived = FALSE
+        ORDER BY t.created_at DESC, t.id DESC;
+      `) as any[];
+
     return NextResponse.json({ ok: true, data: rows });
   } catch (e: any) {
     console.error("GET /api/kanban/tasks failed:", e);
@@ -124,21 +153,19 @@ export async function GET(_req: NextRequest) {
   }
 }
 
-/* =============== POST =============== */
-/** POST /api/kanban/tasks
- * Body:
- *  {
- *    title: string (required)
- *    description?: string
- *    priority?: string               // 'low' | 'normal' | 'urgent' (+ синоніми)
- *    status?: string                 // 'open' ... (приводимо до lower case)
- *    board_id?: number
- *    column_id?: number
- *    column_key?: string             // 'todo' | 'inprogress' | 'done' | 'blocked'
- *    column_title?: string | column  // 'To do' | 'In progress' | ...
- *
- *    // owner/due_date/tags — ігноруємо (їх нема у таблиці)
- *  }
+/* -------------------- POST /api/kanban/tasks -------------------- */
+/** Створює задачу. Приймає тіло, сумісне з вашим UI:
+ * {
+ *   title: string (required)
+ *   owner?: string
+ *   priority?: "low|normal|high|urgent"
+ *   column? | column_id? | column_key? | column_title?
+ *   description?: string
+ *   due_at? | due_date?: string (будь-який парсабельний)
+ *   tags?: string | string[]   // "ai, backend"
+ *   assignees?: string | string[]
+ *   board_id?: number          // якщо не вказано — "Tasks" або 1
+ * }
  */
 export async function POST(req: NextRequest) {
   const sql = getSql();
@@ -151,54 +178,79 @@ export async function POST(req: NextRequest) {
   }
 
   const title = String(body?.title ?? "").trim();
-  if (!title) {
-    return NextResponse.json({ ok: false, error: "Title is required" }, { status: 400 });
-  }
+  if (!title) return NextResponse.json({ ok: false, error: "Title is required" }, { status: 400 });
 
-  const description = body?.description != null ? String(body.description) : null;
+  const owner = body?.owner != null ? String(body.owner) : null;
   const priority = normalizePriority(body?.priority);
-  const status = normalizeStatus(body?.status);
+  const description = body?.description != null ? String(body.description) : null;
+
+  // приймаємо і due_at, і due_date
+  const dueAtISO = toIsoDate(body?.due_at ?? body?.due_date);
+  const tagsArr = toTextArray(body?.tags);
+  const assigneesArr = toTextArray(body?.assignees);
 
   try {
     const boardId = await resolveBoardId(sql, body);
-    const columnId = await resolveColumnId(sql, body, boardId);
+    const columnId = await resolveColumnId(sql, boardId, body);
     if (!columnId) {
-      return NextResponse.json(
-        { ok: false, error: "No kanban columns found for this board" },
-        { status: 400 }
-      );
+      return NextResponse.json({ ok: false, error: "No column found" }, { status: 400 });
     }
 
-    const rows = await sql/*sql*/`
-      INSERT INTO kanban_tasks (
-        board_id,
-        column_id,
-        title,
-        description,
-        priority,
-        status
-      )
-      VALUES (
-        ${boardId},
-        ${columnId},
-        ${title},
-        ${description},
-        ${priority},
-        ${status}
-      )
-      RETURNING
-        id, board_id, column_id, title, description, priority, status;
-    `;
+    // Виводимо статус із назви колонки (якщо треба)
+    const colRow =
+      (await sql/*sql*/`
+        SELECT title FROM kanban_columns WHERE id = ${columnId} LIMIT 1;
+      `) as Array<{ title: string }>;
+    const computedStatus = statusFromColumnTitle(colRow?.[0]?.title ?? "To do");
 
-    return NextResponse.json({ ok: true, data: rows[0] }, { status: 201 });
+    const rows =
+      (await sql/*sql*/`
+        INSERT INTO kanban_tasks (
+          board_id,
+          column_id,
+          title,
+          description,
+          priority,
+          status,
+          owner,
+          assignees,
+          tags,
+          due_at
+        )
+        VALUES (
+          ${boardId},
+          ${columnId},
+          ${title},
+          ${description},
+          ${priority},
+          ${computedStatus},
+          ${owner},
+          ${assigneesArr},
+          ${tagsArr},
+          ${dueAtISO}
+        )
+        RETURNING *;
+      `) as any[];
+
+    // повернемо також читаємі назви
+    const [task] = rows;
+    const enriched =
+      (await sql/*sql*/`
+        SELECT
+          t.*,
+          c.key   AS column_key,
+          c.title AS column_title,
+          b.name  AS board_name
+        FROM kanban_tasks t
+        LEFT JOIN kanban_columns c ON c.id = t.column_id
+        LEFT JOIN kanban_boards  b ON b.id = t.board_id
+        WHERE t.id = ${task.id}
+        LIMIT 1;
+      `) as any[];
+
+    return NextResponse.json({ ok: true, data: enriched?.[0] ?? task }, { status: 201 });
   } catch (e: any) {
-    // корисно бачити constraint у логах
-    console.error("POST /api/kanban/tasks failed:", {
-      message: e?.message,
-      detail: e?.detail,
-      code: e?.code,
-      constraint: e?.constraint,
-    });
+    console.error("POST /api/kanban/tasks failed:", e);
     return NextResponse.json(
       { ok: false, error: e?.detail || e?.message || String(e) },
       { status: 500 }

@@ -8,6 +8,8 @@ import { getSql } from "@/lib/db";
 // "ai, backend" -> "ai,backend" (без пробілів) або null
 function normalizeTags(input: unknown): string | null {
   if (input == null) return null;
+
+  // якщо прилітає масив — зводимо у CSV
   if (Array.isArray(input)) {
     const flat = input
       .map((v) => String(v).trim())
@@ -15,6 +17,8 @@ function normalizeTags(input: unknown): string | null {
       .join(",");
     return flat || null;
   }
+
+  // якщо рядок — чистимо пробіли навколо елементів
   const s = String(input)
     .split(",")
     .map((v) => v.trim())
@@ -27,7 +31,6 @@ function normalizeTags(input: unknown): string | null {
 function toIsoDate(input: unknown): string | null {
   if (!input) return null;
   try {
-    // якщо прилітає щось типу "2025-10-09T00:00:00.000Z" — просто пропускаємо
     const s = String(input).trim();
     const d = new Date(s);
     if (Number.isNaN(d.getTime())) return null;
@@ -38,7 +41,7 @@ function toIsoDate(input: unknown): string | null {
 }
 
 // Повертає id колонки. Приймає або column_id, або column (назву).
-// Якщо назви немає в БД — поверне першу існуючу колонку.
+// Якщо назви немає в БД — поверне першу існуючу колонку (без sort_order).
 async function resolveColumnId(sql: any, body: any): Promise<string | null> {
   if (body?.column_id) return String(body.column_id);
 
@@ -53,13 +56,14 @@ async function resolveColumnId(sql: any, body: any): Promise<string | null> {
     if (rows?.length) return rows[0].id;
   }
 
-  // fallback: перша доступна колонка (припускаємо, що вони є)
+  // fallback: перша доступна колонка (без sort_order)
   const anyCol = (await sql/*sql*/`
     SELECT id
     FROM kanban_columns
-    ORDER BY sort_order NULLS LAST, name
+    ORDER BY name
     LIMIT 1;
   `) as Array<{ id: string }>;
+
   return anyCol?.[0]?.id ?? null;
 }
 
@@ -100,9 +104,9 @@ export async function GET(_req: NextRequest) {
  *   title: string (required)
  *   owner?: string | number
  *   priority?: "low" | "normal" | "high" | string
- *   column?: string  // "To do" .. "Done"
- *   column_id?: string // альтернативно напряму ID
- *   due_date?: string // будь-який парсабельний формат
+ *   column?: string      // "To do" .. "Done"
+ *   column_id?: string   // альтернативно напряму ID
+ *   due_date?: string    // будь-який парсабельний формат
  *   tags?: string | string[] // "ai, backend" або ["ai","backend"]
  * }
  */

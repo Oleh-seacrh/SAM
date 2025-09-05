@@ -1,3 +1,4 @@
+// app/api/kanban/tasks/route.ts
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
@@ -5,20 +6,13 @@ import { getSql } from "@/lib/db";
 
 /* ---------- helpers ---------- */
 
-// "ai, backend" -> "ai,backend" (без пробілів) або null
+// "ai, backend" | ["ai","backend"] -> "ai,backend" (без пробілів) або null
 function normalizeTags(input: unknown): string | null {
   if (input == null) return null;
-
-  // якщо прилітає масив — зводимо у CSV
   if (Array.isArray(input)) {
-    const flat = input
-      .map((v) => String(v).trim())
-      .filter(Boolean)
-      .join(",");
+    const flat = input.map((v) => String(v).trim()).filter(Boolean).join(",");
     return flat || null;
   }
-
-  // якщо рядок — чистимо пробіли навколо елементів
   const s = String(input)
     .split(",")
     .map((v) => v.trim())
@@ -40,35 +34,66 @@ function toIsoDate(input: unknown): string | null {
   }
 }
 
-// Повертає id колонки. Приймає або column_id, або column (назву).
-// Якщо назви немає в БД — поверне першу існуючу колонку (без sort_order).
+/**
+ * Повертає id колонки.
+ * Працює зі схемами де поле може називатись name/title/label — або взагалі не передається.
+ * Якщо нічого не знайшли — просто беремо першу колонку (LIMIT 1) без ORDER BY,
+ * щоб не натикатись на неіснуючі стовпці.
+ */
 async function resolveColumnId(sql: any, body: any): Promise<string | null> {
   if (body?.column_id) return String(body.column_id);
 
-  if (body?.column) {
-    const name = String(body.column).trim().toLowerCase();
-    const rows = (await sql/*sql*/`
-      SELECT id
-      FROM kanban_columns
-      WHERE lower(name) = ${name}
-      LIMIT 1;
-    `) as Array<{ id: string }>;
-    if (rows?.length) return rows[0].id;
+  const wanted = body?.column ? String(body.column).trim().toLowerCase() : "";
+
+  if (wanted) {
+    // 1) спроба по "name"
+    try {
+      const r = (await sql/*sql*/`
+        SELECT id FROM kanban_columns
+        WHERE lower(name) = ${wanted}
+        LIMIT 1;
+      `) as Array<{ id: string }>;
+      if (r?.length) return r[0].id;
+    } catch {
+      // ігноруємо — колонки name може не бути
+    }
+
+    // 2) спроба по "title"
+    try {
+      const r = (await sql/*sql*/`
+        SELECT id FROM kanban_columns
+        WHERE lower(title) = ${wanted}
+        LIMIT 1;
+      `) as Array<{ id: string }>;
+      if (r?.length) return r[0].id;
+    } catch {}
+
+    // 3) спроба по "label"
+    try {
+      const r = (await sql/*sql*/`
+        SELECT id FROM kanban_columns
+        WHERE lower(label) = ${wanted}
+        LIMIT 1;
+      `) as Array<{ id: string }>;
+      if (r?.length) return r[0].id;
+    } catch {}
   }
 
-  // fallback: перша доступна колонка (без sort_order)
-  const anyCol = (await sql/*sql*/`
-    SELECT id
-    FROM kanban_columns
-    ORDER BY name
-    LIMIT 1;
-  `) as Array<{ id: string }>;
+  // Fallback — просто беремо будь-яку колонку, без ORDER BY
+  try {
+    const r = (await sql/*sql*/`
+      SELECT id
+      FROM kanban_columns
+      LIMIT 1;
+    `) as Array<{ id: string }>;
+    if (r?.length) return r[0].id;
+  } catch {}
 
-  return anyCol?.[0]?.id ?? null;
+  return null;
 }
 
 /* ---------- GET /api/kanban/tasks ---------- */
-/** Повертає список задач з назвою колонки (для зручності фронту) */
+/** Повертає список задач з назвою колонки (якщо у таблиці є поле name) */
 export async function GET(_req: NextRequest) {
   const sql = getSql();
   try {
@@ -99,14 +124,15 @@ export async function GET(_req: NextRequest) {
 }
 
 /* ---------- POST /api/kanban/tasks ---------- */
-/** Створює задачу. Приймає:
+/**
+ * Створює задачу:
  * {
  *   title: string (required)
- *   owner?: string | number
+ *   owner?: string
  *   priority?: "low" | "normal" | "high" | string
- *   column?: string      // "To do" .. "Done"
- *   column_id?: string   // альтернативно напряму ID
- *   due_date?: string    // будь-який парсабельний формат
+ *   column?: string       // "To do" | "In progress" | ...
+ *   column_id?: string    // або напряму ID
+ *   due_date?: string     // будь-який парсабельний формат
  *   tags?: string | string[] // "ai, backend" або ["ai","backend"]
  * }
  */
@@ -123,7 +149,6 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // Валідація, нормалізація
   const title = String(body?.title ?? "").trim();
   if (!title) {
     return NextResponse.json(

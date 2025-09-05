@@ -1,117 +1,106 @@
-// app/api/kanban/tasks/route.ts
 export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
-/* ---------- helpers ---------- */
+/** Повертає будь-який наявний board_id (або той, що в body). */
+async function resolveBoardId(sql: any, body: any): Promise<number> {
+  if (body?.board_id != null) return Number(body.board_id);
 
-// "ai, backend" | ["ai","backend"] -> "ai,backend" (без пробілів) або null
-function normalizeTags(input: unknown): string | null {
-  if (input == null) return null;
-  if (Array.isArray(input)) {
-    const flat = input.map((v) => String(v).trim()).filter(Boolean).join(",");
-    return flat || null;
-  }
-  const s = String(input)
-    .split(",")
-    .map((v) => v.trim())
-    .filter(Boolean)
-    .join(",");
-  return s || null;
+  const row = (await sql/*sql*/`
+    SELECT id
+    FROM kanban_boards
+    ORDER BY id
+    LIMIT 1;
+  `) as Array<{ id: number }>;
+  if (row?.length) return row[0].id;
+
+  // На крайній випадок — створимо дефолтну дошку
+  const ins = (await sql/*sql*/`
+    INSERT INTO kanban_boards (name)
+    VALUES ('Tasks')
+    RETURNING id;
+  `) as Array<{ id: number }>;
+  return ins[0].id;
 }
 
-// Пробуємо перетворити будь-що у ISO-дату або null
-function toIsoDate(input: unknown): string | null {
-  if (!input) return null;
-  try {
-    const s = String(input).trim();
-    const d = new Date(s);
-    if (Number.isNaN(d.getTime())) return null;
-    return d.toISOString();
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Повертає id колонки.
- * Працює зі схемами де поле може називатись name/title/label — або взагалі не передається.
- * Якщо нічого не знайшли — просто беремо першу колонку (LIMIT 1) без ORDER BY,
- * щоб не натикатись на неіснуючі стовпці.
+/** Визначає column_id:
+ *  - якщо прийшов column_id — беремо його
+ *  - якщо прийшов column_key ("todo"|"inprogress"|...) — шукаємо по key
+ *  - якщо прийшов column_title або column ("To do"|"In progress"|...) — шукаємо по title (без регістру)
+ *  - інакше – перша колонка на дошці
  */
-async function resolveColumnId(sql: any, body: any): Promise<string | null> {
-  if (body?.column_id) return String(body.column_id);
+async function resolveColumnId(sql: any, body: any, boardId: number): Promise<number | null> {
+  if (body?.column_id) return Number(body.column_id);
 
-  const wanted = body?.column ? String(body.column).trim().toLowerCase() : "";
-
-  if (wanted) {
-    // 1) спроба по "name"
-    try {
-      const r = (await sql/*sql*/`
-        SELECT id FROM kanban_columns
-        WHERE lower(name) = ${wanted}
-        LIMIT 1;
-      `) as Array<{ id: string }>;
-      if (r?.length) return r[0].id;
-    } catch {
-      // ігноруємо — колонки name може не бути
-    }
-
-    // 2) спроба по "title"
-    try {
-      const r = (await sql/*sql*/`
-        SELECT id FROM kanban_columns
-        WHERE lower(title) = ${wanted}
-        LIMIT 1;
-      `) as Array<{ id: string }>;
-      if (r?.length) return r[0].id;
-    } catch {}
-
-    // 3) спроба по "label"
-    try {
-      const r = (await sql/*sql*/`
-        SELECT id FROM kanban_columns
-        WHERE lower(label) = ${wanted}
-        LIMIT 1;
-      `) as Array<{ id: string }>;
-      if (r?.length) return r[0].id;
-    } catch {}
-  }
-
-  // Fallback — просто беремо будь-яку колонку, без ORDER BY
-  try {
-    const r = (await sql/*sql*/`
+  // за key (todo|inprogress|done|blocked)
+  if (body?.column_key) {
+    const key = String(body.column_key).trim().toLowerCase();
+    const rows = (await sql/*sql*/`
       SELECT id
       FROM kanban_columns
+      WHERE board_id = ${boardId}
+        AND lower(key) = ${key}
       LIMIT 1;
-    `) as Array<{ id: string }>;
-    if (r?.length) return r[0].id;
-  } catch {}
+    `) as Array<{ id: number }>;
+    if (rows?.length) return rows[0].id;
+  }
 
-  return null;
+  // за title або column
+  const titleLike =
+    body?.column_title ?? body?.column ?? null;
+  if (titleLike != null) {
+    const t = String(titleLike).trim().toLowerCase();
+    const rows = (await sql/*sql*/`
+      SELECT id
+      FROM kanban_columns
+      WHERE board_id = ${boardId}
+        AND lower(title) = ${t}
+      LIMIT 1;
+    `) as Array<{ id: number }>;
+    if (rows?.length) return rows[0].id;
+  }
+
+  // fallback — перша колонка на дошці за position
+  const anyCol = (await sql/*sql*/`
+    SELECT id
+    FROM kanban_columns
+    WHERE board_id = ${boardId}
+    ORDER BY position NULLS LAST, id
+    LIMIT 1;
+  `) as Array<{ id: number }>;
+  return anyCol?.[0]?.id ?? null;
 }
 
-/* ---------- GET /api/kanban/tasks ---------- */
-/** Повертає список задач з назвою колонки (якщо у таблиці є поле name) */
+/* ========================= GET ========================= */
+/** GET /api/kanban/tasks — повертає список задач з даними колонки */
 export async function GET(_req: NextRequest) {
   const sql = getSql();
   try {
+    // беремо першу дошку (або можна фільтрувати по query, якщо додасте)
+    const boardRow = (await sql/*sql*/`
+      SELECT id
+      FROM kanban_boards
+      ORDER BY id
+      LIMIT 1;
+    `) as Array<{ id: number }>;
+    const boardId = boardRow?.[0]?.id ?? 1;
+
     const rows = await sql/*sql*/`
       SELECT
         t.id,
-        t.title,
-        t.owner,
-        t.priority,
+        t.board_id,
         t.column_id,
-        c.name AS column_name,
-        t.due_date,
-        t.tags,
-        t.created_at,
-        t.updated_at
+        t.title,
+        t.description,
+        t.priority,
+        t.status,
+        c.key   AS column_key,
+        c.title AS column_title
       FROM kanban_tasks t
       LEFT JOIN kanban_columns c ON c.id = t.column_id
-      ORDER BY t.created_at DESC;
+      WHERE t.board_id = ${boardId}
+      ORDER BY t.id DESC;
     `;
     return NextResponse.json({ ok: true, data: rows });
   } catch (e: any) {
@@ -123,18 +112,22 @@ export async function GET(_req: NextRequest) {
   }
 }
 
-/* ---------- POST /api/kanban/tasks ---------- */
-/**
- * Створює задачу:
- * {
- *   title: string (required)
- *   owner?: string
- *   priority?: "low" | "normal" | "high" | string
- *   column?: string       // "To do" | "In progress" | ...
- *   column_id?: string    // або напряму ID
- *   due_date?: string     // будь-який парсабельний формат
- *   tags?: string | string[] // "ai, backend" або ["ai","backend"]
- * }
+/* ========================= POST ========================= */
+/** POST /api/kanban/tasks
+ * Body:
+ *  {
+ *    title: string (required)
+ *    description?: string
+ *    priority?: string        // "low" | "normal" | "high" | вільний текст
+ *    status?: string          // вільний текст, напр. "open"
+ *    board_id?: number
+ *    column_id?: number
+ *    column_key?: string      // "todo" | "inprogress" | "done" | "blocked"
+ *    column_title?: string    // "To do" | "In progress" | ...
+ *    column?: string          // те саме що column_title (для сумісності з UI)
+ *
+ *    // owner, due_date, tags — ігноруємо (їх немає у схемі kanban_tasks)
+ *  }
  */
 export async function POST(req: NextRequest) {
   const sql = getSql();
@@ -143,59 +136,47 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json(
-      { ok: false, error: "Bad JSON body" },
-      { status: 400 }
-    );
+    return NextResponse.json({ ok: false, error: "Bad JSON body" }, { status: 400 });
   }
 
   const title = String(body?.title ?? "").trim();
   if (!title) {
-    return NextResponse.json(
-      { ok: false, error: "Title is required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ ok: false, error: "Title is required" }, { status: 400 });
   }
 
-  const owner = body?.owner != null ? String(body.owner) : null;
-  const priority = (body?.priority || "normal") as string;
-  const dueDateISO = toIsoDate(body?.due_date);
-  const tagsCsv = normalizeTags(body?.tags);
+  const description = body?.description != null ? String(body.description) : null;
+  const priority = body?.priority != null ? String(body.priority) : "normal";
+  const status = body?.status != null ? String(body.status) : "open";
 
   try {
-    const columnId = await resolveColumnId(sql, body);
+    const boardId = await resolveBoardId(sql, body);
+    const columnId = await resolveColumnId(sql, body, boardId);
     if (!columnId) {
       return NextResponse.json(
-        { ok: false, error: "No kanban columns found in DB" },
+        { ok: false, error: "No kanban columns found for this board" },
         { status: 400 }
       );
     }
 
     const rows = await sql/*sql*/`
-      INSERT INTO public.kanban_tasks (
-        title,
-        owner,
-        priority,
+      INSERT INTO kanban_tasks (
+        board_id,
         column_id,
-        due_date,
-        tags,
-        created_at,
-        updated_at
+        title,
+        description,
+        priority,
+        status
       )
       VALUES (
-        ${title},
-        ${owner},
-        ${priority},
+        ${boardId},
         ${columnId},
-        ${dueDateISO},
-        CASE
-          WHEN ${tagsCsv} IS NULL OR ${tagsCsv} = '' THEN NULL
-          ELSE string_to_array(${tagsCsv}, ',')
-        END,
-        now(),
-        now()
+        ${title},
+        ${description},
+        ${priority},
+        ${status}
       )
-      RETURNING *;
+      RETURNING
+        id, board_id, column_id, title, description, priority, status;
     `;
 
     return NextResponse.json({ ok: true, data: rows[0] }, { status: 201 });

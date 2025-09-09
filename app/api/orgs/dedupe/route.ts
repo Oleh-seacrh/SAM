@@ -13,10 +13,12 @@ function normalizeDomain(raw?: string | null): string | null {
   v = v.replace(/^www\./, "");
   return v || null;
 }
+
 function normalizeName(raw?: string | null): string {
   if (!raw) return "";
   return String(raw).trim().replace(/\s+/g, " ");
 }
+
 function normalizeEmail(raw?: string | null): string | null {
   if (!raw) return null;
   const v = String(raw).trim().toLowerCase();
@@ -55,7 +57,7 @@ export async function GET(req: NextRequest) {
       `
     : [];
 
-  // 3) loose name match (safe fallback without pg_trgm)
+  // 3) loose name match
   const byName = name
     ? await sql/*sql*/`
         select id, name, domain, country, org_type
@@ -67,17 +69,30 @@ export async function GET(req: NextRequest) {
     : [];
 
   // merge unique by id
-  type Org = { id: number; name: string; domain?: string | null; country?: string | null; org_type?: string | null; email?: string | null; };
-  const seen = new Set<number>();
-  const pushUnique = (arr: Org[], acc: Org[]) => {
-    for (const r of arr) {
-      if (!seen.has(r.id)) { seen.add(r.id); acc.push(r); }
-    }
+  type Org = {
+    id: number;
+    name: string;
+    domain?: string | null;
+    country?: string | null;
+    org_type?: string | null;
+    email?: string | null;
   };
+
+  const seen = new Set<number>();
   const merged: Org[] = [];
-  pushUnique(byDomain as any, merged);
-  pushUnique((byEmails as any).map((x: any) => ({ ...x, email: x.email })), merged);
-  pushUnique(byName as any, merged);
+
+  function pushUnique(arr: Org[]) {
+    for (const r of arr) {
+      if (!seen.has(r.id)) {
+        seen.add(r.id);
+        merged.push(r);
+      }
+    }
+  }
+
+  pushUnique(byDomain as any);
+  pushUnique((byEmails as any).map((x: any) => ({ ...x, email: x.email })));
+  pushUnique(byName as any);
 
   // shape with match info
   const duplicates = merged.map((o: any) => {
@@ -85,8 +100,21 @@ export async function GET(req: NextRequest) {
     const name_exact = !!(name && o.name && name.toLowerCase() === String(o.name).toLowerCase());
     const name_partial = !!(name && o.name && String(o.name).toLowerCase().includes(name.toLowerCase()));
 
-    // via_email: якщо цей org прийшов з byEmails — покажемо який саме
     let via_email: string | null = null;
     if ((byEmails as any).length) {
       const hit = (byEmails as any).find((x: any) => x.id === o.id);
-      via_email = hit?.em_
+      via_email = hit?.email ?? null;
+    }
+
+    return {
+      id: o.id,
+      name: o.name,
+      domain: o.domain,
+      country: o.country,
+      org_type: o.org_type,
+      match: { domain_exact, name_exact, name_partial, via_email },
+    };
+  });
+
+  return NextResponse.json({ duplicates });
+}

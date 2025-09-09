@@ -128,10 +128,9 @@ export async function POST(req: NextRequest) {
     ` as any)[0];
 
     if (emails.length) {
-      await sql/*sql*/`
-        insert into contacts (org_id, email)
-        select ${org.id}, unnest(${sql.array(emails)});
-      `;
+      for (const e of emails) {
+        await sql/*sql*/`insert into contacts (org_id, email) values (${org.id}, ${e});`;
+      }  
     }
 
     return NextResponse.json({ org }, { status: 201 });

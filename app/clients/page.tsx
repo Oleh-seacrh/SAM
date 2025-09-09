@@ -479,6 +479,7 @@ function SoftLockDialog({
     </div>
   );
 }
+
 function NoticeDialog({
   open, title, message, onClose,
 }: { open: boolean; title: string; message: string; onClose: () => void }) {
@@ -498,6 +499,7 @@ function NoticeDialog({
     </div>
   );
 }
+
 /* ===================== New Lead (оновлена) ===================== */
 function NewLeadModal({
   onClose,
@@ -539,6 +541,9 @@ function NewLeadModal({
   const [softOpen, setSoftOpen] = useState(false);
   const [override, setOverride] = useState(false);
 
+  // NEW: notice dialog state (для заміни alert)
+  const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
+
   const create = async (force = false) => {
     try {
       setSaving(true);
@@ -567,14 +572,14 @@ function NewLeadModal({
           return;
         }
         if (j?.error === "DUPLICATE_HARDLOCK") {
-          alert(j?.detail || "Duplicate");
+          setNotice({ title: "Duplicate detected", message: j?.detail || "Duplicate" });
           return;
         }
       }
 
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        alert(j?.detail || j?.error || "Create org error");
+        setNotice({ title: "Create failed", message: j?.detail || j?.error || "Create org error" });
         return;
       }
       const orgId = j?.org?.id ?? j?.id;
@@ -588,7 +593,7 @@ function NewLeadModal({
         });
         const j2 = await r2.json().catch(() => ({}));
         if (!r2.ok) {
-          alert(j2?.detail || j2?.error || "Create inquiry error");
+          setNotice({ title: "Inquiry failed", message: j2?.detail || j2?.error || "Create inquiry error" });
           return;
         }
       }
@@ -710,6 +715,14 @@ function NewLeadModal({
         onClose={() => setSoftOpen(false)}
         onCreateAnyway={createAnyway}
       />
+
+      {/* Notice dialog (заміна alert у модалці) */}
+      <NoticeDialog
+        open={!!notice}
+        title={notice?.title || ""}
+        message={notice?.message || ""}
+        onClose={() => setNotice(null)}
+      />
     </div>
   );
 }
@@ -812,6 +825,9 @@ export default function ClientsPage() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [openLoading, setOpenLoading] = useState(false);
 
+  // NEW: page-level notice (заміна alert поза модалками)
+  const [pageNotice, setPageNotice] = useState<{ title: string; message: string } | null>(null);
+
   const reload = async (which: OrgType | "all") => {
     setLoading(true);
     setErr(null);
@@ -868,7 +884,7 @@ export default function ClientsPage() {
       const d = await fetchDetail(id);
       setDetail(d);
     } catch (e: any) {
-      alert(e?.message || "Failed to load details");
+      setPageNotice({ title: "Failed to load details", message: e?.message || "Unknown error" });
       setOpenId(null);
     } finally {
       setOpenLoading(false);
@@ -880,7 +896,7 @@ export default function ClientsPage() {
     const r = await fetch(`/api/orgs/${id}`, { method: "DELETE" });
     const j = await r.json().catch(() => ({}));
     if (!r.ok) {
-      alert(j?.error || "Delete failed");
+      setPageNotice({ title: "Delete failed", message: j?.error || `HTTP ${r.status}` });
       return;
     }
     await reload(t);
@@ -1049,7 +1065,15 @@ export default function ClientsPage() {
           orgId={selectedOrgId}
         />
       )}
+
+      {/* page-level notice (для помилок поза модалками) */}
+      <NoticeDialog
+        open={!!pageNotice}
+        title={pageNotice?.title || ""}
+        message={pageNotice?.message || ""}
+        onClose={() => setPageNotice(null)}
+      />
     </div>
   );
 }
- 
+

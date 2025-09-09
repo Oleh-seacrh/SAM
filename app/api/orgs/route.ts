@@ -106,25 +106,53 @@ export async function GET(req: NextRequest) {
 
 
 /* ───────── POST: create with soft-lock & hard-lock ───────── */
+// app/api/orgs/route.ts  — тільки POST нижче заміни
 export async function POST(req: NextRequest) {
   const sql = getSql();
 
-  // 1) Parse body
-  const body = await req.json().catch(() => ({} as any));
-  const name = normalizeName(body?.name);
-  const domain = normalizeDomain(body?.domain);
-  const country = body?.country ?? null;
-  const org_type = mapTabToType(body?.org_type) ?? "client";
+  // helpers тут же (або вгорі файлу, якщо вже є)
+  const normDomain = (raw?: string | null) => {
+    if (!raw) return null;
+    let v = String(raw).trim().toLowerCase();
+    try { if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname; } catch {}
+    v = v.replace(/^www\./, "");
+    return v || null;
+  };
+  const normName = (raw?: string | null) => (raw ? String(raw).trim().replace(/\s+/g, " ") : "");
+  const normEmail = (raw?: string | null) => {
+    if (!raw) return null;
+    const v = String(raw).trim().toLowerCase();
+    return v.includes("@") ? v : null;
+  };
 
-  const emails: string[] = (Array.isArray(body?.emails) ? body.emails : (body?.emails ? [body?.emails] : []))
-    .map((e: any) => normalizeEmail(String(e)))
+  const body = await req.json().catch(() => ({} as any));
+
+  const inputName = normName(body?.name);
+  const domain = normDomain(body?.domain);
+  const country = body?.country ?? null;
+  const org_type = (body?.org_type || "client").toString().toLowerCase();
+
+  const emails: string[] = (Array.isArray(body?.emails) ? body.emails : (body?.emails ? [body.emails] : []))
+    .map((e: any) => normEmail(String(e)))
     .filter(Boolean) as string[];
 
+  // Fallback для name (щоб не валити NOT NULL у БД)
+  let name = inputName;
   if (!name) {
-    return NextResponse.json({ error: "VALIDATION_ERROR", detail: "Name is required" }, { status: 400 });
+    if (domain) {
+      // company.example -> Company
+      const base = domain.split(".")[0] || "Unnamed";
+      name = base.charAt(0).toUpperCase() + base.slice(1);
+    } else if (emails[0]) {
+      // john@acme.com -> acme
+      const base = (emails[0].split("@")[1] || "").split(".")[0] || "Unnamed";
+      name = base.charAt(0).toUpperCase() + base.slice(1);
+    } else {
+      name = "Unnamed";
+    }
   }
 
-  // 2) Soft-lock via /api/orgs/dedupe
+  // 1) Soft-lock: перевірка на дублікати через dedupe (домен + emails)
   const params = new URLSearchParams();
   params.set("name", name);
   if (domain) params.set("domain", domain);
@@ -141,9 +169,7 @@ export async function POST(req: NextRequest) {
       const data = await dedupeRes.json().catch(() => ({}));
       duplicates = data?.duplicates ?? data?.candidates ?? [];
     }
-  } catch {
-    // ігноруємо—soft-lock не повинен ламати створення зовсім
-  }
+  } catch { /* ignore soft-lock failure */ }
 
   const allowOverride = req.headers.get("x-allow-duplicate") === "true";
   if (duplicates.length && !allowOverride) {
@@ -153,7 +179,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3) Insert + hard-lock
+  // 2) Insert + HARDLOCK: домен/назва/email (потрібні унікальні індекси, див. нижче)
   try {
     const org = (await sql/*sql*/`
       insert into organizations (name, domain, country, org_type)
@@ -162,10 +188,10 @@ export async function POST(req: NextRequest) {
     ` as any)[0];
 
     if (emails.length) {
+      // Жодних ON CONFLICT — нехай унікальний індекс дає HARDLOCK, якщо email уже є
       await sql/*sql*/`
         insert into contacts (org_id, email)
-        select ${org.id}, unnest(${sql.array(emails)})
-        on conflict (email) do nothing;
+        select ${org.id}, unnest(${sql.array(emails)});
       `;
     }
 
@@ -184,7 +210,7 @@ export async function POST(req: NextRequest) {
             ? "Organization with the same domain already exists."
             : isOrgName
             ? "Organization with the same name already exists."
-            : "Contact with the same email already exists.",
+            : "Contact email already exists.",
         },
         { status: 409 }
       );
@@ -195,6 +221,7 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
 
 /* ───────── OPTIONS (щоб не ловити 405) ───────── */
 export async function OPTIONS() {

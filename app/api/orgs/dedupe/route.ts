@@ -3,78 +3,90 @@ export const runtime = "nodejs";
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
-import { normalizeDomain, normalizeName, normalizeEmail } from "@/lib/normalize";
+
+function normalizeDomain(raw?: string | null): string | null {
+  if (!raw) return null;
+  let v = String(raw).trim().toLowerCase();
+  try {
+    if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname;
+  } catch {}
+  v = v.replace(/^www\./, "");
+  return v || null;
+}
+function normalizeName(raw?: string | null): string {
+  if (!raw) return "";
+  return String(raw).trim().replace(/\s+/g, " ");
+}
+function normalizeEmail(raw?: string | null): string | null {
+  if (!raw) return null;
+  const v = String(raw).trim().toLowerCase();
+  return v.includes("@") ? v : null;
+}
 
 export async function GET(req: NextRequest) {
-  try {
-    const sql = getSql();
-    const { searchParams } = new URL(req.url);
+  const sql = getSql();
+  const { searchParams } = new URL(req.url);
 
-    const nameRaw = (searchParams.get("name") || "").trim();
-    const domainRaw = searchParams.get("domain");
-    const companyEmailRaw = searchParams.get("company_email");
-    const personalEmailRaw = searchParams.get("personal_email");
+  const name = normalizeName(searchParams.get("name"));
+  const domain = normalizeDomain(searchParams.get("domain"));
+  const companyEmail = normalizeEmail(searchParams.get("company_email"));
+  const personalEmail = normalizeEmail(searchParams.get("personal_email"));
 
-    const nameNorm = nameRaw ? normalizeName(nameRaw).toLowerCase() : "";
-    const domainNorm = normalizeDomain(domainRaw);
-    const companyEmailNorm = normalizeEmail(companyEmailRaw);
-    const personalEmailNorm = normalizeEmail(personalEmailRaw);
+  const emailList = [companyEmail, personalEmail].filter(Boolean) as string[];
 
-    const SIM_THRESHOLD = 0.6;
+  // 1) exact domain
+  const byDomain = domain
+    ? await sql/*sql*/`
+        select id, name, domain, country, org_type
+        from organizations
+        where lower(domain) = ${domain}
+        limit 10;
+      `
+    : [];
 
-    // Якщо нічого не введено — повернути порожньо
-    if (!nameNorm && !domainNorm && !companyEmailNorm && !personalEmailNorm) {
-      return NextResponse.json({ duplicates: [] }, { status: 200 });
+  // 2) exact emails → existing orgs via contacts
+  const byEmails = emailList.length
+    ? await sql/*sql*/`
+        select distinct o.id, o.name, o.domain, o.country, o.org_type, c.email
+        from contacts c
+        join organizations o on o.id = c.org_id
+        where lower(c.email) = any(${sql.array(emailList)})
+        limit 20;
+      `
+    : [];
+
+  // 3) loose name match (safe fallback without pg_trgm)
+  const byName = name
+    ? await sql/*sql*/`
+        select id, name, domain, country, org_type
+        from organizations
+        where lower(name) ilike ${'%' + name.toLowerCase() + '%'}
+        order by created_at desc
+        limit 20;
+      `
+    : [];
+
+  // merge unique by id
+  type Org = { id: number; name: string; domain?: string | null; country?: string | null; org_type?: string | null; email?: string | null; };
+  const seen = new Set<number>();
+  const pushUnique = (arr: Org[], acc: Org[]) => {
+    for (const r of arr) {
+      if (!seen.has(r.id)) { seen.add(r.id); acc.push(r); }
     }
+  };
+  const merged: Org[] = [];
+  pushUnique(byDomain as any, merged);
+  pushUnique((byEmails as any).map((x: any) => ({ ...x, email: x.email })), merged);
+  pushUnique(byName as any, merged);
 
-    const rows = await sql/*sql*/`
-      WITH cand AS (
-        SELECT
-          id, name, org_type, domain, country,
-          company_email, personal_email, last_contact_at,
-          similarity(lower(name), ${nameNorm}) AS name_sim,
-          CASE WHEN ${domainNorm} IS NOT NULL AND lower(COALESCE(domain,'')) = ${domainNorm ?? ""} THEN 1 ELSE 0 END AS domain_exact,
-          CASE WHEN ${nameRaw.toLowerCase()} <> '' AND lower(name) = ${nameRaw.toLowerCase()} THEN 1 ELSE 0 END AS name_exact,
-          CASE WHEN ${companyEmailNorm} IS NOT NULL AND lower(COALESCE(company_email,'')) = ${companyEmailNorm ?? ""} THEN 1 ELSE 0 END AS company_email_exact,
-          CASE WHEN ${personalEmailNorm} IS NOT NULL AND lower(COALESCE(personal_email,'')) = ${personalEmailNorm ?? ""} THEN 1 ELSE 0 END AS personal_email_exact
-        FROM organizations
-        WHERE
-          (${domainNorm} IS NOT NULL AND lower(COALESCE(domain,'')) = ${domainNorm ?? ""})
-          OR (${nameNorm} <> '' AND similarity(lower(name), ${nameNorm}) >= ${SIM_THRESHOLD})
-          OR (${nameRaw.toLowerCase()} <> '' AND lower(name) = ${nameRaw.toLowerCase()})
-          OR (${companyEmailNorm} IS NOT NULL AND lower(COALESCE(company_email,'')) = ${companyEmailNorm ?? ""})
-          OR (${personalEmailNorm} IS NOT NULL AND lower(COALESCE(personal_email,'')) = ${personalEmailNorm ?? ""})
-        ORDER BY
-          domain_exact DESC, name_exact DESC,
-          company_email_exact DESC, personal_email_exact DESC,
-          name_sim DESC NULLS LAST, last_contact_at DESC NULLS LAST
-        LIMIT 10
-      )
-      SELECT * FROM cand;
-    ` as any[];
+  // shape with match info
+  const duplicates = merged.map((o: any) => {
+    const domain_exact = !!(domain && o.domain && domain.toLowerCase() === String(o.domain).toLowerCase());
+    const name_exact = !!(name && o.name && name.toLowerCase() === String(o.name).toLowerCase());
+    const name_partial = !!(name && o.name && String(o.name).toLowerCase().includes(name.toLowerCase()));
 
-    return NextResponse.json(
-      {
-        duplicates: rows.map((c) => ({
-          id: c.id,
-          name: c.name,
-          org_type: c.org_type,
-          domain: c.domain,
-          country: c.country,
-          company_email: c.company_email,
-          personal_email: c.personal_email,
-          last_contact_at: c.last_contact_at,
-          name_similarity: Number(c.name_sim ?? 0),
-          domain_exact: Boolean(c.domain_exact),
-          name_exact: Boolean(c.name_exact),
-          company_email_exact: Boolean(c.company_email_exact),
-          personal_email_exact: Boolean(c.personal_email_exact),
-        })),
-      },
-      { status: 200 }
-    );
-  } catch (e) {
-    console.error("GET /api/orgs/dedupe error:", e);
-    return NextResponse.json({ duplicates: [] }, { status: 200 });
-  }
-}
+    // via_email: якщо цей org прийшов з byEmails — покажемо який саме
+    let via_email: string | null = null;
+    if ((byEmails as any).length) {
+      const hit = (byEmails as any).find((x: any) => x.id === o.id);
+      via_email = hit?.em_

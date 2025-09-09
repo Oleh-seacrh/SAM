@@ -40,25 +40,32 @@ function mapTabToType(v?: string | null): "client" | "prospect" | "supplier" | n
    - type OR tab: 'client' | 'prospect' | 'supplier' (UI може надсилати 'Clients' тощо)
    - limit, offset
 */
+// app/api/orgs/route.ts  — тільки GET нижче заміни
 export async function GET(req: NextRequest) {
   const sql = getSql();
   const { searchParams } = new URL(req.url);
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
-
-  // приймаємо type | tab | org_type
   const rawType = searchParams.get("type") ?? searchParams.get("tab") ?? searchParams.get("org_type");
   const type = mapTabToType(rawType); // "client" | "prospect" | "supplier" | null
-
   const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
   try {
-    // динамічна побудова WHERE — без null-параметрів
-    const rows = await sql/*sql*/`
+    // meta: total rows + counts per type
+    const [{ total }] = await sql/*sql*/`select count(*)::int as total from organizations;` as any;
+    const byType = await sql/*sql*/`
+      select org_type, count(*)::int as cnt
+      from organizations
+      group by org_type
+      order by org_type;
+    ` as any;
+
+    // основний запит (динамічний WHERE без null-параметрів)
+    const items = await sql/*sql*/`
       select id, name, domain, country, org_type, last_contact_at, created_at
       from organizations
-      where 1 = 1
+      where 1=1
       ${type ? sql/*sql*/`and org_type = ${type}` : sql``}
       ${
         q
@@ -74,7 +81,13 @@ export async function GET(req: NextRequest) {
       limit ${limit} offset ${offset};
     `;
 
-    return NextResponse.json({ items: rows, limit, offset });
+    return NextResponse.json({
+      meta: {
+        received: { q, rawType, mappedType: type, limit, offset },
+        totals: { all: total, byType },
+      },
+      items,
+    });
   } catch (err: any) {
     return NextResponse.json(
       { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },
@@ -82,6 +95,7 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
 
 
 /* ───────── POST: create with soft-lock & hard-lock ───────── */

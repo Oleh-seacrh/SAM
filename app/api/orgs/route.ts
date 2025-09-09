@@ -24,39 +24,58 @@ function normalizeEmail(raw?: string | null): string | null {
   return v.includes("@") ? v : null;
 }
 
-/* ───────── GET: list organizations (used by Clients/Prospects/Suppliers) ─────────
-   Query params:
-   - q: string (search by name/domain)
-   - type OR tab: 'client' | 'prospect' | 'supplier'  (optional)
-   - limit, offset: numbers (optional; defaults 50/0)
+// map UI tabs → org_type in DB
+function mapTabToType(v?: string | null): "client" | "prospect" | "supplier" | null {
+  if (!v) return null;
+  const s = v.toLowerCase();
+  if (s === "clients" || s === "client") return "client";
+  if (s === "prospects" || s === "prospect") return "prospect";
+  if (s === "suppliers" || s === "supplier") return "supplier";
+  return null;
+}
+
+/* ───────── GET: list organizations ─────────
+   Query:
+   - q: string
+   - type OR tab: 'client' | 'prospect' | 'supplier' (UI може надсилати 'Clients' тощо)
+   - limit, offset
 */
 export async function GET(req: NextRequest) {
   const sql = getSql();
   const { searchParams } = new URL(req.url);
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
-  const type = (searchParams.get("type") ?? searchParams.get("tab")) || null;
+  const rawType = searchParams.get("type") ?? searchParams.get("tab");
+  const type = mapTabToType(rawType);
   const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
-  const rows = await sql/*sql*/`
-    select id, name, domain, country, org_type, last_contact_at, created_at
-    from organizations
-    where
-      (${type} is null or org_type = ${type})
-      and (
-        ${q} = '' or
-        lower(name) like ${'%' + q + '%'} or
-        (domain is not null and lower(domain) like ${'%' + q + '%'})
-      )
-    order by created_at desc
-    limit ${limit} offset ${offset};
-  `;
-
-  return NextResponse.json({ items: rows, limit, offset });
+  try {
+    const rows = await sql/*sql*/`
+      select
+        id, name, domain, country, org_type, last_contact_at, created_at
+      from organizations
+      where
+        (${type} is null or org_type = ${type})
+        and (
+          ${q} = '' or
+          lower(name) like ${'%' + q + '%'} or
+          (domain is not null and lower(domain) like ${'%' + q + '%'})
+        )
+      order by created_at desc
+      limit ${limit} offset ${offset};
+    `;
+    return NextResponse.json({ items: rows, limit, offset });
+  } catch (err: any) {
+    // щоб не валити UI — віддаємо 500 з короткою причиною
+    return NextResponse.json(
+      { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },
+      { status: 500 }
+    );
+  }
 }
 
-/* ───────── POST: create organization with soft-lock & hard-lock ───────── */
+/* ───────── POST: create with soft-lock & hard-lock ───────── */
 export async function POST(req: NextRequest) {
   const sql = getSql();
 
@@ -65,9 +84,9 @@ export async function POST(req: NextRequest) {
   const name = normalizeName(body?.name);
   const domain = normalizeDomain(body?.domain);
   const country = body?.country ?? null;
-  const org_type = body?.org_type ?? "client";
+  const org_type = mapTabToType(body?.org_type) ?? "client";
 
-  const emails: string[] = (Array.isArray(body?.emails) ? body.emails : (body?.emails ? [body.emails] : []))
+  const emails: string[] = (Array.isArray(body?.emails) ? body.emails : (body?.emails ? [body?.emails] : []))
     .map((e: any) => normalizeEmail(String(e)))
     .filter(Boolean) as string[];
 
@@ -92,7 +111,9 @@ export async function POST(req: NextRequest) {
       const data = await dedupeRes.json().catch(() => ({}));
       duplicates = data?.duplicates ?? data?.candidates ?? [];
     }
-  } catch { /* ignore soft-lock failure */ }
+  } catch {
+    // ігноруємо—soft-lock не повинен ламати створення зовсім
+  }
 
   const allowOverride = req.headers.get("x-allow-duplicate") === "true";
   if (duplicates.length && !allowOverride) {
@@ -102,7 +123,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3) Insert with hard-lock handling (unique indexes in DB)
+  // 3) Insert + hard-lock
   try {
     const org = (await sql/*sql*/`
       insert into organizations (name, domain, country, org_type)
@@ -138,11 +159,14 @@ export async function POST(req: NextRequest) {
         { status: 409 }
       );
     }
-    throw err;
+    return NextResponse.json(
+      { error: "INTERNAL_ERROR", detail: msg },
+      { status: 500 }
+    );
   }
 }
 
-/* ───────── OPTIONS (щоб не ловити 405 на preflight) ───────── */
+/* ───────── OPTIONS (щоб не ловити 405) ───────── */
 export async function OPTIONS() {
   return new Response(null, { status: 204 });
 }

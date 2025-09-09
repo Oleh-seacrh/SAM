@@ -52,7 +52,7 @@ export async function GET(req: NextRequest) {
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
   try {
-    // meta: total rows + counts per type
+    // для сумісності з UI: лічильники
     const [{ total }] = await sql/*sql*/`select count(*)::int as total from organizations;` as any;
     const byType = await sql/*sql*/`
       select org_type, count(*)::int as cnt
@@ -61,8 +61,8 @@ export async function GET(req: NextRequest) {
       order by org_type;
     ` as any;
 
-    // основний запит (динамічний WHERE без null-параметрів)
-    const items = await sql/*sql*/`
+    // основний вибір
+    const rows = await sql/*sql*/`
       select id, name, domain, country, org_type, last_contact_at, created_at
       from organizations
       where 1=1
@@ -81,13 +81,20 @@ export async function GET(req: NextRequest) {
       limit ${limit} offset ${offset};
     `;
 
-    return NextResponse.json({
-      meta: {
-        received: { q, rawType, mappedType: type, limit, offset },
-        totals: { all: total, byType },
-      },
-      items,
-    });
+    // ⚠️ СУМІСНІСТЬ З ФРОНТОМ:
+    // - деякі екрани могли очікувати "items", інші — "orgs" або "data".
+    // - віддаємо все одразу, щоб UI гарантовано підхопив.
+    const payload = {
+      items: rows,
+      orgs: rows,
+      data: rows,
+      limit,
+      offset,
+      total,
+      countsByType: byType,
+    };
+
+    return NextResponse.json(payload);
   } catch (err: any) {
     return NextResponse.json(
       { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },

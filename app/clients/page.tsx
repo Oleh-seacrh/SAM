@@ -240,7 +240,7 @@ function Modal({
 }
 
 /* =========================================================
- * Row (Preview card) — UPDATED styles & content
+ * Row (Preview card)
  * =======================================================*/
 
 function Row({
@@ -255,121 +255,124 @@ function Row({
   const href = domainHref(item.domain);
 
   return (
-    <Card className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
-      {/* Left color strip */}
-      <span
-        className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(
-          item.org_type
-        )}`}
-        aria-hidden
-      />
+    // anchor + невеликий offset для скролу під шапку
+    <div id={`org-${item.id}`} className="scroll-mt-24">
+      <Card className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+        {/* Left color strip */}
+        <span
+          className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(
+            item.org_type
+          )}`}
+          aria-hidden
+        />
 
-      <CardHeader className="py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            {/* Name bigger */}
-            <div className="text-lg font-semibold leading-tight truncate">
-              {item.name || "—"}
-            </div>
+        <CardHeader className="py-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              {/* Name bigger */}
+              <div className="text-lg font-semibold leading-tight truncate">
+                {item.name || "—"}
+              </div>
 
-            {/* Meta: type/country/industry */}
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
-              <Badge>{item.org_type}</Badge>
-              {item.country ? <span>• {item.country}</span> : <span>• —</span>}
-              {item.industry ? <span>• {item.industry}</span> : null}
-              {/* optional chips */}
-              <div className="inline-flex gap-1">
-                {item.status ? (
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                    {item.status}
-                  </span>
-                ) : null}
-                {item.size_tag ? (
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                    Size: {item.size_tag}
-                  </span>
-                ) : null}
-                {item.source ? (
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                    Source: {item.source}
-                  </span>
-                ) : null}
+              {/* Meta: type/country/industry */}
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
+                <Badge>{item.org_type}</Badge>
+                {item.country ? <span>• {item.country}</span> : <span>• —</span>}
+                {item.industry ? <span>• {item.industry}</span> : null}
+                {/* optional chips */}
+                <div className="inline-flex gap-1">
+                  {item.status ? (
+                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                      {item.status}
+                    </span>
+                  ) : null}
+                  {item.size_tag ? (
+                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                      Size: {item.size_tag}
+                    </span>
+                  ) : null}
+                  {item.source ? (
+                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                      Source: {item.source}
+                    </span>
+                  ) : null}
+                </div>
               </div>
             </div>
+
+            {/* Domain on the right */}
+            <div className="flex items-center gap-2 shrink-0">
+              {href ? (
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs text-zinc-300 hover:text-white"
+                  title={item.domain || undefined}
+                >
+                  <Globe className="w-4 h-4" />
+                  <span className="hidden sm:inline">{item.domain}</span>
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              ) : (
+                <span className="text-xs text-muted-foreground border border-white/10 rounded-md px-2 py-0.5">
+                  No website
+                </span>
+              )}
+            </div>
+          </div>
+        </CardHeader>
+
+        <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 text-[13px]">
+          {/* Brands */}
+          <div>
+            <div className="text-[11px] text-muted-foreground mb-1">Brands</div>
+            <div className="truncate" title={item.brands || undefined}>
+              {item.brands || "—"}
+            </div>
           </div>
 
-          {/* Domain on the right */}
-          <div className="flex items-center gap-2 shrink-0">
-            {href ? (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-zinc-300 hover:text-white"
-                title={item.domain || undefined}
-              >
-                <Globe className="w-4 h-4" />
-                <span className="hidden sm:inline">{item.domain}</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            ) : (
-              <span className="text-xs text-muted-foreground border border-white/10 rounded-md px-2 py-0.5">
-                No website
+          {/* Products */}
+          <div className="md:col-span-2">
+            <div className="text-[11px] text-muted-foreground mb-1">
+              Products (latest inquiry)
+            </div>
+            <div className="truncate" title={item.products || undefined}>
+              {item.products || "—"}
+            </div>
+          </div>
+
+          {/* Deal value */}
+          <div>
+            <div className="text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
+              <DollarSign className="w-3 h-3" /> Deal value
+            </div>
+            <div className="truncate" title={item.deal_value_usd?.toString()}>
+              {formatMoney(item.deal_value_usd)}
+            </div>
+          </div>
+
+          {/* Footer line */}
+          <div className="md:col-span-4 mt-1 flex items-center justify-between text-[12px] text-muted-foreground">
+            <div className="inline-flex items-center gap-2">
+              <CalendarClock className="w-4 h-4" />
+              <span>Last contact:</span>
+              <span className="text-foreground font-medium">
+                {fmtDate(item.last_contact_at)}
               </span>
-            )}
+            </div>
+            <div className="flex gap-2">
+              <Button size="sm" variant="secondary" onClick={() => onOpen(item.id)}>
+                Open
+              </Button>
+              <Button size="sm" variant="outline" onClick={() => onDelete(item.id)}>
+                Delete
+              </Button>
+            </div>
           </div>
-        </div>
-      </CardHeader>
-
-      <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 text-[13px]">
-        {/* Brands */}
-        <div>
-          <div className="text-[11px] text-muted-foreground mb-1">Brands</div>
-          <div className="truncate" title={item.brands || undefined}>
-            {item.brands || "—"}
-          </div>
-        </div>
-
-        {/* Products */}
-        <div className="md:col-span-2">
-          <div className="text-[11px] text-muted-foreground mb-1">
-            Products (latest inquiry)
-          </div>
-          <div className="truncate" title={item.products || undefined}>
-            {item.products || "—"}
-          </div>
-        </div>
-
-        {/* Deal value */}
-        <div>
-          <div className="text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
-            <DollarSign className="w-3 h-3" /> Deal value
-          </div>
-          <div className="truncate" title={item.deal_value_usd?.toString()}>
-            {formatMoney(item.deal_value_usd)}
-          </div>
-        </div>
-
-        {/* Footer line */}
-        <div className="md:col-span-4 mt-1 flex items-center justify-between text-[12px] text-muted-foreground">
-          <div className="inline-flex items-center gap-2">
-            <CalendarClock className="w-4 h-4" />
-            <span>Last contact:</span>
-            <span className="text-foreground font-medium">
-              {fmtDate(item.last_contact_at)}
-            </span>
-          </div>
-          <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={() => onOpen(item.id)}>
-              Open
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => onDelete(item.id)}>
-              Delete
-            </Button>
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
@@ -423,6 +426,7 @@ function SoftLockDialog({
   candidates,
   onClose,
   onCreateAnyway,
+  onOpenCandidate,
 }: {
   open: boolean;
   candidates: Array<{
@@ -431,10 +435,11 @@ function SoftLockDialog({
     domain?: string | null;
     country?: string | null;
     org_type?: string | null;
-    match?: { via_email?: string | null; domain_exact?: boolean; name_exact?: boolean };
+    match?: { via_email?: string | null; domain_exact?: boolean; name_exact?: boolean; name_partial?: boolean };
   }>;
   onClose: () => void;
   onCreateAnyway: () => void;
+  onOpenCandidate: (id: string | number) => void;
 }) {
   if (!open) return null;
   return (
@@ -443,8 +448,8 @@ function SoftLockDialog({
       <div className="absolute inset-0 flex items-center justify-center p-4">
         <div className="w-full max-w-xl rounded-2xl bg-neutral-900 border border-neutral-700 shadow-2xl">
           <div className="px-5 py-4 border-b border-neutral-800">
-            <div className="text-lg font-semibold">Possible duplicates found</div>
-            <div className="text-sm text-neutral-400">We found similar organizations by domain / email / name.</div>
+            <div className="text-lg font-semibold">Знайдені можливі дублікати</div>
+            <div className="text-sm text-neutral-400">Збіги по домену / пошті / назві.</div>
           </div>
           <div className="p-5 space-y-2 max-h-[60vh] overflow-auto">
             {candidates.map((o) => (
@@ -455,15 +460,19 @@ function SoftLockDialog({
                   {o.match?.via_email ? ` • via ${o.match.via_email}` : ""}
                   {o.match?.domain_exact ? " • domain exact" : ""}
                   {o.match?.name_exact ? " • name exact" : ""}
+                  {o.match?.name_partial && !o.match?.name_exact ? " • name similar" : ""}
                 </div>
-                <a
-                  className="text-sm underline inline-block mt-1"
-                  href={`/orgs/${o.id}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Open company
-                </a>
+
+                {/* Відкрити в цьому ж списку */}
+                <div className="mt-2">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onOpenCandidate(o.id)}
+                  >
+                    Відкрити тут
+                  </Button>
+                </div>
               </div>
             ))}
             {candidates.length === 0 && (
@@ -471,8 +480,8 @@ function SoftLockDialog({
             )}
           </div>
           <div className="px-5 py-4 flex items-center justify-end gap-2 border-t border-neutral-800">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button onClick={onCreateAnyway}>Create anyway</Button>
+            <Button variant="outline" onClick={onClose}>Закрити</Button>
+            <Button onClick={onCreateAnyway}>Створити попри дубль</Button>
           </div>
         </div>
       </div>
@@ -504,9 +513,11 @@ function NoticeDialog({
 function NewLeadModal({
   onClose,
   onCreated,
+  onOpenOrg,
 }: {
   onClose: () => void;
   onCreated: () => void;
+  onOpenOrg: (id: string) => void; // НОВЕ
 }) {
   const [name, setName] = useState("");
   const [type, setType] = useState<OrgType>("prospect");
@@ -541,7 +552,7 @@ function NewLeadModal({
   const [softOpen, setSoftOpen] = useState(false);
   const [override, setOverride] = useState(false);
 
-  // NEW: notice dialog state (для заміни alert)
+  // notice dialog для помилок
   const [notice, setNotice] = useState<{ title: string; message: string } | null>(null);
 
   const create = async (force = false) => {
@@ -609,6 +620,13 @@ function NewLeadModal({
     setSoftOpen(false);
     setOverride(true);
     create(true);
+  };
+
+  // коли юзер тисне "Відкрити тут" у софт-діалозі
+  const openCandidateHere = (id: string | number) => {
+    setSoftOpen(false);
+    onClose();
+    onOpenOrg(String(id));
   };
 
   // Загальний overlay для самої модалки (щоб фон не просвічував)
@@ -714,9 +732,10 @@ function NewLeadModal({
         candidates={dupes}
         onClose={() => setSoftOpen(false)}
         onCreateAnyway={createAnyway}
+        onOpenCandidate={openCandidateHere}
       />
 
-      {/* Notice dialog (заміна alert у модалці) */}
+      {/* Notice dialog */}
       <NoticeDialog
         open={!!notice}
         title={notice?.title || ""}
@@ -825,7 +844,7 @@ export default function ClientsPage() {
   const [detail, setDetail] = useState<Detail | null>(null);
   const [openLoading, setOpenLoading] = useState(false);
 
-  // NEW: page-level notice (заміна alert поза модалками)
+  // page-level notice
   const [pageNotice, setPageNotice] = useState<{ title: string; message: string } | null>(null);
 
   const reload = async (which: OrgType | "all") => {
@@ -900,6 +919,24 @@ export default function ClientsPage() {
       return;
     }
     await reload(t);
+  };
+
+  // відкриття з софтлоку: скролимось до елемента + коротко підсвічуємо + якір у URL
+  const openOrgHere = (id: string) => {
+    const anchor = `org-${id}`;
+    // ставимо хеш, щоб можна було повернутись/поділитись посиланням
+    try { window.location.hash = anchor; } catch {}
+    // скролимо та підсвічуємо
+    requestAnimationFrame(() => {
+      const el = document.getElementById(anchor);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("ring-2", "ring-primary", "ring-offset-2", "ring-offset-background", "rounded-2xl");
+        setTimeout(() => {
+          el.classList.remove("ring-2", "ring-primary", "ring-offset-2", "ring-offset-background", "rounded-2xl");
+        }, 1500);
+      }
+    });
   };
 
   return (
@@ -1051,6 +1088,7 @@ export default function ClientsPage() {
             setShowNew(false);
             await (view === "tabs" ? reload(tab) : reload("all"));
           }}
+          onOpenOrg={openOrgHere} // <- новий колбек для софтлоку
         />
       )}
 
@@ -1066,7 +1104,7 @@ export default function ClientsPage() {
         />
       )}
 
-      {/* page-level notice (для помилок поза модалками) */}
+      {/* page-level notice */}
       <NoticeDialog
         open={!!pageNotice}
         title={pageNotice?.title || ""}
@@ -1076,4 +1114,3 @@ export default function ClientsPage() {
     </div>
   );
 }
-

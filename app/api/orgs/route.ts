@@ -4,7 +4,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
-// ── helpers (локально, щоб не ламалось без lib/normalize)
+/* ───────── helpers ───────── */
 function normalizeDomain(raw?: string | null): string | null {
   if (!raw) return null;
   let v = String(raw).trim().toLowerCase();
@@ -24,17 +24,49 @@ function normalizeEmail(raw?: string | null): string | null {
   return v.includes("@") ? v : null;
 }
 
+/* ───────── GET: list organizations (used by Clients/Prospects/Suppliers) ─────────
+   Query params:
+   - q: string (search by name/domain)
+   - type OR tab: 'client' | 'prospect' | 'supplier'  (optional)
+   - limit, offset: numbers (optional; defaults 50/0)
+*/
+export async function GET(req: NextRequest) {
+  const sql = getSql();
+  const { searchParams } = new URL(req.url);
+
+  const q = (searchParams.get("q") ?? "").trim().toLowerCase();
+  const type = (searchParams.get("type") ?? searchParams.get("tab")) || null;
+  const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
+  const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
+
+  const rows = await sql/*sql*/`
+    select id, name, domain, country, org_type, last_contact_at, created_at
+    from organizations
+    where
+      (${type} is null or org_type = ${type})
+      and (
+        ${q} = '' or
+        lower(name) like ${'%' + q + '%'} or
+        (domain is not null and lower(domain) like ${'%' + q + '%'})
+      )
+    order by created_at desc
+    limit ${limit} offset ${offset};
+  `;
+
+  return NextResponse.json({ items: rows, limit, offset });
+}
+
+/* ───────── POST: create organization with soft-lock & hard-lock ───────── */
 export async function POST(req: NextRequest) {
   const sql = getSql();
 
-  // 1) Парсимо тіло
+  // 1) Parse body
   const body = await req.json().catch(() => ({} as any));
   const name = normalizeName(body?.name);
   const domain = normalizeDomain(body?.domain);
   const country = body?.country ?? null;
   const org_type = body?.org_type ?? "client";
 
-  // emails: допускаємо рядок/масив/порожнє
   const emails: string[] = (Array.isArray(body?.emails) ? body.emails : (body?.emails ? [body.emails] : []))
     .map((e: any) => normalizeEmail(String(e)))
     .filter(Boolean) as string[];
@@ -43,8 +75,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "VALIDATION_ERROR", detail: "Name is required" }, { status: 400 });
   }
 
-  // 2) Soft-lock: перевірка дублів через dedupe API
-  //    (company_email/personal_email опційні — передамо всі уніфіковано як emails[])
+  // 2) Soft-lock via /api/orgs/dedupe
   const params = new URLSearchParams();
   params.set("name", name);
   if (domain) params.set("domain", domain);
@@ -54,12 +85,14 @@ export async function POST(req: NextRequest) {
   const dedupeUrl = new URL("/api/orgs/dedupe", req.url);
   dedupeUrl.search = params.toString();
 
-  const dedupeRes = await fetch(dedupeUrl.toString(), { method: "GET" });
   let duplicates: any[] = [];
-  if (dedupeRes.ok) {
-    const data = await dedupeRes.json().catch(() => ({}));
-    duplicates = data?.duplicates ?? data?.candidates ?? [];
-  }
+  try {
+    const dedupeRes = await fetch(dedupeUrl.toString(), { method: "GET" });
+    if (dedupeRes.ok) {
+      const data = await dedupeRes.json().catch(() => ({}));
+      duplicates = data?.duplicates ?? data?.candidates ?? [];
+    }
+  } catch { /* ignore soft-lock failure */ }
 
   const allowOverride = req.headers.get("x-allow-duplicate") === "true";
   if (duplicates.length && !allowOverride) {
@@ -69,7 +102,7 @@ export async function POST(req: NextRequest) {
     );
   }
 
-  // 3) Insert (і обробка hard-lock через унікальні індекси)
+  // 3) Insert with hard-lock handling (unique indexes in DB)
   try {
     const org = (await sql/*sql*/`
       insert into organizations (name, domain, country, org_type)
@@ -105,7 +138,11 @@ export async function POST(req: NextRequest) {
         { status: 409 }
       );
     }
-    // інші помилки — наверх
     throw err;
   }
+}
+
+/* ───────── OPTIONS (щоб не ловити 405 на preflight) ───────── */
+export async function OPTIONS() {
+  return new Response(null, { status: 204 });
 }

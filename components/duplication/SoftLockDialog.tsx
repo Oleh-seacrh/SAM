@@ -12,10 +12,7 @@ type Candidate = {
 };
 
 export default function SoftLockDialog({
-  open,
-  candidates,
-  onClose,
-  onCreateAnyway,
+  open, candidates, onClose, onCreateAnyway,
 }: {
   open: boolean;
   candidates: Candidate[];
@@ -23,7 +20,6 @@ export default function SoftLockDialog({
   onCreateAnyway: () => void;
 }) {
   useEffect(() => {
-    // блокуємо scroll фону, коли відкрито
     document.body.style.overflow = open ? "hidden" : "";
     return () => { document.body.style.overflow = ""; };
   }, [open]);
@@ -32,10 +28,7 @@ export default function SoftLockDialog({
 
   return (
     <div className="fixed inset-0 z-[60]">
-      {/* overlay */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-
-      {/* modal */}
       <div className="absolute inset-0 flex items-center justify-center p-4">
         <div className="w-full max-w-xl rounded-2xl bg-neutral-900 border border-neutral-700 shadow-2xl">
           <div className="px-5 py-4 border-b border-neutral-800">
@@ -71,13 +64,8 @@ export default function SoftLockDialog({
           </div>
 
           <div className="px-5 py-4 flex items-center justify-end gap-2 border-t border-neutral-800">
-            <button onClick={onClose} className="px-4 py-2 rounded-xl border border-neutral-700">
-              Cancel
-            </button>
-            <button
-              onClick={onCreateAnyway}
-              className="px-4 py-2 rounded-xl bg-white text-black font-medium"
-            >
+            <button onClick={onClose} className="px-4 py-2 rounded-xl border border-neutral-700">Cancel</button>
+            <button onClick={onCreateAnyway} className="px-4 py-2 rounded-xl bg-white text-black font-medium">
               Create anyway
             </button>
           </div>

@@ -7,18 +7,14 @@ import { getSql } from "@/lib/db";
 function normalizeDomain(raw?: string | null): string | null {
   if (!raw) return null;
   let v = String(raw).trim().toLowerCase();
-  try {
-    if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname;
-  } catch {}
+  try { if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname; } catch {}
   v = v.replace(/^www\./, "");
   return v || null;
 }
-
 function normalizeName(raw?: string | null): string {
   if (!raw) return "";
   return String(raw).trim().replace(/\s+/g, " ");
 }
-
 function normalizeEmail(raw?: string | null): string | null {
   if (!raw) return null;
   const v = String(raw).trim().toLowerCase();
@@ -36,7 +32,6 @@ export async function GET(req: NextRequest) {
 
   const emailList = [companyEmail, personalEmail].filter(Boolean) as string[];
 
-  // 1) exact domain
   const byDomain = domain
     ? await sql/*sql*/`
         select id, name, domain, country, org_type
@@ -46,7 +41,6 @@ export async function GET(req: NextRequest) {
       `
     : [];
 
-  // 2) exact emails → existing orgs via contacts
   const byEmails = emailList.length
     ? await sql/*sql*/`
         select distinct o.id, o.name, o.domain, o.country, o.org_type, c.email
@@ -57,7 +51,6 @@ export async function GET(req: NextRequest) {
       `
     : [];
 
-  // 3) loose name match
   const byName = name
     ? await sql/*sql*/`
         select id, name, domain, country, org_type
@@ -68,33 +61,19 @@ export async function GET(req: NextRequest) {
       `
     : [];
 
-  // merge unique by id
-  type Org = {
-    id: number;
-    name: string;
-    domain?: string | null;
-    country?: string | null;
-    org_type?: string | null;
-    email?: string | null;
-  };
-
+  type Org = { id: number; name: string; domain?: string | null; country?: string | null; org_type?: string | null; email?: string | null; };
   const seen = new Set<number>();
   const merged: Org[] = [];
 
   function pushUnique(arr: Org[]) {
     for (const r of arr) {
-      if (!seen.has(r.id)) {
-        seen.add(r.id);
-        merged.push(r);
-      }
+      if (!seen.has(r.id)) { seen.add(r.id); merged.push(r); }
     }
   }
-
   pushUnique(byDomain as any);
   pushUnique((byEmails as any).map((x: any) => ({ ...x, email: x.email })));
   pushUnique(byName as any);
 
-  // shape with match info
   const duplicates = merged.map((o: any) => {
     const domain_exact = !!(domain && o.domain && domain.toLowerCase() === String(o.domain).toLowerCase());
     const name_exact = !!(name && o.name && name.toLowerCase() === String(o.name).toLowerCase());

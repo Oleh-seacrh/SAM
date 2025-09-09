@@ -46,28 +46,34 @@ export async function GET(req: NextRequest) {
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
 
-  // підтримуємо всі варіанти: type=, tab=, org_type=
+  // приймаємо type | tab | org_type
   const rawType = searchParams.get("type") ?? searchParams.get("tab") ?? searchParams.get("org_type");
-  const type = mapTabToType(rawType);
+  const type = mapTabToType(rawType); // "client" | "prospect" | "supplier" | null
 
   const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
   try {
+    // динамічна побудова WHERE — без null-параметрів
     const rows = await sql/*sql*/`
-      select
-        id, name, domain, country, org_type, last_contact_at, created_at
+      select id, name, domain, country, org_type, last_contact_at, created_at
       from organizations
-      where
-        (${type} is null or org_type = ${type})
-        and (
-          ${q} = '' or
-          lower(name) like ${'%' + q + '%'} or
-          (domain is not null and lower(domain) like ${'%' + q + '%'})
-        )
+      where 1 = 1
+      ${type ? sql/*sql*/`and org_type = ${type}` : sql``}
+      ${
+        q
+          ? sql/*sql*/`
+              and (
+                lower(name) like ${'%' + q + '%'}
+                or (domain is not null and lower(domain) like ${'%' + q + '%'})
+              )
+            `
+          : sql``
+      }
       order by created_at desc
       limit ${limit} offset ${offset};
     `;
+
     return NextResponse.json({ items: rows, limit, offset });
   } catch (err: any) {
     return NextResponse.json(
@@ -76,6 +82,7 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
 
 /* ───────── POST: create with soft-lock & hard-lock ───────── */
 export async function POST(req: NextRequest) {

@@ -41,12 +41,13 @@ export async function GET(req: NextRequest) {
       `
     : [];
 
+  // ⚠️ БЕЗ sql.array: використовуємо CSV + string_to_array
   const byEmails = emailList.length
     ? await sql/*sql*/`
         select distinct o.id, o.name, o.domain, o.country, o.org_type, c.email
         from contacts c
         join organizations o on o.id = c.org_id
-        where lower(c.email) = any(${sql.array(emailList)})
+        where lower(c.email) = any(string_to_array(${emailList.join(",")}, ','))
         limit 20;
       `
     : [];
@@ -55,7 +56,7 @@ export async function GET(req: NextRequest) {
     ? await sql/*sql*/`
         select id, name, domain, country, org_type
         from organizations
-        where lower(name) ilike ${'%' + name.toLowerCase() + '%'}
+        where lower(name) like ${'%' + name.toLowerCase() + '%'}
         order by created_at desc
         limit 20;
       `
@@ -78,13 +79,11 @@ export async function GET(req: NextRequest) {
     const domain_exact = !!(domain && o.domain && domain.toLowerCase() === String(o.domain).toLowerCase());
     const name_exact = !!(name && o.name && name.toLowerCase() === String(o.name).toLowerCase());
     const name_partial = !!(name && o.name && String(o.name).toLowerCase().includes(name.toLowerCase()));
-
     let via_email: string | null = null;
     if ((byEmails as any).length) {
       const hit = (byEmails as any).find((x: any) => x.id === o.id);
       via_email = hit?.email ?? null;
     }
-
     return {
       id: o.id,
       name: o.name,

@@ -462,7 +462,7 @@ function SoftLockDialog({
                   target="_blank"
                   rel="noreferrer"
                 >
-                  Open existing
+                  Open company
                 </a>
               </div>
             ))}

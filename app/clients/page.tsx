@@ -417,10 +417,70 @@ function GroupSection({
   );
 }
 
-/* =========================================================
- * New Lead (без змін у логіці; мінімальний UI)
- * =======================================================*/
+/* ========= SoftLock dialog (центрований, з overlay) ========= */
+function SoftLockDialog({
+  open,
+  candidates,
+  onClose,
+  onCreateAnyway,
+}: {
+  open: boolean;
+  candidates: Array<{
+    id: string | number;
+    name: string;
+    domain?: string | null;
+    country?: string | null;
+    org_type?: string | null;
+    match?: { via_email?: string | null; domain_exact?: boolean; name_exact?: boolean };
+  }>;
+  onClose: () => void;
+  onCreateAnyway: () => void;
+}) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60]">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="w-full max-w-xl rounded-2xl bg-neutral-900 border border-neutral-700 shadow-2xl">
+          <div className="px-5 py-4 border-b border-neutral-800">
+            <div className="text-lg font-semibold">Possible duplicates found</div>
+            <div className="text-sm text-neutral-400">We found similar organizations by domain / email / name.</div>
+          </div>
+          <div className="p-5 space-y-2 max-h-[60vh] overflow-auto">
+            {candidates.map((o) => (
+              <div key={o.id} className="rounded-xl border border-neutral-800 p-3">
+                <div className="font-medium">{o.name}</div>
+                <div className="text-xs text-neutral-400">
+                  {o.domain ?? "—"} • {o.country ?? "—"} • {o.org_type ?? "—"}
+                  {o.match?.via_email ? ` • via ${o.match.via_email}` : ""}
+                  {o.match?.domain_exact ? " • domain exact" : ""}
+                  {o.match?.name_exact ? " • name exact" : ""}
+                </div>
+                <a
+                  className="text-sm underline inline-block mt-1"
+                  href={`/orgs/${o.id}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Open existing
+                </a>
+              </div>
+            ))}
+            {candidates.length === 0 && (
+              <div className="text-sm text-neutral-400">No candidates</div>
+            )}
+          </div>
+          <div className="px-5 py-4 flex items-center justify-end gap-2 border-t border-neutral-800">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={onCreateAnyway}>Create anyway</Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
 
+/* ===================== New Lead (оновлена) ===================== */
 function NewLeadModal({
   onClose,
   onCreated,
@@ -433,7 +493,14 @@ function NewLeadModal({
   const [domain, setDomain] = useState("");
   const [country, setCountry] = useState("");
 
-  // Optional inquiry items
+  // NEW: emails (comma/space separated)
+  const [emailsInput, setEmailsInput] = useState("");
+  const emails = useMemo(
+    () => emailsInput.split(/[,\s;]+/).map((x) => x.trim().toLowerCase()).filter(Boolean),
+    [emailsInput]
+  );
+
+  // Optional inquiry items (залишив як було)
   type Item = {
     product: string;
     brand?: string;
@@ -445,192 +512,190 @@ function NewLeadModal({
   const addItem = () => setItems((p) => [...p, { product: "" }]);
   const updItem = (i: number, patch: Partial<Item>) =>
     setItems((p) => p.map((x, idx) => (idx === i ? { ...x, ...patch } : x)));
-  const rmItem = (i: number) =>
-    setItems((p) => p.filter((_, idx) => idx !== i));
+  const rmItem = (i: number) => setItems((p) => p.filter((_, idx) => idx !== i));
 
   const [saving, setSaving] = useState(false);
 
-  const create = async () => {
-    if (!name.trim()) {
-      alert("Name is required");
-      return;
-    }
+  // Soft-lock state
+  const [dupes, setDupes] = useState<any[]>([]);
+  const [softOpen, setSoftOpen] = useState(false);
+  const [override, setOverride] = useState(false);
+
+  const create = async (force = false) => {
     try {
       setSaving(true);
       const r = await fetch("/api/orgs", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: {
+          "content-type": "application/json",
+          ...(force || override ? { "x-allow-duplicate": "true" } : {}),
+        },
         body: JSON.stringify({
-          name: name.trim(),
+          name: name || undefined,           // name більше не обов’язкове
           org_type: type,
-          domain: domain.trim() || null,
-          country: country.trim() || null,
+          domain: domain || undefined,
+          country: country || undefined,
+          emails,                            // NEW
         }),
       });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        alert(j?.error || "Create org error");
-        return;
+
+      // Soft-lock (409) → показати діалог
+      if (r.status === 409) {
+        const j = await r.json().catch(() => ({}));
+        if (j?.error === "DUPLICATE_SOFTLOCK") {
+          setDupes(j?.duplicates ?? []);
+          setSoftOpen(true);
+          setOverride(false);
+          return;
+        }
+        if (j?.error === "DUPLICATE_HARDLOCK") {
+          alert(j?.detail || "Duplicate");
+          return;
+        }
       }
 
-      if (items.length) {
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert(j?.detail || j?.error || "Create org error");
+        return;
+      }
+      const orgId = j?.org?.id ?? j?.id;
+
+      // створення inquiry (як і було)
+      if (items.length && orgId) {
         const r2 = await fetch("/api/inquiries", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            org_id: j.id,
-            summary: "Manual inquiry",
-            items,
-          }),
+          body: JSON.stringify({ org_id: orgId, summary: "Manual inquiry", items }),
         });
         const j2 = await r2.json().catch(() => ({}));
         if (!r2.ok) {
-          alert(j2?.error || "Create inquiry error");
+          alert(j2?.detail || j2?.error || "Create inquiry error");
           return;
         }
       }
 
       onCreated();
+      onClose();
     } finally {
       setSaving(false);
     }
   };
 
+  const createAnyway = () => {
+    setSoftOpen(false);
+    setOverride(true);
+    create(true);
+  };
+
+  // Загальний overlay для самої модалки (щоб фон не просвічував)
   return (
-    <Modal title="New Lead" onClose={onClose}>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        <div>
-          <div className="text-xs text-muted-foreground mb-1">Name *</div>
-          <Input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Company or contact name"
-          />
-        </div>
-        <div>
-          <div className="text-xs text-muted-foreground mb-1">Type</div>
-          <div className="flex gap-2">
-            {(["prospect", "client", "supplier"] as OrgType[]).map((t) => (
-              <button
-                key={t}
-                onClick={() => setType(t)}
-                className={`px-3 py-2 rounded-md text-sm ${
-                  type === t
-                    ? "bg-primary text-primary-foreground"
-                    : "bg-white/10 text-foreground hover:bg-white/15"
-                }`}
-              >
-                {t[0].toUpperCase() + t.slice(1)}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div>
-          <div className="text-xs text-muted-foreground mb-1">Domain</div>
-          <Input
-            value={domain}
-            onChange={(e) => setDomain(e.target.value)}
-            placeholder="https://…"
-          />
-        </div>
-        <div>
-          <div className="text-xs text-muted-foreground mb-1">Country</div>
-          <Input
-            value={country}
-            onChange={(e) => setCountry(e.target.value)}
-            placeholder="UA / AE / …"
-          />
-        </div>
-      </div>
-
-      <Divider />
-
-      <div className="flex items-center justify-between mb-2">
-        <div className="font-medium">Inquiry items (optional)</div>
-        <Button variant="secondary" onClick={addItem}>
-          Add item
-        </Button>
-      </div>
-
-      {items.length === 0 ? (
-        <div className="text-sm text-muted-foreground">No items yet.</div>
-      ) : (
-        <div className="space-y-3">
-          {items.map((it, i) => (
-            <div key={i} className="grid grid-cols-1 md:grid-cols-5 gap-2">
-              <div className="md:col-span-2">
-                <div className="text-xs text-muted-foreground mb-1">Product *</div>
-                <Input
-                  value={it.product}
-                  onChange={(e) => updItem(i, { product: e.target.value })}
-                  placeholder="e.g., X-ray film 8x10"
-                />
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">Brand</div>
-                <Input
-                  value={it.brand ?? ""}
-                  onChange={(e) => updItem(i, { brand: e.target.value })}
-                  placeholder="Fujifilm / Konica"
-                />
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground mb-1">Qty</div>
-                <Input
-                  type="number"
-                  value={it.quantity ?? ""}
-                  onChange={(e) => updItem(i, { quantity: Number(e.target.value || 0) })}
-                  placeholder="1000"
-                />
-              </div>
+    <div className="fixed inset-0 z-[50]">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
+      <div className="absolute inset-0 overflow-auto">
+        <Modal title="New Lead" onClose={onClose}>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Name (optional)</div>
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="Company or contact name" />
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Type</div>
               <div className="flex gap-2">
-                <div className="flex-1">
-                  <div className="text-xs text-muted-foreground mb-1">Unit</div>
-                  <Input
-                    value={it.unit ?? ""}
-                    onChange={(e) => updItem(i, { unit: e.target.value })}
-                    placeholder="box / set / …"
-                  />
-                </div>
-                <div className="flex-1">
-                  <div className="text-xs text-muted-foreground mb-1">Unit price</div>
-                  <Input
-                    type="number"
-                    value={it.unit_price ?? ""}
-                    onChange={(e) =>
-                      updItem(i, { unit_price: Number(e.target.value || 0) })
-                    }
-                    placeholder="5"
-                  />
-                </div>
-              </div>
-
-              <div className="md:col-span-5 flex justify-end">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => rmItem(i)}
-                  className="mt-1"
-                >
-                  Remove
-                </Button>
+                {(["prospect", "client", "supplier"] as OrgType[]).map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => setType(t)}
+                    className={`px-3 py-2 rounded-md text-sm ${
+                      type === t ? "bg-primary text-primary-foreground" : "bg-white/10 text-foreground hover:bg-white/15"
+                    }`}
+                  >
+                    {t[0].toUpperCase() + t.slice(1)}
+                  </button>
+                ))}
               </div>
             </div>
-          ))}
-        </div>
-      )}
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Domain</div>
+              <Input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="acme.com" />
+            </div>
+            <div>
+              <div className="text-xs text-muted-foreground mb-1">Country</div>
+              <Input value={country} onChange={(e) => setCountry(e.target.value)} placeholder="UA / AE / …" />
+            </div>
 
-      <div className="pt-4 flex justify-end gap-2">
-        <Button variant="outline" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button onClick={create} disabled={saving}>
-          {saving ? "Creating…" : "Create"}
-        </Button>
+            {/* NEW: Emails */}
+            <div className="md:col-span-2">
+              <div className="text-xs text-muted-foreground mb-1">Emails (comma/space separated)</div>
+              <Input
+                value={emailsInput}
+                onChange={(e) => setEmailsInput(e.target.value)}
+                placeholder="info@acme.com, sales@acme.com"
+              />
+            </div>
+          </div>
+
+          <Divider />
+
+          <div className="flex items-center justify-between mb-2">
+            <div className="font-medium">Inquiry items (optional)</div>
+            <Button variant="secondary" onClick={addItem}>Add item</Button>
+          </div>
+
+          {items.length === 0 ? (
+            <div className="text-sm text-muted-foreground">No items yet.</div>
+          ) : (
+            <div className="space-y-3">
+              {items.map((it, i) => (
+                <div key={i} className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                  <div className="md:col-span-2">
+                    <div className="text-xs text-muted-foreground mb-1">Product *</div>
+                    <Input value={it.product} onChange={(e) => updItem(i, { product: e.target.value })} placeholder="e.g., X-ray film 8x10" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground mb-1">Brand</div>
+                    <Input value={it.brand ?? ""} onChange={(e) => updItem(i, { brand: e.target.value })} placeholder="Fujifilm / Konica" />
+                  </div>
+                  <div>
+                    <div className="text-xs text-muted-foreground mb-1">Qty</div>
+                    <Input type="number" value={it.quantity ?? ""} onChange={(e) => updItem(i, { quantity: Number(e.target.value || 0) })} placeholder="1000" />
+                  </div>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <div className="text-xs text-muted-foreground mb-1">Unit</div>
+                      <Input value={it.unit ?? ""} onChange={(e) => updItem(i, { unit: e.target.value })} placeholder="box / set / …" />
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-xs text-muted-foreground mb-1">Unit price</div>
+                      <Input type="number" value={it.unit_price ?? ""} onChange={(e) => updItem(i, { unit_price: Number(e.target.value || 0) })} placeholder="5" />
+                    </div>
+                  </div>
+                  <div className="md:col-span-5 flex justify-end">
+                    <Button size="sm" variant="outline" onClick={() => rmItem(i)} className="mt-1">Remove</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="pt-4 flex justify-end gap-2">
+            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button onClick={() => create()} disabled={saving}>{saving ? "Creating…" : "Create"}</Button>
+          </div>
+        </Modal>
       </div>
-    </Modal>
+
+      {/* Soft-lock діалог */}
+      <SoftLockDialog
+        open={softOpen}
+        candidates={dupes}
+        onClose={() => setSoftOpen(false)}
+        onCreateAnyway={createAnyway}
+      />
+    </div>
   );
 }
+
 
 /* =========================================================
  * Detail modal (unchanged)

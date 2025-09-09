@@ -45,8 +45,11 @@ export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
-  const rawType = searchParams.get("type") ?? searchParams.get("tab");
+
+  // підтримуємо всі варіанти: type=, tab=, org_type=
+  const rawType = searchParams.get("type") ?? searchParams.get("tab") ?? searchParams.get("org_type");
   const type = mapTabToType(rawType);
+
   const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
@@ -67,7 +70,6 @@ export async function GET(req: NextRequest) {
     `;
     return NextResponse.json({ items: rows, limit, offset });
   } catch (err: any) {
-    // щоб не валити UI — віддаємо 500 з короткою причиною
     return NextResponse.json(
       { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },
       { status: 500 }

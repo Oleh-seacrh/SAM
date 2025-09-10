@@ -110,7 +110,7 @@ async function fetchList(org_type: OrgType) {
   const r = await fetch(`/api/orgs?org_type=${org_type}`, { cache: "no-store" });
   const txt = await r.text();
   const j = txt ? JSON.parse(txt) : {};
-  if (!r.ok) th new Error(j?.error || `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
   return (j.data ?? []) as OrgListItem[];
 }
 

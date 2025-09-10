@@ -8,7 +8,9 @@ import { getSql } from "@/lib/db";
 function normalizeDomain(raw?: string | null): string | null {
   if (!raw) return null;
   let v = String(raw).trim().toLowerCase();
-  try { if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname; } catch {}
+  try {
+    if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname;
+  } catch {}
   v = v.replace(/^www\./, "");
   return v || null;
 }
@@ -21,7 +23,9 @@ function normalizeEmail(raw?: string | null): string | null {
   const v = String(raw).trim().toLowerCase();
   return v.includes("@") ? v : null;
 }
-function mapTabToType(v?: string | null): "client"|"prospect"|"supplier"|null {
+function mapTabToType(
+  v?: string | null
+): "client" | "prospect" | "supplier" | null {
   if (!v) return null;
   const s = v.toLowerCase();
   if (s === "clients" || s === "client") return "client";
@@ -30,21 +34,23 @@ function mapTabToType(v?: string | null): "client"|"prospect"|"supplier"|null {
   return null;
 }
 
-/* GET: list */
-/* GET: list */
+/* ======================= GET (list) ======================= */
+/* тягнемо максимум полів; якщо немає в’юхи v_inquiries_agg — падаємо у fallback */
 export async function GET(req: NextRequest) {
   const sql = getSql();
   const { searchParams } = new URL(req.url);
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
   const rawType =
-    searchParams.get("type") ?? searchParams.get("tab") ?? searchParams.get("org_type");
+    searchParams.get("type") ??
+    searchParams.get("tab") ??
+    searchParams.get("org_type");
   const type = mapTabToType(rawType);
   const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
   try {
-    // РОЗШИРЕНИЙ варіант: тягнемо максимум полів + агрегації з вьюхи
+    // Спроба з'єднатися з агрегаційною в’юхою
     const rows = await sql/*sql*/`
       select
         o.id,
@@ -84,11 +90,11 @@ export async function GET(req: NextRequest) {
           q
             ? sql/*sql*/`
                 and (
-                  lower(o.name)    like ${'%' + q + '%'}
-                  or (o.domain  is not null and lower(o.domain)  like ${'%' + q + '%'})
-                  or (o.tags    is not null and lower(o.tags)    like ${'%' + q + '%'})
-                  or (v.products is not null and lower(v.products) like ${'%' + q + '%'})
-                  or (v.brands   is not null and lower(v.brands)   like ${'%' + q + '%'})
+                  lower(o.name)    like ${'%' + q + '%'} or
+                  (o.domain  is not null and lower(o.domain)  like ${'%' + q + '%'}) or
+                  (o.tags    is not null and lower(o.tags)    like ${'%' + q + '%'}) or
+                  (v.products is not null and lower(v.products) like ${'%' + q + '%'}) or
+                  (v.brands   is not null and lower(v.brands)   like ${'%' + q + '%'})
                 )
               `
             : sql``
@@ -98,15 +104,29 @@ export async function GET(req: NextRequest) {
     `;
 
     return NextResponse.json({ items: rows, orgs: rows, data: rows, limit, offset });
-  } catch (_e) {
-    // FALLBACK: без вьюхи, але з усіма org-полями
+  } catch {
+    // FALLBACK: без в’юхи — беремо всі org-поля, а агрегації ставимо null
     const rows = await sql/*sql*/`
       select
-        id, name, org_type, domain, country,
-        industry, status, size_tag, source,
-        created_at, last_contact_at,
-        contact_person, general_email, personal_email, phone,
-        tags, brand, product, quantity
+        id,
+        name,
+        org_type,
+        domain,
+        country,
+        industry,
+        status,
+        size_tag,
+        source,
+        created_at,
+        last_contact_at,
+        contact_person,
+        general_email,
+        personal_email,
+        phone,
+        tags,
+        brand,
+        product,
+        quantity
       from organizations
       where 1=1
         ${type ? sql/*sql*/`and org_type = ${type}` : sql``}
@@ -114,9 +134,9 @@ export async function GET(req: NextRequest) {
           q
             ? sql/*sql*/`
                 and (
-                  lower(name) like ${'%' + q + '%'}
-                  or (domain is not null and lower(domain) like ${'%' + q + '%'})
-                  or (tags   is not null and lower(tags)   like ${'%' + q + '%'})
+                  lower(name) like ${'%' + q + '%'} or
+                  (domain is not null and lower(domain) like ${'%' + q + '%'}) or
+                  (tags   is not null and lower(tags)   like ${'%' + q + '%'})
                 )
               `
             : sql``
@@ -125,7 +145,6 @@ export async function GET(req: NextRequest) {
       limit ${limit} offset ${offset};
     `;
 
-    // Підставляємо порожні агрегації, щоб UI не падав
     const mapped = (rows as any[]).map((r) => ({
       ...r,
       brands: null,
@@ -134,63 +153,34 @@ export async function GET(req: NextRequest) {
       latest_inquiry_at: null,
     }));
 
-    return NextResponse.json({ items: mapped, orgs: mapped, data: mapped, limit, offset });
+    return NextResponse.json({
+      items: mapped,
+      orgs: mapped,
+      data: mapped,
+      limit,
+      offset,
+    });
   }
 }
 
-
-/* POST: create with soft/hard lock, name optional */
-export async function POST(req: NextRequest) {
+/* ======================= POST (old working logic) ======================= */
+/* НІЧОГО не міняв за суттю — лише використовую хелпери згори */
 export async function POST(req: Request) {
   const sql = getSql();
-
-  const body = await req.json().catch(() => ({} as any));
-  const inputName = normalizeName(body?.name);
-  const domain = normalizeDomain(body?.domain);
-  const country = body?.country ?? null;
-  const org_type = mapTabToType(body?.org_type) ?? "client";
-  const emails: string[] = (Array.isArray(body?.emails) ? body.emails : (body?.emails ? [body.emails] : []))
-    .map((e: any) => normalizeEmail(String(e))).filter(Boolean) as string[];
-
-  // fallback name, якщо пусто
-  let name = inputName;
-  if (!name) {
-    if (domain) {
-      const base = domain.split(".")[0] || "Unnamed";
-      name = base.charAt(0).toUpperCase() + base.slice(1);
-    } else if (emails[0]) {
-      const base = (emails[0].split("@")[1] || "").split(".")[0] || "Unnamed";
-      name = base.charAt(0).toUpperCase() + base.slice(1);
-    } else {
-      name = "Unnamed";
-  // helpers
-  const normDomain = (raw?: string | null): string | null => {
-    if (!raw) return null;
-    let v = String(raw).trim().toLowerCase();
-    try { if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname; } catch {}
-    v = v.replace(/^www\./, "");
-    return v || null;
-  };
-  const normName = (raw?: string | null): string => (raw ? String(raw).trim().replace(/\s+/g, " ") : "");
-  const normEmail = (raw?: string | null): string | null => {
-    if (!raw) return null;
-    const v = String(raw).trim().toLowerCase();
-    return v.includes("@") ? v : null;
-  };
 
   const body = await req.json().catch(() => ({}));
   const allowDuplicate = req.headers.get("x-allow-duplicate") === "true";
 
-  const name = normName(body?.name);
+  const name = normalizeName(body?.name);
   const org_type = (body?.org_type || "prospect") as string;
-  const domain = normDomain(body?.domain);
+  const domain = normalizeDomain(body?.domain);
   const country = body?.country ? String(body.country) : null;
 
   const emails: string[] = Array.isArray(body?.emails)
-    ? body.emails.map(normEmail).filter(Boolean) as string[]
+    ? (body.emails as any[]).map(normalizeEmail).filter(Boolean) as string[]
     : [];
 
-  // --- HARDLOCK по домену (точний збіг)
+  // HARDLOCK по домену
   if (domain) {
     const hit = await sql/*sql*/`
       select id, name from organizations
@@ -209,25 +199,9 @@ export async function POST(req: Request) {
     }
   }
 
-  // soft-lock
-  const params = new URLSearchParams();
-  params.set("name", name);
-  if (domain) params.set("domain", domain);
-  if (emails[0]) params.set("company_email", emails[0]);
-  if (emails[1]) params.set("personal_email", emails[1]);
-  const dedupeUrl = new URL("/api/orgs/dedupe", req.url);
-  dedupeUrl.search = params.toString();
-  // --- SOFTLOCK по e-mail та назві
+  // SOFTLOCK по email + назві
   const candidates: any[] = [];
 
-  try {
-    const r = await fetch(dedupeUrl.toString(), { method: "GET" });
-    if (r.ok) {
-      const data = await r.json().catch(() => ({}));
-      const duplicates = data?.duplicates ?? data?.candidates ?? [];
-      const allowOverride = req.headers.get("x-allow-duplicate") === "true";
-      if (duplicates.length && !allowOverride) {
-        return NextResponse.json({ error: "DUPLICATE_SOFTLOCK", duplicates }, { status: 409 });
   if (emails.length) {
     const csv = emails.join(",");
     const byEmail = await sql/*sql*/`
@@ -245,25 +219,16 @@ export async function POST(req: Request) {
         if (r.contact_email && r.contact_email.toLowerCase() === e) { via = e; break; }
       }
       candidates.push({
-        id: r.id, name: r.name, domain: r.domain, country: r.country, org_type: r.org_type,
-        match: { via_email: via }
+        id: r.id,
+        name: r.name,
+        domain: r.domain,
+        country: r.country,
+        org_type: r.org_type,
+        match: { via_email: via },
       });
     }
-  } catch { /* ignore */ }
-
-  // insert + hard-lock
-  try {
-    const org = (await sql/*sql*/`
-      insert into organizations (name, domain, country, org_type)
-      values (${name}, ${domain}, ${country}, ${org_type})
-      returning id, name, domain, country, org_type, created_at;
-    ` as any)[0];
   }
 
-    if (emails.length) {
-      for (const e of emails) {
-        await sql/*sql*/`insert into contacts (org_id, email) values (${org.id}, ${e});`;
-      }  
   if (name) {
     const exact = await sql/*sql*/`
       select id, name, domain, country, org_type
@@ -283,26 +248,19 @@ export async function POST(req: Request) {
       if (seen.has(key)) continue;
       seen.add(key);
       candidates.push({
-        id: r.id, name: r.name, domain: r.domain, country: r.country, org_type: r.org_type,
-        match: { name_exact: r.name?.toLowerCase() === name.toLowerCase(), name_partial: true }
+        id: r.id,
+        name: r.name,
+        domain: r.domain,
+        country: r.country,
+        org_type: r.org_type,
+        match: {
+          name_exact: r.name?.toLowerCase() === name.toLowerCase(),
+          name_partial: true,
+        },
       });
     }
   }
 
-    return NextResponse.json({ org }, { status: 201 });
-  } catch (err: any) {
-    const msg = String(err?.message ?? "");
-    const isOrgDomain = msg.includes("organizations_domain_uniq");
-    const isOrgName = msg.includes("organizations_name_uniq");
-    const isContactEmail = msg.includes("contacts_email_uniq");
-    if (isOrgDomain || isOrgName || isContactEmail) {
-      return NextResponse.json(
-        { error: "DUPLICATE_HARDLOCK",
-          detail: isOrgDomain ? "Organization with the same domain already exists."
-                : isOrgName ? "Organization with the same name already exists."
-                : "Contact email already exists." },
-        { status: 409 }
-      );
   if (candidates.length && !allowDuplicate) {
     return new Response(
       JSON.stringify({ error: "DUPLICATE_SOFTLOCK", duplicates: candidates }),
@@ -310,7 +268,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // --- Створення
+  // Створення
   const orgRows = await sql/*sql*/`
     insert into organizations (name, org_type, domain, country)
     values (${name || null}, ${org_type}, ${domain}, ${country})
@@ -318,7 +276,7 @@ export async function POST(req: Request) {
   `;
   const org = orgRows[0];
 
-  // --- М'яке збереження e-mail'ів, якщо є відповідні колонки
+  // М'яке збереження e-mail'ів (якщо колонки існують)
   if (emails.length) {
     try {
       await sql/*sql*/`
@@ -329,9 +287,8 @@ export async function POST(req: Request) {
         where id = ${org.id};
       `;
     } catch {
-      // якщо колонок немає — ігноруємо, але створення вже відбулось
+      // якщо колонок немає — ігноруємо
     }
-    return NextResponse.json({ error: "INTERNAL_ERROR", detail: msg }, { status: 500 });
   }
 
   return new Response(JSON.stringify({ id: org.id, org }), {
@@ -340,6 +297,7 @@ export async function POST(req: Request) {
   });
 }
 
-
 /* OPTIONS */
-export async function OPTIONS() { return new Response(null, { status: 204 }); }
+export async function OPTIONS() {
+  return new Response(null, { status: 204 });
+}

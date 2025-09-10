@@ -1,40 +1,58 @@
-// app/api/orgs/[id]/inquiries/route.ts
-export const runtime = "nodejs";
+import { NextResponse } from "next/server";
+import { sql } from "@vercel/postgres";
+import { unstable_noStore as noStore } from "next/cache";
 
-import { NextRequest, NextResponse } from "next/server";
-import { getSql } from "@/lib/db";
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+export const fetchCache = "force-no-store";
 
-/**
- * GET /api/orgs/:id/inquiries
- * Optional query: limit, offset
- */
-export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
-  try {
-    const sql = getSql();
-    const id = params?.id;
-    if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
+export async function GET(
+  _req: Request,
+  ctx: { params: { id: string } }
+) {
+  noStore(); // повністю відрубити кеш цього хендлера
 
-    // summary rows for the org's inquiries
-    const rows = await sql/*sql*/`
-      select
-        i.id,
-        i.org_id,
-        i.summary,
-        i.created_at,
-        count(ii.id)::int as items_count,
-        string_agg(distinct nullif(ii.brand, ''), ', ') filter (where ii.brand is not null and ii.brand <> '') as brands,
-        string_agg(distinct nullif(ii.product, ''), ', ') filter (where ii.product is not null and ii.product <> '') as products,
-        sum(coalesce(ii.quantity,0) * coalesce(ii.unit_price,0)) as deal_value_usd
-      from inquiries i
-      left join inquiry_items ii on ii.inquiry_id = i.id
-      where i.org_id = ${id}
-      group by i.id
-      order by i.created_at desc
-      limit 100;
-    `;
-
-    return NextResponse.json({ items: rows });
-  } catch (e: any) {
-    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
+  const org_id = ctx.params.id;
+  if (!org_id) {
+    return NextResponse.json({ error: "org_id is required" }, { status: 400 });
   }
+
+  const { rows } = await sql/*sql*/`
+    SELECT
+      i.id,
+      i.org_id,
+      i.summary,
+      i.created_at,
+      COALESCE(cnt.cnt, 0)::int AS items_count,
+      agg.brands,
+      agg.products,
+      agg.deal_value_usd
+    FROM inquiries i
+    LEFT JOIN (
+      SELECT inquiry_id, COUNT(*) AS cnt
+      FROM inquiry_items
+      GROUP BY inquiry_id
+    ) cnt ON cnt.inquiry_id = i.id
+    LEFT JOIN (
+      SELECT
+        inquiry_id,
+        NULLIF(STRING_AGG(DISTINCT NULLIF(brand, ''), ', '), '') AS brands,
+        NULLIF(STRING_AGG(DISTINCT NULLIF(product, ''), ', '), '') AS products,
+        SUM(COALESCE(unit_price,0) * COALESCE(quantity,0))::numeric AS deal_value_usd
+      FROM inquiry_items
+      GROUP BY inquiry_id
+    ) agg ON agg.inquiry_id = i.id
+    WHERE i.org_id = ${org_id}
+    ORDER BY i.created_at DESC, i.id DESC
+  `;
+
+  return NextResponse.json(
+    { items: rows },
+    {
+      headers: {
+        "Cache-Control": "no-store, no-cache, max-age=0, must-revalidate",
+        "Pragma": "no-cache",
+      },
+    }
+  );
 }

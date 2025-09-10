@@ -30,9 +30,7 @@ function mapTabToType(v?: string | null): "client"|"prospect"|"supplier"|null {
   return null;
 }
 
-/* ======================= GET (STABLE) ======================= */
-/* Мінімальна вибірка з полями, які точно є — те, що у вас і працювало */
-/* GET: list */
+
 export async function GET(req: NextRequest) {
   const sql = getSql();
   const { searchParams } = new URL(req.url);
@@ -65,22 +63,36 @@ export async function GET(req: NextRequest) {
         o.last_contact_at,
         o.created_at,
 
-        -- агрегація з останнього інкваєра
         ia.brands,
         ia.products,
         ia.deal_value_usd,
         ia.latest_inquiry_at
+
       from organizations o
-      left join v_inquiries_agg ia on ia.org_id = o.id
+
+      -- самодостатня агрегація по інкваєрах організації
+      left join lateral (
+        select
+          /* уникаємо дублів і null */
+          coalesce(string_agg(distinct nullif(ii.brand,  ''), ', '), '')  as brands,
+          coalesce(string_agg(distinct nullif(ii.product,''), ', '), '')  as products,
+          /* якщо quantity/unit_price нема — вийде 0 */
+          sum(coalesce(ii.quantity,0) * coalesce(ii.unit_price,0))       as deal_value_usd,
+          max(i.created_at)                                              as latest_inquiry_at
+        from inquiries i
+        left join inquiry_items ii on ii.inquiry_id = i.id
+        where i.org_id = o.id
+      ) ia on true
+
       where 1=1
         ${type ? sql/*sql*/`and o.org_type = ${type}` : sql``}
         ${
           q
             ? sql/*sql*/`
                 and (
-                  lower(o.name) like ${"%" + q + "%"}
-                  or (o.domain is not null and lower(o.domain) like ${"%" + q + "%"})
-                  or (o.tags   is not null and lower(o.tags)   like ${"%" + q + "%"})
+                  lower(o.name)   like ${"%" + q + "%"} or
+                  lower(coalesce(o.domain, '')) like ${"%" + q + "%"} or
+                  lower(coalesce(o.tags,   '')) like ${"%" + q + "%"}
                 )
               `
             : sql``
@@ -91,18 +103,20 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       items: rows,   // новий UI
-      orgs: rows,    // старий UI не зламається
+      orgs: rows,    // старий UI
       data: rows,    // сумісність
       limit,
       offset,
     });
   } catch (err: any) {
+    // щоб було видно реальну причину в Network
     return NextResponse.json(
       { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },
       { status: 500 }
     );
   }
 }
+
 
 
 /* ======================= POST (ВАШ ПРАЦЮЮЧИЙ) ======================= */

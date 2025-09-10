@@ -33,34 +33,21 @@ const isoOrNull = (v: any) => {
 export async function GET(_req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const sql = getSql();
-    const id = params.id;
+    const id = params?.id;
+    if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
-    const org = (
-      (await sql/*sql*/`
-        select
-          id, name, org_type, domain,
-          country, industry,
-          general_email, contact_name, contact_email, contact_phone,
-          status, size_tag, source, note,
-          brand, product, quantity, deal_value_usd,
-          last_contact_at, created_at, updated_at,
-          tags
-        from organizations
-        where id = ${id}
-        limit 1;
-      `) as any
-    )[0];
+    // віддаємо весь рядок, щоб UI мав усі поля
+    const rows = await sql/*sql*/`
+      select *
+      from organizations
+      where id = ${id}
+      limit 1;
+    `;
+    if (!rows.length) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    if (!org) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-
-    return NextResponse.json({ org }, { status: 200 });
+    return NextResponse.json(rows[0]);
   } catch (e: any) {
-    return NextResponse.json(
-      { error: e?.message ?? "Server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: e?.message ?? "Server error" }, { status: 500 });
   }
 }
 

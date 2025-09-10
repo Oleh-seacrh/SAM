@@ -100,7 +100,8 @@ export default function InquiriesModal({
     setLoading(true);
     setErr(null);
     try {
-      const r = await fetch(`/api/orgs/${orgId}/inquiries`, { cache: "no-store" });
+      // ↓↓↓ no-store + анти-кеш мітка
+      const r = await fetch(`/api/orgs/${orgId}/inquiries?ts=${Date.now()}`, { cache: "no-store" });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setRows(j?.items ?? []);
@@ -120,7 +121,8 @@ export default function InquiriesModal({
     // відкриваємо і, якщо немає, тягнемо items
     setExpanded((p) => ({ ...p, [id]: true }));
     if (!itemsByInquiry[id]) {
-      const r = await fetch(`/api/inquiries/${id}/items`, { cache: "no-store" });
+      // ↓↓↓ no-store + анти-кеш мітка
+      const r = await fetch(`/api/inquiries/${id}/items?ts=${Date.now()}`, { cache: "no-store" });
       const j = await r.json();
       if (r.ok) {
         setItemsByInquiry((m) => ({ ...m, [id]: j?.items ?? [] }));
@@ -131,15 +133,31 @@ export default function InquiriesModal({
   async function createInquiry() {
     try {
       setCreating(true);
+      const summaryToSend = newSummary || "Manual inquiry";
       const r = await fetch(`/api/inquiries`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ org_id: orgId, summary: newSummary || "Manual inquiry" }),
+        body: JSON.stringify({ org_id: orgId, summary: summaryToSend }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Create failed");
+
+      // OPTIMISTIC: миттєво показати новий інквайрі у списку
+      const optimisticRow: InquirySummary = {
+        id: j?.id || j?.inquiry?.id || `tmp-${Date.now()}`,
+        org_id: orgId,
+        summary: j?.summary ?? j?.inquiry?.summary ?? summaryToSend,
+        created_at: j?.created_at ?? j?.inquiry?.created_at ?? new Date().toISOString(),
+        items_count: 0,
+        brands: null,
+        products: null,
+        deal_value_usd: null,
+      };
+      setRows((prev) => [optimisticRow, ...prev]);
       setNewSummary("");
-      await reload();
+
+      // у фоні підтягнемо «правду» з БД (без очікування)
+      void reload();
     } catch (e: any) {
       setErr(e?.message || "Create failed");
     } finally {
@@ -190,8 +208,8 @@ export default function InquiriesModal({
       alert(j?.error || "Add item failed");
       return;
     }
-    // перезавантажимо items
-    const r2 = await fetch(`/api/inquiries/${inqId}/items`, { cache: "no-store" });
+    // перезавантажимо items (no-store + анти-кеш мітка)
+    const r2 = await fetch(`/api/inquiries/${inqId}/items?ts=${Date.now()}`, { cache: "no-store" });
     const j2 = await r2.json();
     if (r2.ok) {
       setItemsByInquiry((m) => ({ ...m, [inqId]: j2?.items ?? [] }));

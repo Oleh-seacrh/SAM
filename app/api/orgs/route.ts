@@ -8,9 +8,7 @@ import { getSql } from "@/lib/db";
 function normalizeDomain(raw?: string | null): string | null {
   if (!raw) return null;
   let v = String(raw).trim().toLowerCase();
-  try {
-    if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname;
-  } catch {}
+  try { if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname; } catch {}
   v = v.replace(/^www\./, "");
   return v || null;
 }
@@ -23,9 +21,7 @@ function normalizeEmail(raw?: string | null): string | null {
   const v = String(raw).trim().toLowerCase();
   return v.includes("@") ? v : null;
 }
-function mapTabToType(
-  v?: string | null
-): "client" | "prospect" | "supplier" | null {
+function mapTabToType(v?: string | null): "client"|"prospect"|"supplier"|null {
   if (!v) return null;
   const s = v.toLowerCase();
   if (s === "clients" || s === "client") return "client";
@@ -34,137 +30,51 @@ function mapTabToType(
   return null;
 }
 
-/* ======================= GET (list) ======================= */
-/* тягнемо максимум полів; якщо немає в’юхи v_inquiries_agg — падаємо у fallback */
+/* ======================= GET (STABLE) ======================= */
+/* Мінімальна вибірка з полями, які точно є — те, що у вас і працювало */
 export async function GET(req: NextRequest) {
   const sql = getSql();
   const { searchParams } = new URL(req.url);
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
-  const rawType =
-    searchParams.get("type") ??
-    searchParams.get("tab") ??
-    searchParams.get("org_type");
+  const rawType = searchParams.get("type") ?? searchParams.get("tab") ?? searchParams.get("org_type");
   const type = mapTabToType(rawType);
   const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
   try {
-    // Спроба з'єднатися з агрегаційною в’юхою
     const rows = await sql/*sql*/`
-      select
-        o.id,
-        o.name,
-        o.org_type,
-        o.domain,
-        o.country,
-        o.industry,
-        o.status,
-        o.size_tag,
-        o.source,
-        o.created_at,
-        o.last_contact_at,
-
-        -- contacts
-        o.contact_person,
-        o.general_email,
-        o.personal_email,
-        o.phone,
-
-        -- misc
-        o.tags,
-        o.brand,
-        o.product,
-        o.quantity,
-
-        -- aggregates from latest inquiry
-        v.brands,
-        v.products,
-        v.deal_value_usd,
-        v.latest_inquiry_at
-      from organizations o
-      left join v_inquiries_agg v on v.org_id = o.id
-      where 1=1
-        ${type ? sql/*sql*/`and o.org_type = ${type}` : sql``}
-        ${
-          q
-            ? sql/*sql*/`
-                and (
-                  lower(o.name)    like ${'%' + q + '%'} or
-                  (o.domain  is not null and lower(o.domain)  like ${'%' + q + '%'}) or
-                  (o.tags    is not null and lower(o.tags)    like ${'%' + q + '%'}) or
-                  (v.products is not null and lower(v.products) like ${'%' + q + '%'}) or
-                  (v.brands   is not null and lower(v.brands)   like ${'%' + q + '%'})
-                )
-              `
-            : sql``
-        }
-      order by coalesce(v.latest_inquiry_at, o.created_at) desc, o.created_at desc
-      limit ${limit} offset ${offset};
-    `;
-
-    return NextResponse.json({ items: rows, orgs: rows, data: rows, limit, offset });
-  } catch {
-    // FALLBACK: без в’юхи — беремо всі org-поля, а агрегації ставимо null
-    const rows = await sql/*sql*/`
-      select
-        id,
-        name,
-        org_type,
-        domain,
-        country,
-        industry,
-        status,
-        size_tag,
-        source,
-        created_at,
-        last_contact_at,
-        contact_person,
-        general_email,
-        personal_email,
-        phone,
-        tags,
-        brand,
-        product,
-        quantity
+      select id, name, domain, country, org_type, last_contact_at, created_at
       from organizations
       where 1=1
-        ${type ? sql/*sql*/`and org_type = ${type}` : sql``}
-        ${
-          q
-            ? sql/*sql*/`
-                and (
-                  lower(name) like ${'%' + q + '%'} or
-                  (domain is not null and lower(domain) like ${'%' + q + '%'}) or
-                  (tags   is not null and lower(tags)   like ${'%' + q + '%'})
-                )
-              `
-            : sql``
-        }
+      ${type ? sql/*sql*/`and org_type = ${type}` : sql``}
+      ${
+        q
+          ? sql/*sql*/`
+              and (
+                lower(name) like ${'%' + q + '%'}
+                or (domain is not null and lower(domain) like ${'%' + q + '%'})
+              )
+            `
+          : sql``
+      }
       order by created_at desc
       limit ${limit} offset ${offset};
     `;
 
-    const mapped = (rows as any[]).map((r) => ({
-      ...r,
-      brands: null,
-      products: null,
-      deal_value_usd: null,
-      latest_inquiry_at: null,
-    }));
-
+    // Для сумісності зі старими/новими споживачами
     return NextResponse.json({
-      items: mapped,
-      orgs: mapped,
-      data: mapped,
-      limit,
-      offset,
+      items: rows,
+      orgs: rows,
+      data: rows,
+      limit, offset,
     });
+  } catch (err: any) {
+    return NextResponse.json({ error: "INTERNAL_ERROR", detail: String(err?.message ?? err) }, { status: 500 });
   }
 }
 
-/* ======================= POST (old working logic) ======================= */
-/* НІЧОГО не міняв за суттю — лише використовую хелпери згори */
+/* ======================= POST (ВАШ ПРАЦЮЮЧИЙ) ======================= */
 export async function POST(req: Request) {
   const sql = getSql();
 
@@ -177,10 +87,10 @@ export async function POST(req: Request) {
   const country = body?.country ? String(body.country) : null;
 
   const emails: string[] = Array.isArray(body?.emails)
-    ? (body.emails as any[]).map(normalizeEmail).filter(Boolean) as string[]
+    ? body.emails.map(normalizeEmail).filter(Boolean) as string[]
     : [];
 
-  // HARDLOCK по домену
+  // --- HARDLOCK по домену (точний збіг)
   if (domain) {
     const hit = await sql/*sql*/`
       select id, name from organizations
@@ -199,7 +109,7 @@ export async function POST(req: Request) {
     }
   }
 
-  // SOFTLOCK по email + назві
+  // --- SOFTLOCK по e-mail та назві
   const candidates: any[] = [];
 
   if (emails.length) {
@@ -219,12 +129,8 @@ export async function POST(req: Request) {
         if (r.contact_email && r.contact_email.toLowerCase() === e) { via = e; break; }
       }
       candidates.push({
-        id: r.id,
-        name: r.name,
-        domain: r.domain,
-        country: r.country,
-        org_type: r.org_type,
-        match: { via_email: via },
+        id: r.id, name: r.name, domain: r.domain, country: r.country, org_type: r.org_type,
+        match: { via_email: via }
       });
     }
   }
@@ -248,15 +154,8 @@ export async function POST(req: Request) {
       if (seen.has(key)) continue;
       seen.add(key);
       candidates.push({
-        id: r.id,
-        name: r.name,
-        domain: r.domain,
-        country: r.country,
-        org_type: r.org_type,
-        match: {
-          name_exact: r.name?.toLowerCase() === name.toLowerCase(),
-          name_partial: true,
-        },
+        id: r.id, name: r.name, domain: r.domain, country: r.country, org_type: r.org_type,
+        match: { name_exact: r.name?.toLowerCase() === name.toLowerCase(), name_partial: true }
       });
     }
   }
@@ -268,7 +167,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // Створення
+  // --- Створення
   const orgRows = await sql/*sql*/`
     insert into organizations (name, org_type, domain, country)
     values (${name || null}, ${org_type}, ${domain}, ${country})
@@ -276,7 +175,7 @@ export async function POST(req: Request) {
   `;
   const org = orgRows[0];
 
-  // М'яке збереження e-mail'ів (якщо колонки існують)
+  // --- М'яке збереження e-mail'ів, якщо є відповідні колонки
   if (emails.length) {
     try {
       await sql/*sql*/`
@@ -287,7 +186,7 @@ export async function POST(req: Request) {
         where id = ${org.id};
       `;
     } catch {
-      // якщо колонок немає — ігноруємо
+      // якщо колонок немає — ігноруємо, але створення вже відбулось
     }
   }
 
@@ -298,6 +197,4 @@ export async function POST(req: Request) {
 }
 
 /* OPTIONS */
-export async function OPTIONS() {
-  return new Response(null, { status: 204 });
-}
+export async function OPTIONS() { return new Response(null, { status: 204 }); }

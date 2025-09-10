@@ -46,53 +46,30 @@ export async function GET(req: NextRequest) {
   try {
     const rows = await sql/*sql*/`
       select
-        o.id,
-        o.name,
-        o.org_type,
-        o.domain,
-        o.country,
-        o.status,
-        o.size_tag,
-        o.source,
-        o.tags,
-        o.industry,
-        o.contact_person,
-        o.phone,
-        o.general_email,
-        o.contact_email,
-        o.last_contact_at,
-        o.created_at,
-
+        o.*,
         ia.brands,
         ia.products,
         ia.deal_value_usd,
         ia.latest_inquiry_at
-
       from organizations o
-
-      -- самодостатня агрегація по інкваєрах організації
       left join lateral (
         select
-          /* уникаємо дублів і null */
-          coalesce(string_agg(distinct nullif(ii.brand,  ''), ', '), '')  as brands,
-          coalesce(string_agg(distinct nullif(ii.product,''), ', '), '')  as products,
-          /* якщо quantity/unit_price нема — вийде 0 */
-          sum(coalesce(ii.quantity,0) * coalesce(ii.unit_price,0))       as deal_value_usd,
-          max(i.created_at)                                              as latest_inquiry_at
+          coalesce(string_agg(distinct nullif(ii.brand,''),   ', '), '') as brands,
+          coalesce(string_agg(distinct nullif(ii.product,''), ', '), '') as products,
+          sum(coalesce(ii.quantity,0) * coalesce(ii.unit_price,0))      as deal_value_usd,
+          max(i.created_at)                                             as latest_inquiry_at
         from inquiries i
         left join inquiry_items ii on ii.inquiry_id = i.id
         where i.org_id = o.id
       ) ia on true
-
       where 1=1
         ${type ? sql/*sql*/`and o.org_type = ${type}` : sql``}
         ${
           q
             ? sql/*sql*/`
                 and (
-                  lower(o.name)   like ${"%" + q + "%"} or
-                  lower(coalesce(o.domain, '')) like ${"%" + q + "%"} or
-                  lower(coalesce(o.tags,   '')) like ${"%" + q + "%"}
+                  lower(o.name) like ${'%' + q + '%'} or
+                  lower(coalesce(o.domain,'')) like ${'%' + q + '%'}
                 )
               `
             : sql``
@@ -109,7 +86,6 @@ export async function GET(req: NextRequest) {
       offset,
     });
   } catch (err: any) {
-    // щоб було видно реальну причину в Network
     return NextResponse.json(
       { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },
       { status: 500 }

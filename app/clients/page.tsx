@@ -258,7 +258,10 @@ function Row({
   const href = domainHref(item.domain);
 
   return (
-    <Card className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+    <Card
+      id={`org-${item.id}`}
+      className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+    >
       {/* Left color strip */}
       <span
         className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(
@@ -420,7 +423,13 @@ function GroupSection({
           </Card>
         ) : (
           items.map((it) => (
-            <Row key={it.id} item={it} onOpen={onOpen} onDelete={onDelete} />
+            <Row
+              key={it.id}
+              item={it}
+              onOpen={onOpen}
+              onDelete={onDelete}
+              onInquiries={(org) => setInqOrg(org)}
+            />
           ))
         )}
       </div>

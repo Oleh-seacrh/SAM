@@ -270,13 +270,17 @@ function Row({
       <CardHeader className="py-3">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
+            {/* Name */}
             <div className="text-lg font-semibold leading-tight truncate">
               {item.name || "—"}
             </div>
+
+            {/* Meta: type/country/industry */}
             <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
               <Badge>{item.org_type}</Badge>
               {item.country ? <span>• {item.country}</span> : <span>• —</span>}
               {item.industry ? <span>• {item.industry}</span> : null}
+
               <div className="inline-flex gap-1">
                 {item.status ? (
                   <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
@@ -297,6 +301,7 @@ function Row({
             </div>
           </div>
 
+          {/* Domain on the right */}
           <div className="flex items-center gap-2 shrink-0">
             {href ? (
               <a
@@ -320,6 +325,7 @@ function Row({
       </CardHeader>
 
       <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 text-[13px]">
+        {/* Brands */}
         <div>
           <div className="text-[11px] text-muted-foreground mb-1">Brands</div>
           <div className="truncate" title={item.brands || undefined}>
@@ -327,6 +333,7 @@ function Row({
           </div>
         </div>
 
+        {/* Products */}
         <div className="md:col-span-2">
           <div className="text-[11px] text-muted-foreground mb-1">
             Products (latest inquiry)
@@ -336,6 +343,7 @@ function Row({
           </div>
         </div>
 
+        {/* Deal value */}
         <div>
           <div className="text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
             <DollarSign className="w-3 h-3" /> Deal value
@@ -345,6 +353,7 @@ function Row({
           </div>
         </div>
 
+        {/* Footer line */}
         <div className="md:col-span-4 mt-1 flex items-center justify-between text-[12px] text-muted-foreground">
           <div className="inline-flex items-center gap-2">
             <CalendarClock className="w-4 h-4" />
@@ -354,7 +363,11 @@ function Row({
             </span>
           </div>
           <div className="flex gap-2">
-            <Button size="sm" variant="secondary" onClick={() => onInquiries(item)}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => onInquiries(item)}
+            >
               Inquiries
             </Button>
             <Button size="sm" variant="secondary" onClick={() => onOpen(item.id)}>
@@ -369,6 +382,7 @@ function Row({
     </Card>
   );
 }
+
 
 
             {/* Domain on the right */}

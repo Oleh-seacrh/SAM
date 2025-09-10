@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
   try {
-    // Потягнемо всі потрібні поля + агрегати останнього інквайрі
+    // РОЗШИРЕНИЙ варіант: тягнемо максимум полів + агрегації з вьюхи
     const rows = await sql/*sql*/`
       select
         o.id,
@@ -84,9 +84,9 @@ export async function GET(req: NextRequest) {
           q
             ? sql/*sql*/`
                 and (
-                  lower(o.name) like ${'%' + q + '%'}
-                  or (o.domain is not null and lower(o.domain) like ${'%' + q + '%'})
-                  or (o.tags   is not null and lower(o.tags)   like ${'%' + q + '%'})
+                  lower(o.name)    like ${'%' + q + '%'}
+                  or (o.domain  is not null and lower(o.domain)  like ${'%' + q + '%'})
+                  or (o.tags    is not null and lower(o.tags)    like ${'%' + q + '%'})
                   or (v.products is not null and lower(v.products) like ${'%' + q + '%'})
                   or (v.brands   is not null and lower(v.brands)   like ${'%' + q + '%'})
                 )
@@ -97,24 +97,72 @@ export async function GET(req: NextRequest) {
       limit ${limit} offset ${offset};
     `;
 
-    return NextResponse.json({
-      items: rows,  // новий UI
-      orgs: rows,   // сумісність зі старим
-      data: rows,   // на всяк
-      limit,
-      offset,
-    });
-  } catch (err: any) {
-    return NextResponse.json(
-      { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },
-      { status: 500 }
-    );
+    return NextResponse.json({ items: rows, orgs: rows, data: rows, limit, offset });
+  } catch (_e) {
+    // FALLBACK: без вьюхи, але з усіма org-полями
+    const rows = await sql/*sql*/`
+      select
+        id, name, org_type, domain, country,
+        industry, status, size_tag, source,
+        created_at, last_contact_at,
+        contact_person, general_email, personal_email, phone,
+        tags, brand, product, quantity
+      from organizations
+      where 1=1
+        ${type ? sql/*sql*/`and org_type = ${type}` : sql``}
+        ${
+          q
+            ? sql/*sql*/`
+                and (
+                  lower(name) like ${'%' + q + '%'}
+                  or (domain is not null and lower(domain) like ${'%' + q + '%'})
+                  or (tags   is not null and lower(tags)   like ${'%' + q + '%'})
+                )
+              `
+            : sql``
+        }
+      order by created_at desc
+      limit ${limit} offset ${offset};
+    `;
+
+    // Підставляємо порожні агрегації, щоб UI не падав
+    const mapped = (rows as any[]).map((r) => ({
+      ...r,
+      brands: null,
+      products: null,
+      deal_value_usd: null,
+      latest_inquiry_at: null,
+    }));
+
+    return NextResponse.json({ items: mapped, orgs: mapped, data: mapped, limit, offset });
   }
 }
 
+
+/* POST: create with soft/hard lock, name optional */
+export async function POST(req: NextRequest) {
 export async function POST(req: Request) {
   const sql = getSql();
 
+  const body = await req.json().catch(() => ({} as any));
+  const inputName = normalizeName(body?.name);
+  const domain = normalizeDomain(body?.domain);
+  const country = body?.country ?? null;
+  const org_type = mapTabToType(body?.org_type) ?? "client";
+  const emails: string[] = (Array.isArray(body?.emails) ? body.emails : (body?.emails ? [body.emails] : []))
+    .map((e: any) => normalizeEmail(String(e))).filter(Boolean) as string[];
+
+  // fallback name, якщо пусто
+  let name = inputName;
+  if (!name) {
+    if (domain) {
+      const base = domain.split(".")[0] || "Unnamed";
+      name = base.charAt(0).toUpperCase() + base.slice(1);
+    } else if (emails[0]) {
+      const base = (emails[0].split("@")[1] || "").split(".")[0] || "Unnamed";
+      name = base.charAt(0).toUpperCase() + base.slice(1);
+    } else {
+      name = "Unnamed";
   // helpers
   const normDomain = (raw?: string | null): string | null => {
     if (!raw) return null;
@@ -161,9 +209,25 @@ export async function POST(req: Request) {
     }
   }
 
+  // soft-lock
+  const params = new URLSearchParams();
+  params.set("name", name);
+  if (domain) params.set("domain", domain);
+  if (emails[0]) params.set("company_email", emails[0]);
+  if (emails[1]) params.set("personal_email", emails[1]);
+  const dedupeUrl = new URL("/api/orgs/dedupe", req.url);
+  dedupeUrl.search = params.toString();
   // --- SOFTLOCK по e-mail та назві
   const candidates: any[] = [];
 
+  try {
+    const r = await fetch(dedupeUrl.toString(), { method: "GET" });
+    if (r.ok) {
+      const data = await r.json().catch(() => ({}));
+      const duplicates = data?.duplicates ?? data?.candidates ?? [];
+      const allowOverride = req.headers.get("x-allow-duplicate") === "true";
+      if (duplicates.length && !allowOverride) {
+        return NextResponse.json({ error: "DUPLICATE_SOFTLOCK", duplicates }, { status: 409 });
   if (emails.length) {
     const csv = emails.join(",");
     const byEmail = await sql/*sql*/`
@@ -185,8 +249,21 @@ export async function POST(req: Request) {
         match: { via_email: via }
       });
     }
+  } catch { /* ignore */ }
+
+  // insert + hard-lock
+  try {
+    const org = (await sql/*sql*/`
+      insert into organizations (name, domain, country, org_type)
+      values (${name}, ${domain}, ${country}, ${org_type})
+      returning id, name, domain, country, org_type, created_at;
+    ` as any)[0];
   }
 
+    if (emails.length) {
+      for (const e of emails) {
+        await sql/*sql*/`insert into contacts (org_id, email) values (${org.id}, ${e});`;
+      }  
   if (name) {
     const exact = await sql/*sql*/`
       select id, name, domain, country, org_type
@@ -212,6 +289,20 @@ export async function POST(req: Request) {
     }
   }
 
+    return NextResponse.json({ org }, { status: 201 });
+  } catch (err: any) {
+    const msg = String(err?.message ?? "");
+    const isOrgDomain = msg.includes("organizations_domain_uniq");
+    const isOrgName = msg.includes("organizations_name_uniq");
+    const isContactEmail = msg.includes("contacts_email_uniq");
+    if (isOrgDomain || isOrgName || isContactEmail) {
+      return NextResponse.json(
+        { error: "DUPLICATE_HARDLOCK",
+          detail: isOrgDomain ? "Organization with the same domain already exists."
+                : isOrgName ? "Organization with the same name already exists."
+                : "Contact email already exists." },
+        { status: 409 }
+      );
   if (candidates.length && !allowDuplicate) {
     return new Response(
       JSON.stringify({ error: "DUPLICATE_SOFTLOCK", duplicates: candidates }),
@@ -240,6 +331,7 @@ export async function POST(req: Request) {
     } catch {
       // якщо колонок немає — ігноруємо, але створення вже відбулось
     }
+    return NextResponse.json({ error: "INTERNAL_ERROR", detail: msg }, { status: 500 });
   }
 
   return new Response(JSON.stringify({ id: org.id, org }), {

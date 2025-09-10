@@ -31,44 +31,84 @@ function mapTabToType(v?: string | null): "client"|"prospect"|"supplier"|null {
 }
 
 /* GET: list */
+/* GET: list */
 export async function GET(req: NextRequest) {
   const sql = getSql();
   const { searchParams } = new URL(req.url);
 
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
-  const rawType = searchParams.get("type") ?? searchParams.get("tab") ?? searchParams.get("org_type");
+  const rawType =
+    searchParams.get("type") ?? searchParams.get("tab") ?? searchParams.get("org_type");
   const type = mapTabToType(rawType);
   const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
   try {
+    // Потягнемо всі потрібні поля + агрегати останнього інквайрі
     const rows = await sql/*sql*/`
-      select id, name, domain, country, org_type, last_contact_at, created_at
-      from organizations
+      select
+        o.id,
+        o.name,
+        o.org_type,
+        o.domain,
+        o.country,
+        o.industry,
+        o.status,
+        o.size_tag,
+        o.source,
+        o.created_at,
+        o.last_contact_at,
+
+        -- contacts
+        o.contact_person,
+        o.general_email,
+        o.personal_email,
+        o.phone,
+
+        -- misc
+        o.tags,
+        o.brand,
+        o.product,
+        o.quantity,
+
+        -- aggregates from latest inquiry
+        v.brands,
+        v.products,
+        v.deal_value_usd,
+        v.latest_inquiry_at
+      from organizations o
+      left join v_inquiries_agg v on v.org_id = o.id
       where 1=1
-      ${type ? sql/*sql*/`and org_type = ${type}` : sql``}
-      ${
-        q
-          ? sql/*sql*/`
-              and (
-                lower(name) like ${'%' + q + '%'}
-                or (domain is not null and lower(domain) like ${'%' + q + '%'})
-              )
-            `
-          : sql``
-      }
-      order by created_at desc
+        ${type ? sql/*sql*/`and o.org_type = ${type}` : sql``}
+        ${
+          q
+            ? sql/*sql*/`
+                and (
+                  lower(o.name) like ${'%' + q + '%'}
+                  or (o.domain is not null and lower(o.domain) like ${'%' + q + '%'})
+                  or (o.tags   is not null and lower(o.tags)   like ${'%' + q + '%'})
+                  or (v.products is not null and lower(v.products) like ${'%' + q + '%'})
+                  or (v.brands   is not null and lower(v.brands)   like ${'%' + q + '%'})
+                )
+              `
+            : sql``
+        }
+      order by coalesce(v.latest_inquiry_at, o.created_at) desc, o.created_at desc
       limit ${limit} offset ${offset};
     `;
 
     return NextResponse.json({
-      items: rows,   // для нового UI
-      orgs: rows,    // для старого UI
-      data: rows,    // на всяк
-      limit, offset,
+      items: rows,  // новий UI
+      orgs: rows,   // сумісність зі старим
+      data: rows,   // на всяк
+      limit,
+      offset,
     });
   } catch (err: any) {
-    return NextResponse.json({ error: "INTERNAL_ERROR", detail: String(err?.message ?? err) }, { status: 500 });
+    return NextResponse.json(
+      { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },
+      { status: 500 }
+    );
   }
 }
 

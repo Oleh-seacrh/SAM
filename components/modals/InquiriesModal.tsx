@@ -142,22 +142,23 @@ export default function InquiriesModal({
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Create failed");
 
-      // OPTIMISTIC: миттєво показати новий інквайрі у списку
-      const optimisticRow: InquirySummary = {
-        id: j?.id || j?.inquiry?.id || `tmp-${Date.now()}`,
-        org_id: orgId,
-        summary: j?.summary ?? j?.inquiry?.summary ?? summaryToSend,
-        created_at: j?.created_at ?? j?.inquiry?.created_at ?? new Date().toISOString(),
-        items_count: 0,
-        brands: null,
-        products: null,
-        deal_value_usd: null,
-      };
-      setRows((prev) => [optimisticRow, ...prev]);
       setNewSummary("");
 
-      // у фоні підтягнемо «правду» з БД (без очікування)
-      void reload();
+      // одразу тягнемо свіжий список (бек вже без кешу) і відкриваємо найновіший
+      const rr = await fetch(`/api/orgs/${orgId}/inquiries?ts=${Date.now()}`, { cache: "no-store" });
+      const jj = await rr.json();
+      if (rr.ok) {
+        const list = jj?.items ?? [];
+        setRows(list);
+        const latest = list[0];
+        if (latest?.id) {
+          setExpanded((p) => ({ ...p, [latest.id]: true }));
+          // (не обов’язково) підтягнемо його айтеми, щоб одразу видно було
+          const ri = await fetch(`/api/inquiries/${latest.id}/items?ts=${Date.now()}`, { cache: "no-store" });
+          const ji = await ri.json().catch(() => ({}));
+          if (ri.ok) setItemsByInquiry((m) => ({ ...m, [latest.id]: ji?.items ?? [] }));
+        }
+      }
     } catch (e: any) {
       setErr(e?.message || "Create failed");
     } finally {

@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import OpenOrganizationModal from "@/components/modals/OpenOrganizationModal";
+import InquiriesModal from "@/components/modals/InquiriesModal";
 
 /* =========================================================
  * Small helpers for display

@@ -70,7 +70,7 @@ type OrgListItem = {
   domain?: string | null;
   country?: string | null;
   industry?: string | null;
-
+  tags?: string | null;
   status?: string | null;
   size_tag?: string | null;
   source?: string | null;
@@ -253,138 +253,214 @@ function Row({
   item: OrgListItem;
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
-  onInquiries: (org: OrgListItem) => void;
+  onInquiries?: (org: OrgListItem) => void; // зробив опційним, щоб не ламати sections view
 }) {
   const href = domainHref(item.domain);
 
+  // --- expanded persist (localStorage)
+  const STORAGE_KEY = "crm_card_expanded";
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      setExpanded(!!map[item.id]);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [item.id]);
+
+  const setExpandedPersist = (v: boolean) => {
+    setExpanded(v);
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      map[item.id] = v;
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(map));
+    } catch {}
+  };
+
+  const toggle = () => setExpandedPersist(!expanded);
+
+  // tags (рядок -> чіпси, +N)
+  const tags = useMemo(() => {
+    if (!item?.tags) return [] as string[];
+    return String(item.tags)
+      .split(/[,\s]+/)
+      .map((t) => t.trim())
+      .filter(Boolean);
+  }, [item?.tags]);
+
+  // обмежуємо кількість видимих чіпсів
+  const VISIBLE_TAGS = 3;
+  const visible = tags.slice(0, VISIBLE_TAGS);
+  const hiddenCount = Math.max(0, tags.length - visible.length);
+
   return (
-    <Card
-      id={`org-${item.id}`}
-      className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
-    >
-      {/* Left color strip */}
+    <Card id={`org-${item.id}`} className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+      {/* ліва кольорова смужка */}
       <span
-        className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(
-          item.org_type
-        )}`}
+        className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(item.org_type)}`}
         aria-hidden
       />
 
+      {/* ОДИН РЯДОК (стиснутий) */}
       <CardHeader className="py-3">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            {/* Name */}
-            <div className="text-lg font-semibold leading-tight truncate">
-              {item.name || "—"}
-            </div>
-
-            {/* Meta: type/country/industry */}
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
-              <Badge>{item.org_type}</Badge>
-              {item.country ? <span>• {item.country}</span> : <span>• —</span>}
-              {item.industry ? <span>• {item.industry}</span> : null}
-
-              <div className="inline-flex gap-1">
-                {item.status ? (
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                    {item.status}
-                  </span>
-                ) : null}
-                {item.size_tag ? (
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                    Size: {item.size_tag}
-                  </span>
-                ) : null}
-                {item.source ? (
-                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                    Source: {item.source}
-                  </span>
-                ) : null}
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] gap-3 items-center">
+          {/* Назва + тип + стрілка (клік по цьому блоку розгортає) */}
+          <button
+            className="min-w-0 text-left inline-flex items-center gap-2 hover:opacity-90"
+            onClick={toggle}
+            title="Expand / Collapse"
+          >
+            <ChevronDown
+              className={`w-4 h-4 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
+            />
+            <div className="min-w-0">
+              <div className="text-lg font-semibold leading-tight truncate">{item.name || "—"}</div>
+              <div className="mt-0.5">
+                <span className="px-1.5 py-0.5 rounded text-[11px] bg-white/10">
+                  {item.org_type}
+                </span>
               </div>
             </div>
-          </div>
+          </button>
 
-          {/* Domain on the right */}
-          <div className="flex items-center gap-2 shrink-0">
-            {href ? (
-              <a
-                href={href}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-xs text-zinc-300 hover:text-white"
-                title={item.domain || undefined}
-              >
-                <Globe className="w-4 h-4" />
-                <span className="hidden sm:inline">{item.domain}</span>
-                <ExternalLink className="w-3 h-3" />
-              </a>
-            ) : (
-              <span className="text-xs text-muted-foreground border border-white/10 rounded-md px-2 py-0.5">
-                No website
+          {/* Теги (на малих екранах ховаємо) */}
+          <div className="hidden sm:flex flex-wrap items-center gap-1 justify-self-start max-w-[42ch] overflow-hidden">
+            {visible.map((t, i) => (
+              <span key={i} className="px-1.5 py-0.5 rounded bg-white/5 text-[11px]">
+                {t}
+              </span>
+            ))}
+            {hiddenCount > 0 && (
+              <span className="px-1.5 py-0.5 rounded bg-white/10 text-[11px]" title={tags.join(", ")}>
+                +{hiddenCount}
               </span>
             )}
           </div>
-        </div>
-      </CardHeader>
 
-      <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 text-[13px]">
-        {/* Brands */}
-        <div>
-          <div className="text-[11px] text-muted-foreground mb-1">Brands</div>
-          <div className="truncate" title={item.brands || undefined}>
-            {item.brands || "—"}
-          </div>
-        </div>
-
-        {/* Products */}
-        <div className="md:col-span-2">
-          <div className="text-[11px] text-muted-foreground mb-1">
-            Products (latest inquiry)
-          </div>
-          <div className="truncate" title={item.products || undefined}>
-            {item.products || "—"}
-          </div>
-        </div>
-
-        {/* Deal value */}
-        <div>
-          <div className="text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
-            <DollarSign className="w-3 h-3" /> Deal value
-          </div>
-          <div className="truncate" title={item.deal_value_usd?.toString()}>
-            {formatMoney(item.deal_value_usd)}
-          </div>
-        </div>
-
-        {/* Footer line */}
-        <div className="md:col-span-4 mt-1 flex items-center justify-between text-[12px] text-muted-foreground">
-          <div className="inline-flex items-center gap-2">
+          {/* Останній контакт */}
+          <div className="justify-self-start inline-flex items-center gap-2 text-[12px] text-muted-foreground">
             <CalendarClock className="w-4 h-4" />
-            <span>Last contact:</span>
-            <span className="text-foreground font-medium">
+            <span className="whitespace-nowrap">
               {fmtDate(item.last_contact_at)}
             </span>
           </div>
-          <div className="flex gap-2">
+
+          {/* Дії (кнопки) */}
+          <div className="flex gap-2 justify-self-end shrink-0">
             <Button
               size="sm"
               variant="secondary"
-              onClick={() => onInquiries(item)}
+              onClick={(e) => {
+                e.stopPropagation();
+                onInquiries?.(item);
+              }}
             >
               Inquiries
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => onOpen(item.id)}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen(item.id);
+              }}
+            >
               Open
             </Button>
-            <Button size="sm" variant="outline" onClick={() => onDelete(item.id)}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDelete(item.id);
+              }}
+            >
               Delete
             </Button>
           </div>
         </div>
-      </CardContent>
+      </CardHeader>
+
+      {/* РОЗГОРНУТИЙ ВМІСТ (4 тайли) */}
+      <div
+        className={`transition-all duration-300 ease-in-out ${expanded ? "max-h-[1000px] opacity-100" : "max-h-0 opacity-0"} overflow-hidden`}
+      >
+        <CardContent className="pt-0 pb-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+            {/* Company info */}
+            <div className="rounded-xl border border-white/10 p-3">
+              <div className="text-sm font-semibold mb-2">Company</div>
+              <div className="text-[12px] text-muted-foreground space-y-1">
+                <div><span className="text-foreground">Country:</span> {item.country || "—"}</div>
+                <div className="inline-flex items-center gap-1">
+                  <span className="text-foreground">Domain:</span>{" "}
+                  {href ? (
+                    <a
+                      href={href}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="underline underline-offset-2"
+                      title={item.domain || undefined}
+                    >
+                      {item.domain}
+                    </a>
+                  ) : "—"}
+                </div>
+                <div><span className="text-foreground">Status:</span> {item.status || "—"}</div>
+                <div><span className="text-foreground">Size:</span> {item.size_tag || "—"}</div>
+                <div><span className="text-foreground">Source:</span> {item.source || "—"}</div>
+                <div><span className="text-foreground">Created:</span> {fmtDate(item.created_at)}</div>
+              </div>
+            </div>
+
+            {/* Industry & Products */}
+            <div className="rounded-xl border border-white/10 p-3">
+              <div className="text-sm font-semibold mb-2">Industry & Products</div>
+              <div className="text-[12px] text-muted-foreground space-y-1">
+                <div><span className="text-foreground">Industry:</span> {item.industry || "—"}</div>
+                <div><span className="text-foreground">Brands:</span> {item.brands || "—"}</div>
+                <div><span className="text-foreground">Products:</span> {item.products || "—"}</div>
+              </div>
+            </div>
+
+            {/* Contacts (поки лише місце під дані) */}
+            <div className="rounded-xl border border-white/10 p-3">
+              <div className="text-sm font-semibold mb-2">Contacts</div>
+              <div className="text-[12px] text-muted-foreground">
+                —{/* коли зʼявляться поля (email/phone/person) — просто підставимо їх тут */}
+              </div>
+            </div>
+
+            {/* Latest inquiry */}
+            <div className="rounded-xl border border-white/10 p-3">
+              <div className="text-sm font-semibold mb-2">Latest inquiry</div>
+              <div className="text-[12px] text-muted-foreground space-y-1">
+                <div><span className="text-foreground">Date:</span> {fmtDate(item.latest_inquiry_at)}</div>
+                <div><span className="text-foreground">Brands:</span> {item.brands || "—"}</div>
+                <div><span className="text-foreground">Products:</span> {item.products || "—"}</div>
+                <div><span className="text-foreground">Deal value:</span> {formatMoney(item.deal_value_usd)}</div>
+              </div>
+              <div className="mt-3">
+                <Button
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onInquiries?.(item);
+                  }}
+                >
+                  Open inquiries
+                </Button>
+              </div>
+            </div>
+          </div>
+        </CardContent>
+      </div>
     </Card>
   );
 }
+
 
 
 /* =========================================================

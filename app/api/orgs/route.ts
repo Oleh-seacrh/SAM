@@ -40,87 +40,67 @@ export async function GET(req: NextRequest) {
   const q = (searchParams.get("q") ?? "").trim().toLowerCase();
   const rawType =
     searchParams.get("type") ?? searchParams.get("tab") ?? searchParams.get("org_type");
-  const type =
-    !rawType ? null
-      : rawType.toLowerCase() === "clients" || rawType.toLowerCase() === "client" ? "client"
-      : rawType.toLowerCase() === "prospects" || rawType.toLowerCase() === "prospect" ? "prospect"
-      : rawType.toLowerCase() === "suppliers" || rawType.toLowerCase() === "supplier" ? "supplier"
-      : null;
+  const type = mapTabToType(rawType);
 
   const limit = Math.min(200, Math.max(1, Number(searchParams.get("limit") ?? 50)));
   const offset = Math.max(0, Number(searchParams.get("offset") ?? 0));
 
   try {
-    // Спроба: повний набір полів + агрегації з v_inquiries_agg
     const rows = await sql/*sql*/`
-      with base as (
-        select
-          o.id, o.name, o.domain, o.country, o.org_type,
-          o.status, o.size_tag, o.source, o.tags,
-          o.industry, o.contact_person, o.phone,
-          o.general_email, o.contact_email,
-          o.last_contact_at, o.created_at
-        from organizations o
-        where 1=1
-          ${type ? sql/*sql*/`and o.org_type = ${type}` : sql``}
-          ${
-            q
-              ? sql/*sql*/`
-                  and (
-                    lower(o.name) like ${'%' + q + '%'}
-                    or (o.domain is not null and lower(o.domain) like ${'%' + q + '%'})
-                  )
-                `
-              : sql``
-          }
-        order by o.created_at desc
-        limit ${limit} offset ${offset}
-      )
       select
-        b.*,
-        a.latest_inquiry_at,
-        a.brands,
-        a.products,
-        a.deal_value_usd
-      from base b
-      left join v_inquiries_agg a on a.org_id = b.id;
-    `;
+        o.id,
+        o.name,
+        o.org_type,
+        o.domain,
+        o.country,
+        o.status,
+        o.size_tag,
+        o.source,
+        o.tags,
+        o.industry,
+        o.contact_person,
+        o.phone,
+        o.general_email,
+        o.contact_email,
+        o.last_contact_at,
+        o.created_at,
 
-    return NextResponse.json(
-      { items: rows, orgs: rows, data: rows, limit, offset },
-      { status: 200 }
-    );
-  } catch (err: any) {
-    // Якщо раптом немає в’юхи — повертаємо старий мінімальний селект, щоб не ламалось
-    try {
-      const fallback = await sql/*sql*/`
-        select id, name, domain, country, org_type, last_contact_at, created_at
-        from organizations
-        where 1=1
-        ${type ? sql/*sql*/`and org_type = ${type}` : sql``}
+        -- агрегація з останнього інкваєра
+        ia.brands,
+        ia.products,
+        ia.deal_value_usd,
+        ia.latest_inquiry_at
+      from organizations o
+      left join v_inquiries_agg ia on ia.org_id = o.id
+      where 1=1
+        ${type ? sql/*sql*/`and o.org_type = ${type}` : sql``}
         ${
           q
             ? sql/*sql*/`
                 and (
-                  lower(name) like ${'%' + q + '%'}
-                  or (domain is not null and lower(domain) like ${'%' + q + '%'})
+                  lower(o.name) like ${"%" + q + "%"}
+                  or (o.domain is not null and lower(o.domain) like ${"%" + q + "%"})
+                  or (o.tags   is not null and lower(o.tags)   like ${"%" + q + "%"})
                 )
               `
             : sql``
         }
-        order by created_at desc
-        limit ${limit} offset ${offset};
-      `;
-      return NextResponse.json(
-        { items: fallback, orgs: fallback, data: fallback, limit, offset },
-        { status: 200 }
-      );
-    } catch (e2: any) {
-      return NextResponse.json(
-        { error: "INTERNAL_ERROR", detail: String(e2?.message ?? e2) },
-        { status: 500 }
-      );
-    }
+      order by o.created_at desc
+      limit ${limit} offset ${offset};
+    `;
+
+    return NextResponse.json({
+      items: rows,   // новий UI
+      orgs: rows,    // старий UI не зламається
+      data: rows,    // сумісність
+      limit,
+      offset,
+    });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: "INTERNAL_ERROR", detail: String(err?.message ?? err) },
+      { status: 500 }
+    );
   }
 }
 

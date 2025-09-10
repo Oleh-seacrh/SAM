@@ -117,7 +117,7 @@ async function fetchList(org_type: OrgType) {
 async function fetchDetail(id: string) {
   const r = await fetch(`/api/orgs/${id}`, { cache: "no-store" });
   const j = await r.json();
-  if (!r.ok) th new Error(j?.error || `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
   return j as Detail;
 }
 

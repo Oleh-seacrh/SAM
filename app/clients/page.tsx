@@ -264,6 +264,17 @@ function Row({
 }) {
   const href = domainHref(item.domain);
 
+  // додаткові поля, що є в БД, але можуть не бути в типі
+  const ext = item as any;
+  const contactPerson = ext?.contact_person as string | undefined;
+  const generalEmail = ext?.general_email as string | undefined;
+  const personalEmail = ext?.personal_email as string | undefined;
+  const phone = ext?.phone as string | undefined;
+  const tagsStr = ext?.tags as string | undefined;
+  const prefBrand = ext?.brand as string | undefined;
+  const prefProduct = ext?.product as string | undefined;
+  const prefQty = (ext?.quantity as number | undefined) ?? undefined;
+
   // --- expanded persist (localStorage)
   const STORAGE_KEY = "crm_card_expanded";
   const [expanded, setExpanded] = useState(false);
@@ -290,12 +301,12 @@ function Row({
 
   // tags (рядок -> чіпси, +N)
   const tags = useMemo(() => {
-    if (!item?.tags) return [] as string[];
-    return String(item.tags)
+    if (!tagsStr) return [] as string[];
+    return String(tagsStr)
       .split(/[,\s]+/)
       .map((t) => t.trim())
       .filter(Boolean);
-  }, [item?.tags]);
+  }, [tagsStr]);
 
   // обмежуємо кількість видимих чіпсів
   const VISIBLE_TAGS = 3;
@@ -303,7 +314,10 @@ function Row({
   const hiddenCount = Math.max(0, tags.length - visible.length);
 
   return (
-    <Card id={`org-${item.id}`} className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+    <Card
+      id={`org-${item.id}`}
+      className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]"
+    >
       {/* ліва кольорова смужка */}
       <span
         className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(item.org_type)}`}
@@ -323,35 +337,37 @@ function Row({
               className={`w-4 h-4 shrink-0 transition-transform ${expanded ? "rotate-180" : ""}`}
             />
             <div className="min-w-0">
-              <div className="text-lg font-semibold leading-tight truncate">{item.name || "—"}</div>
-              <div className="mt-0.5">
+              <div className="text-lg font-semibold leading-tight truncate">
+                {item.name || "—"}
+              </div>
+              <div className="mt-0.5 flex items-center gap-2">
                 <span className="px-1.5 py-0.5 rounded text-[11px] bg-white/10">
                   {item.org_type}
                 </span>
+                {/* Теги (3 видимі +N) */}
+                <div className="hidden sm:flex flex-wrap items-center gap-1 max-w-[42ch] overflow-hidden">
+                  {visible.map((t, i) => (
+                    <span key={i} className="px-1.5 py-0.5 rounded bg-white/5 text-[11px]">
+                      {t}
+                    </span>
+                  ))}
+                  {hiddenCount > 0 && (
+                    <span
+                      className="px-1.5 py-0.5 rounded bg-white/10 text-[11px]"
+                      title={tags.join(", ")}
+                    >
+                      +{hiddenCount}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           </button>
 
-          {/* Теги (на малих екранах ховаємо) */}
-          <div className="hidden sm:flex flex-wrap items-center gap-1 justify-self-start max-w-[42ch] overflow-hidden">
-            {visible.map((t, i) => (
-              <span key={i} className="px-1.5 py-0.5 rounded bg-white/5 text-[11px]">
-                {t}
-              </span>
-            ))}
-            {hiddenCount > 0 && (
-              <span className="px-1.5 py-0.5 rounded bg-white/10 text-[11px]" title={tags.join(", ")}>
-                +{hiddenCount}
-              </span>
-            )}
-          </div>
-
           {/* Останній контакт */}
           <div className="justify-self-start inline-flex items-center gap-2 text-[12px] text-muted-foreground">
             <CalendarClock className="w-4 h-4" />
-            <span className="whitespace-nowrap">
-              {fmtDate(item.last_contact_at)}
-            </span>
+            <span className="whitespace-nowrap">{fmtDate(item.last_contact_at)}</span>
           </div>
 
           {/* Дії (кнопки) */}
@@ -392,7 +408,9 @@ function Row({
 
       {/* РОЗГОРНУТИЙ ВМІСТ (4 тайли) */}
       <div
-        className={`transition-all duration-300 ease-in-out ${expanded ? "max-h-[1000px] opacity-100" : "max-h-0 opacity-0"} overflow-hidden`}
+        className={`transition-all duration-300 ease-in-out ${
+          expanded ? "max-h-[1000px] opacity-100" : "max-h-0 opacity-0"
+        } overflow-hidden`}
       >
         <CardContent className="pt-0 pb-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
@@ -400,7 +418,10 @@ function Row({
             <div className="rounded-xl border border-white/10 p-3">
               <div className="text-sm font-semibold mb-2">Company</div>
               <div className="text-[12px] text-muted-foreground space-y-1">
-                <div><span className="text-foreground">Country:</span> {item.country || "—"}</div>
+                <div>
+                  <span className="text-foreground">Country:</span>{" "}
+                  {item.country || "—"}
+                </div>
                 <div className="inline-flex items-center gap-1">
                   <span className="text-foreground">Domain:</span>{" "}
                   {href ? (
@@ -413,12 +434,26 @@ function Row({
                     >
                       {item.domain}
                     </a>
-                  ) : "—"}
+                  ) : (
+                    "—"
+                  )}
                 </div>
-                <div><span className="text-foreground">Status:</span> {item.status || "—"}</div>
-                <div><span className="text-foreground">Size:</span> {item.size_tag || "—"}</div>
-                <div><span className="text-foreground">Source:</span> {item.source || "—"}</div>
-                <div><span className="text-foreground">Created:</span> {fmtDate(item.created_at)}</div>
+                <div>
+                  <span className="text-foreground">Status:</span>{" "}
+                  {item.status || "—"}
+                </div>
+                <div>
+                  <span className="text-foreground">Size:</span>{" "}
+                  {item.size_tag || "—"}
+                </div>
+                <div>
+                  <span className="text-foreground">Source:</span>{" "}
+                  {item.source || "—"}
+                </div>
+                <div>
+                  <span className="text-foreground">Created:</span>{" "}
+                  {fmtDate(item.created_at)}
+                </div>
               </div>
             </div>
 
@@ -426,17 +461,69 @@ function Row({
             <div className="rounded-xl border border-white/10 p-3">
               <div className="text-sm font-semibold mb-2">Industry & Products</div>
               <div className="text-[12px] text-muted-foreground space-y-1">
-                <div><span className="text-foreground">Industry:</span> {item.industry || "—"}</div>
-                <div><span className="text-foreground">Brands:</span> {item.brands || "—"}</div>
-                <div><span className="text-foreground">Products:</span> {item.products || "—"}</div>
+                <div>
+                  <span className="text-foreground">Industry:</span>{" "}
+                  {item.industry || "—"}
+                </div>
+                <div>
+                  <span className="text-foreground">Brands:</span>{" "}
+                  {item.brands || "—"}
+                </div>
+                <div>
+                  <span className="text-foreground">Products:</span>{" "}
+                  {item.products || "—"}
+                </div>
+                {(prefBrand || prefProduct || typeof prefQty === "number") && (
+                  <div className="pt-1">
+                    <span className="text-foreground">Preferred:</span>{" "}
+                    <span className="text-zinc-200">
+                      {prefBrand ?? "—"}
+                      {prefProduct ? ` • ${prefProduct}` : ""}
+                      {typeof prefQty === "number" ? ` • ${prefQty}` : ""}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Contacts (поки лише місце під дані) */}
+            {/* Contacts */}
             <div className="rounded-xl border border-white/10 p-3">
               <div className="text-sm font-semibold mb-2">Contacts</div>
-              <div className="text-[12px] text-muted-foreground">
-                —{/* коли зʼявляться поля (email/phone/person) — просто підставимо їх тут */}
+              <div className="text-[12px] text-muted-foreground space-y-1">
+                <div>
+                  <span className="text-foreground">Contact person:</span>{" "}
+                  {contactPerson || "—"}
+                </div>
+                <div>
+                  <span className="text-foreground">General email:</span>{" "}
+                  {generalEmail ? (
+                    <a
+                      className="underline underline-offset-2"
+                      href={`mailto:${generalEmail}`}
+                    >
+                      {generalEmail}
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </div>
+                <div>
+                  <span className="text-foreground">Personal email:</span>{" "}
+                  {personalEmail ? (
+                    <a
+                      className="underline underline-offset-2"
+                      href={`mailto:${personalEmail}`}
+                    >
+                      {personalEmail}
+                    </a>
+                  ) : (
+                    "—"
+                  )}
+                </div>
+                <div>
+                  <span className="text-foreground">Phone:</span>{" "}
+                  {phone || "—"}
+                </div>
               </div>
             </div>
 
@@ -444,10 +531,22 @@ function Row({
             <div className="rounded-xl border border-white/10 p-3">
               <div className="text-sm font-semibold mb-2">Latest inquiry</div>
               <div className="text-[12px] text-muted-foreground space-y-1">
-                <div><span className="text-foreground">Date:</span> {fmtDate(item.latest_inquiry_at)}</div>
-                <div><span className="text-foreground">Brands:</span> {item.brands || "—"}</div>
-                <div><span className="text-foreground">Products:</span> {item.products || "—"}</div>
-                <div><span className="text-foreground">Deal value:</span> {formatMoney(item.deal_value_usd)}</div>
+                <div>
+                  <span className="text-foreground">Date:</span>{" "}
+                  {fmtDate(item.latest_inquiry_at)}
+                </div>
+                <div>
+                  <span className="text-foreground">Brands:</span>{" "}
+                  {item.brands || "—"}
+                </div>
+                <div>
+                  <span className="text-foreground">Products:</span>{" "}
+                  {item.products || "—"}
+                </div>
+                <div>
+                  <span className="text-foreground">Deal value:</span>{" "}
+                  {formatMoney(item.deal_value_usd)}
+                </div>
               </div>
               <div className="mt-3">
                 <Button
@@ -467,6 +566,7 @@ function Row({
     </Card>
   );
 }
+
 
 
 

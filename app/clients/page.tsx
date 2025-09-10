@@ -110,14 +110,14 @@ async function fetchList(org_type: OrgType) {
   const r = await fetch(`/api/orgs?org_type=${org_type}`, { cache: "no-store" });
   const txt = await r.text();
   const j = txt ? JSON.parse(txt) : {};
-  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+  if (!r.ok) th new Error(j?.error || `HTTP ${r.status}`);
   return (j.data ?? []) as OrgListItem[];
 }
 
 async function fetchDetail(id: string) {
   const r = await fetch(`/api/orgs/${id}`, { cache: "no-store" });
   const j = await r.json();
-  if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+  if (!r.ok) th new Error(j?.error || `HTTP ${r.status}`);
   return j as Detail;
 }
 
@@ -248,58 +248,128 @@ function Row({
   item,
   onOpen,
   onDelete,
+  onInquiries,
 }: {
   item: OrgListItem;
   onOpen: (id: string) => void;
   onDelete: (id: string) => void;
+  onInquiries: (org: OrgListItem) => void;
 }) {
   const href = domainHref(item.domain);
 
   return (
-    // anchor + невеликий offset для скролу під шапку
-    <div id={`org-${item.id}`} className="scroll-mt-24">
-      <Card className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
-        {/* Left color strip */}
-        <span
-          className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(
-            item.org_type
-          )}`}
-          aria-hidden
-        />
+    <Card className="relative overflow-hidden transition-shadow hover:shadow-[0_0_0_1px_rgba(255,255,255,0.08)]">
+      {/* Left color strip */}
+      <span
+        className={`absolute left-0 top-0 h-full w-[3px] ${typeColor(
+          item.org_type
+        )}`}
+        aria-hidden
+      />
 
-        <CardHeader className="py-3">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              {/* Name bigger */}
-              <div className="text-lg font-semibold leading-tight truncate">
-                {item.name || "—"}
-              </div>
-
-              {/* Meta: type/country/industry */}
-              <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
-                <Badge>{item.org_type}</Badge>
-                {item.country ? <span>• {item.country}</span> : <span>• —</span>}
-                {item.industry ? <span>• {item.industry}</span> : null}
-                {/* optional chips */}
-                <div className="inline-flex gap-1">
-                  {item.status ? (
-                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                      {item.status}
-                    </span>
-                  ) : null}
-                  {item.size_tag ? (
-                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                      Size: {item.size_tag}
-                    </span>
-                  ) : null}
-                  {item.source ? (
-                    <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
-                      Source: {item.source}
-                    </span>
-                  ) : null}
-                </div>
+      <CardHeader className="py-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-lg font-semibold leading-tight truncate">
+              {item.name || "—"}
+            </div>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-[12px] text-zinc-400">
+              <Badge>{item.org_type}</Badge>
+              {item.country ? <span>• {item.country}</span> : <span>• —</span>}
+              {item.industry ? <span>• {item.industry}</span> : null}
+              <div className="inline-flex gap-1">
+                {item.status ? (
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                    {item.status}
+                  </span>
+                ) : null}
+                {item.size_tag ? (
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                    Size: {item.size_tag}
+                  </span>
+                ) : null}
+                {item.source ? (
+                  <span className="rounded bg-white/5 px-1.5 py-0.5 text-zinc-300">
+                    Source: {item.source}
+                  </span>
+                ) : null}
               </div>
             </div>
+          </div>
+
+          <div className="flex items-center gap-2 shrink-0">
+            {href ? (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-zinc-300 hover:text-white"
+                title={item.domain || undefined}
+              >
+                <Globe className="w-4 h-4" />
+                <span className="hidden sm:inline">{item.domain}</span>
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            ) : (
+              <span className="text-xs text-muted-foreground border border-white/10 rounded-md px-2 py-0.5">
+                No website
+              </span>
+            )}
+          </div>
+        </div>
+      </CardHeader>
+
+      <CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 text-[13px]">
+        <div>
+          <div className="text-[11px] text-muted-foreground mb-1">Brands</div>
+          <div className="truncate" title={item.brands || undefined}>
+            {item.brands || "—"}
+          </div>
+        </div>
+
+        <div className="md:col-span-2">
+          <div className="text-[11px] text-muted-foreground mb-1">
+            Products (latest inquiry)
+          </div>
+          <div className="truncate" title={item.products || undefined}>
+            {item.products || "—"}
+          </div>
+        </div>
+
+        <div>
+          <div className="text-[11px] text-muted-foreground mb-1 flex items-center gap-1">
+            <DollarSign className="w-3 h-3" /> Deal value
+          </div>
+          <div className="truncate" title={item.deal_value_usd?.toString()}>
+            {formatMoney(item.deal_value_usd)}
+          </div>
+        </div>
+
+        <div className="md:col-span-4 mt-1 flex items-center justify-between text-[12px] text-muted-foreground">
+          <div className="inline-flex items-center gap-2">
+            <CalendarClock className="w-4 h-4" />
+            <span>Last contact:</span>
+            <span className="text-foreground font-medium">
+              {fmtDate(item.last_contact_at)}
+            </span>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="secondary" onClick={() => onInquiries(item)}>
+              Inquiries
+            </Button>
+            <Button size="sm" variant="secondary" onClick={() => onOpen(item.id)}>
+              Open
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => onDelete(item.id)}>
+              Delete
+            </Button>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 
             {/* Domain on the right */}
             <div className="flex items-center gap-2 shrink-0">
@@ -847,7 +917,7 @@ export default function ClientsPage() {
 
   // page-level notice
   const [pageNotice, setPageNotice] = useState<{ title: string; message: string } | null>(null);
-
+  const [inqOrg, setInqOrg] = useState<OrgListItem | null>(null);
   const reload = async (which: OrgType | "all") => {
     setLoading(true);
     setErr(null);
@@ -1026,12 +1096,9 @@ export default function ClientsPage() {
                   <Row
                     key={it.id}
                     item={it}
-                    onOpen={(id) => {
-                      // відкриваємо вашу велику модалку редагування
-                      setSelectedOrgId(id);
-                      setOpenOrg(true);
-                    }}
+                    onOpen={(id) => { setSelectedOrgId(id); setOpenOrg(true); }}
                     onDelete={(id) => onDelete(id, it.org_type)}
+                    onInquiries={(org) => setInqOrg(org)}
                   />
                 )
               )}
@@ -1102,6 +1169,14 @@ export default function ClientsPage() {
             if (!v) router.refresh();
           }}
           orgId={selectedOrgId}
+        />
+      )}
+      {inqOrg && (
+        <InquiriesModal
+          open={!!inqOrg}
+          onClose={() => setInqOrg(null)}
+          orgId={inqOrg.id}
+          orgName={inqOrg.name}
         />
       )}
 

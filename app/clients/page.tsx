@@ -66,7 +66,14 @@ type OrgListItem = {
   id: string;
   name: string;
   org_type: OrgType;
-
+  tags?: string | null;               // NEW
+  general_email?: string | null;      // NEW
+  personal_email?: string | null;     // NEW
+  contact_person?: string | null;     // NEW
+  phone?: string | null;              // NEW
+  brand?: string | null;              // NEW
+  product?: string | null;            // NEW
+  quantity?: number | null;           // NEW
   domain?: string | null;
   country?: string | null;
   industry?: string | null;

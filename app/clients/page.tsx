@@ -266,10 +266,10 @@ function Row({
 
   // додаткові поля, що є в БД, але можуть не бути в типі
   const ext = item as any;
-  const contactPerson = ext?.contact_person as string | undefined;
+  const contactPerson = ext?.contact_name as string | undefined;
   const generalEmail = ext?.general_email as string | undefined;
-  const personalEmail = ext?.personal_email as string | undefined;
-  const phone = ext?.phone as string | undefined;
+  const personalEmail = ext?.contact_email as string | undefined;
+  const phone = ext?.contact_phone as string | undefined;
   const tagsStr = ext?.tags as string | undefined;
   const prefBrand = ext?.brand as string | undefined;
   const prefProduct = ext?.product as string | undefined;

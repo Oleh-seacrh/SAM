@@ -18,7 +18,12 @@ export function Sidebar() {
   const pathname = usePathname();
   return (
     <aside className="w-60 border-r border-white/10 bg-[var(--card)]">
-      <div className="h-14 flex items-center px-4 text-lg font-semibold">SAM</div>
+      {/* шапка сайдбару з кнопкою перекладу праворуч */}
+      <div className="h-14 flex items-center justify-between px-4">
+        <span className="text-lg font-semibold">SAM</span>
+        <TranslateButton />
+      </div>
+
       <nav className="px-2 pb-4 space-y-1">
         {items.map((it) => {
           const active = pathname?.startsWith(it.href);
@@ -39,6 +44,3 @@ export function Sidebar() {
     </aside>
   );
 }
-<div className="ml-auto flex items-center gap-2">
-  <TranslateButton />
-</div>

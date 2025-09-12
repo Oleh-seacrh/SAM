@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
-
+import TranslateButton from "@/components/TranslateButton";
 const items = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/tasks", label: "Tasks" },
@@ -39,3 +39,6 @@ export function Sidebar() {
     </aside>
   );
 }
+<div className="ml-auto flex items-center gap-2">
+  <TranslateButton />
+</div>

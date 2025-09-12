@@ -91,9 +91,10 @@ export default function NewLeadModal({ open, onClose, defaultType = "prospect" }
         alert(data?.detail || "Error");
         return;
       }
+      router.refresh(); 
 
       onClose(); reset();
-      // TODO: router.refresh()
+
     } finally {
       setLoading(false);
     }

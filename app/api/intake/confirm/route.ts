@@ -24,15 +24,11 @@ export async function POST(req: NextRequest) {
     const normalized: Normalized = body?.normalized ?? {};
     const decision: Decision = body?.decision ?? { mode: "create" };
 
-    if (!decision?.mode) {
-      return NextResponse.json({ error: "Bad decision" }, { status: 400 });
-    }
-    if (decision.mode === "create" && !decision.orgType) {
+    if (!decision?.mode) return NextResponse.json({ error: "Bad decision" }, { status: 400 });
+    if (decision.mode === "create" && !decision.orgType)
       return NextResponse.json({ error: "orgType required" }, { status: 400 });
-    }
-    if ((decision.mode === "merge" || decision.mode === "update") && !decision.targetOrgId) {
+    if ((decision.mode === "merge" || decision.mode === "update") && !decision.targetOrgId)
       return NextResponse.json({ error: "targetOrgId required" }, { status: 400 });
-    }
 
     const sql = getSql();
 
@@ -45,12 +41,13 @@ export async function POST(req: NextRequest) {
 
     let orgId = decision.targetOrgId ?? null;
 
-    // транзакція
-    return await sql.begin(async (tx: any) => {
+    // ---- manual transaction for neon serverless ----
+    await sql`BEGIN`;
+    try {
       // 1) Org: create / merge/update
       if (decision.mode === "create") {
         const newOrgId = randomUUID();
-        await tx/*sql*/`
+        await sql/*sql*/`
           insert into organizations
             (id, name, org_type, country, last_contact_at, created_at, updated_at,
              general_email, added_at, domain, industry, status, tags, size_tag, source,
@@ -65,8 +62,7 @@ export async function POST(req: NextRequest) {
         `;
         orgId = newOrgId;
       } else {
-        // merge/update — легке доповнення відсутніх полів
-        await tx/*sql*/`
+        await sql/*sql*/`
           update organizations set
             updated_at   = now(),
             contact_name  = coalesce(${normalized.who?.name ?? null}, contact_name),
@@ -91,7 +87,7 @@ export async function POST(req: NextRequest) {
       const summary = summaryParts.length ? summaryParts.join(" | ") : "New inquiry";
 
       const inquiryId = randomUUID();
-      await tx/*sql*/`
+      await sql/*sql*/`
         insert into inquiries
           (id, org_id, summary, created_at, requested_at, notes, source, updated_at, deleted_at)
         values
@@ -99,14 +95,14 @@ export async function POST(req: NextRequest) {
            ${src}, now(), null)
       `;
 
-      // 3) Inquiry item (якщо є дані)
+      // 3) Inquiry item (опційно)
       const hasItem = Boolean(
         normalized.intent?.brand || normalized.intent?.product || normalized.intent?.quantity
       );
       if (hasItem) {
-        const qtyText = normalized.intent?.quantity ?? null; // шлемо текст — безпечно для будь-якого типу
         const itemId = randomUUID();
-        await tx/*sql*/`
+        const qtyText = normalized.intent?.quantity ?? null; // безпечніше як text
+        await sql/*sql*/`
           insert into inquiry_items
             (id, inquiry_id, brand, product, quantity, unit, unit_price, created_at,
              quantity_unit, deal_value, currency, notes, updated_at, deleted_at)
@@ -117,11 +113,14 @@ export async function POST(req: NextRequest) {
         `;
       }
 
+      await sql`COMMIT`;
       return NextResponse.json({ ok: true, organizationId: orgId, inquiryId });
-    });
+    } catch (e) {
+      await sql`ROLLBACK`;
+      throw e;
+    }
   } catch (err: any) {
     console.error("INTAKE CONFIRM ERROR:", err?.message || err);
-    // віддаємо текст помилки у відповідь, щоб легше дебажити з фронту
     return NextResponse.json({ error: err?.message || "Internal error" }, { status: 500 });
   }
 }

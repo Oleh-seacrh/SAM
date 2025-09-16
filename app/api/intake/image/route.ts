@@ -33,15 +33,53 @@ Text (OCR): """${rawText || ""}"""
 async function runOCR(_buf: Buffer): Promise<string> { return ""; }
 
 // ---- LLM-парсинг (поки заглушка, але вже отримує self і готовий prompt)
-async function parseInquiry({ imageUrl, rawText, self }:{ imageUrl:string; rawText:string; self:any }) {
-  const _prompt = buildPrompt(self, rawText, imageUrl);
-  // TODO: викликни тут свою vision LLM і поверни JSON.
+async function parseInquiryReal({ imageDataUrl, rawText, self }:{
+  imageDataUrl: string; rawText: string; self:any
+}) {
+  const prompt = buildPrompt(self, rawText, imageDataUrl || "(no image)");
+  const provider = (process.env.SAM_LLM_PROVIDER || "OPENAI").toUpperCase();
+  let json: any;
+  if (provider === "OPENAI") {
+    json = await extractInquiryViaOpenAI({ prompt, imageDataUrl });
+  } else {
+    throw new Error(`Provider ${provider} not implemented`);
+  }
   return {
-    who: { name: null, email: null, phone: null, source: "other" as const },
-    company: { legalName: null, displayName: null, domain: null, country: null },
-    intent: { type: "Info" as const, brand: null, product: null, quantity: null, freeText: rawText || null },
-    meta: { confidence: 0.5, rawText, imageUrl }
+    who: { name: json?.who?.name ?? null, email: json?.who?.email ?? null, phone: json?.who?.phone ?? null, source: json?.who?.source ?? "other" },
+    company: { legalName: json?.company?.legalName ?? null, displayName: json?.company?.displayName ?? null, domain: json?.company?.domain ?? null, country: json?.company?.country ?? null },
+    intent: { type: json?.intent?.type ?? "Info", brand: json?.intent?.brand ?? null, product: json?.intent?.product ?? null, quantity: json?.intent?.quantity ?? null, freeText: json?.intent?.freeText ?? null },
+    meta: { confidence: 0.75, rawText, imageUrl: imageDataUrl }
   };
+}
+
+export async function POST(req: NextRequest) {
+  const form = await req.formData();
+  const file = form.get("file") as File | null;
+  const selfRaw = form.get("self_json") as string | null;
+  if (!file) return NextResponse.json({ error: "No file" }, { status: 400 });
+
+  const self = (() => { try { return selfRaw ? JSON.parse(selfRaw) : {}; } catch { return {}; } })();
+
+  const ab = await file.arrayBuffer();
+  const src = Buffer.from(ab);
+  const processed = await maybeProcessImage(src);     // <-- твоя існуюча функція
+  const rawText = await runOCR(processed);           // <-- поки порожньо або по OCR
+
+  // ВАЖЛИВО: тепер передаємо **повний** data URL (без обрізання!)
+  const base64 = processed.toString("base64");
+  const imageDataUrl = `data:${file.type};base64,${base64}`;
+
+  const parsed = await parseInquiryReal({ imageDataUrl, rawText, self });
+
+  // нормалізація + захист від "моїх" контактів
+  parsed.company.domain = parsed.company.domain?.toLowerCase() ?? null;
+  parsed.who.email = parsed.who.email?.toLowerCase() ?? null;
+  if (self?.domain && parsed.who?.email?.endsWith(`@${String(self.domain).toLowerCase()}`)) {
+    parsed.who.email = null;
+  }
+
+  const candidates = await dedupeCandidates({ domain: parsed.company.domain, email: parsed.who.email ?? undefined });
+  return NextResponse.json({ normalized: parsed, dedupe: { candidates } });
 }
 
 // ---- простий дедуп

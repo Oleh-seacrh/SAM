@@ -1,16 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
-import sharp from "sharp";
+import { getSql } from "@/lib/db";
 
-// === Опційний OCR: підключи свою реалізацію або заглушку
-async function runOCR(buf: Buffer): Promise<string> {
-  // TODO: якщо треба — підключи tesseract; поки повернемо пусто
-  return "";
+export const runtime = "nodejs";
+
+// ---- промпт-білдер
+function buildPrompt(self: any, rawText: string, imageUrl: string) {
+  const me = [
+    self?.name ? `Я — ${self.name}` : null,
+    self?.company ? `компанія ${self.company}` : null,
+    self?.email ? `email: ${self.email}` : null,
+    self?.phone ? `телефон: ${self.phone}` : null
+  ].filter(Boolean).join(", ");
+
+  return `
+${me || "Я — користувач системи SAM."}
+Мета: зрозуміти хто написав повідомлення (це не я) і чого він хоче, та повернути структурований JSON.
+Якщо в тексті/зображенні зустрічаються мої власні контакти/домен (${self?.domain ?? "—"}), не плутай їх з контактами відправника.
+
+Image: ${imageUrl}
+Text (OCR): """${rawText || ""}"""
+
+Відповідай ТІЛЬКИ валідним JSON:
+{
+  "who": { "name": null|string, "email": null|string, "phone": null|string, "source": "email"|"whatsapp"|"other" },
+  "company": { "legalName": null|string, "displayName": null|string, "domain": null|string, "country": null|string },
+  "intent": { "type": "RFQ"|"Buy"|"Info"|"Support", "brand": null|string, "product": null|string, "quantity": null|string, "freeText": null|string }
+}
+  `.trim();
 }
 
-// === Заглушка LLM-парсингу: ти підключиш свій /lib/llm пізніше
-async function parseInquiry({ imageUrl, rawText }:{ imageUrl:string; rawText:string }) {
-  // Тут має бути виклик vision LLM і парсинг у JSON.
-  // Тимчасово: повернемо мінімальний об'єкт, щоб флоу працював.
+// ---- OCR-заглушка
+async function runOCR(_buf: Buffer): Promise<string> { return ""; }
+
+// ---- LLM-парсинг (поки заглушка, але вже отримує self і готовий prompt)
+async function parseInquiry({ imageUrl, rawText, self }:{ imageUrl:string; rawText:string; self:any }) {
+  const _prompt = buildPrompt(self, rawText, imageUrl);
+  // TODO: викликни тут свою vision LLM і поверни JSON.
   return {
     who: { name: null, email: null, phone: null, source: "other" as const },
     company: { legalName: null, displayName: null, domain: null, country: null },
@@ -19,9 +44,7 @@ async function parseInquiry({ imageUrl, rawText }:{ imageUrl:string; rawText:str
   };
 }
 
-// Простий дедуп: шукаємо організації за domain або email у contact_email (спрощено)
-import { getSql } from "@/lib/db"; // очікується, що в тебе є getSql() → neon sql
-
+// ---- простий дедуп
 async function dedupeCandidates({ domain, email }:{ domain?:string|null; email?:string|null }) {
   const sql = getSql();
   const out: any[] = [];
@@ -44,34 +67,40 @@ async function dedupeCandidates({ domain, email }:{ domain?:string|null; email?:
   return out;
 }
 
-export const runtime = "nodejs";
+// ---- optional: dynamic sharp
+async function maybeProcessImage(src: Buffer): Promise<Buffer> {
+  try {
+    const mod = await import("sharp");
+    const sharp = (mod as any).default ?? mod;
+    return await sharp(src).resize(2000, 2000, { fit: "inside" }).grayscale().toBuffer();
+  } catch { return src; }
+}
 
 export async function POST(req: NextRequest) {
   const form = await req.formData();
   const file = form.get("file") as File | null;
+  const selfRaw = form.get("self_json") as string | null;
   if (!file) return NextResponse.json({ error: "No file" }, { status: 400 });
 
-  // читаємо буфер
+  const self = (() => { try { return selfRaw ? JSON.parse(selfRaw) : {}; } catch { return {}; } })();
+
   const ab = await file.arrayBuffer();
   const src = Buffer.from(ab);
-
-  // міні-передобробка: grayscale + resize, як просив
-  const processed = await sharp(src).resize(2000, 2000, { fit: "inside" }).grayscale().toBuffer();
-
-  // OCR (за бажанням; можна лишити порожнім)
+  const processed = await maybeProcessImage(src);
   const rawText = await runOCR(processed);
 
-  // Уявний URL (ми не зберігаємо файл; якщо треба — підключи blob/S3 і передай URL)
   const imageUrl = `data:${file.type};base64,${processed.toString("base64").slice(0,64)}...`;
 
-  // LLM-парсинг
-  const parsed = await parseInquiry({ imageUrl, rawText });
+  const parsed = await parseInquiry({ imageUrl, rawText, self });
 
-  // Normalize (мінімально): domain → lower, email → lower
+  // нормалізація + захист від "моїх" контактів
   parsed.company.domain = parsed.company.domain?.toLowerCase() ?? null;
   parsed.who.email = parsed.who.email?.toLowerCase() ?? null;
+  if (self?.domain && parsed.who?.email?.endsWith(`@${String(self.domain).toLowerCase()}`)) {
+    // якщо LLM випадково взяв твою адресу як відправника — занулимо
+    parsed.who.email = null;
+  }
 
-  // Дедуп кандидати
   const candidates = await dedupeCandidates({ domain: parsed.company.domain, email: parsed.who.email ?? undefined });
 
   return NextResponse.json({ normalized: parsed, dedupe: { candidates } });

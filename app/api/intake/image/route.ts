@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
-
+import { extractInquiry, LLMProvider } from "@/lib/llm";
 export const runtime = "nodejs";
 
 // ---- промпт-білдер
@@ -36,8 +36,9 @@ async function runOCR(_buf: Buffer): Promise<string> { return ""; }
 async function parseInquiryReal({ imageDataUrl, rawText, self }:{
   imageDataUrl: string; rawText: string; self:any
 }) {
-  const prompt = buildPrompt(self, rawText, imageDataUrl || "(no image)");
-  const provider = (process.env.SAM_LLM_PROVIDER || "OPENAI").toUpperCase();
+  const prompt = buildPrompt(self, rawText, imageDataUrl);
+  const json = await extractInquiry({ provider, model: process.env.OPENAI_MODEL, prompt, imageDataUrl });
+  const provider = (process.env.SAM_LLM_PROVIDER || "openai").toLowerCase() as LLMProvider;
   let json: any;
   if (provider === "OPENAI") {
     json = await extractInquiryViaOpenAI({ prompt, imageDataUrl });

@@ -1,6 +1,7 @@
+// lib/db.ts
 import { neon } from "@neondatabase/serverless";
 
-/** Повертає singleton sql-тег від Neon */
+/** Lazy singleton для Neon sql */
 let _sql: any;
 export function getSql() {
   if (!_sql) {
@@ -11,12 +12,15 @@ export function getSql() {
   return _sql;
 }
 
-/** Back-compat: дехто імпортує { sql } напряму */
-export const sql = getSql();
+/** Back-compat: тег-функція sql (працює як await sql`...`) */
+export const sql: any = (...args: any[]) => getSql()(...args);
 
-/**
- * Перетворює масив JS у літерал Postgres text[].
- * Повертає null, якщо масив порожній/невизначений — тоді в БД запишеться NULL.
- * Приклад: toPgTextArray(['a','b']) -> {"a","b"}
- */
-export function toPg
+/** Построїти літерал Postgres text[] з масиву рядків. Повертає null для порожніх. */
+export function toPgTextArray(arr?: Array<string | null | undefined> | null): string | null {
+  if (!arr || !arr.length) return null;
+  const esc = (v: string) => v.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  const items = arr
+    .filter((v): v is string => v != null && String(v).length > 0)
+    .map((v) => `"${esc(String(v))}"`);
+  return `{${items.join(",")}}`;
+}

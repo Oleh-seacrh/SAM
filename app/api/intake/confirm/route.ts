@@ -18,24 +18,50 @@ type Normalized = {
   meta?: { rawText?: string | null; imageUrl?: string | null; confidence?: number | null };
 };
 
+/* ---------- helpers: qty/unit + compact summary ---------- */
+function parseQtyUnit(raw?: string | null): { qtyNum: number | null; unit: string | null; qtyText: string | null } {
+  if (!raw) return { qtyNum: null, unit: null, qtyText: null };
+  const s = String(raw).trim();
+  const m = s.match(/([\d.,]+)/);
+  let qtyNum: number | null = null;
+  if (m) {
+    qtyNum = Number(m[1].replace(/\./g, "").replace(",", "."));
+    if (Number.isNaN(qtyNum)) qtyNum = null;
+  }
+  const unit = s.replace(/[\d.,\s]+/g, "").trim() || null;
+  return { qtyNum, unit, qtyText: s };
+}
+function shortWords(s?: string | null, maxWords = 4): string | null {
+  if (!s) return null;
+  const w = s.replace(/\s+/g, " ").trim().split(" ");
+  return w.slice(0, maxWords).join(" ");
+}
+function compactSummary(n: Normalized): string {
+  const t = n.intent?.type || "Inquiry";
+  const br = shortWords(n.intent?.brand, 2);
+  const pr = shortWords(n.intent?.product, 4);
+  const { qtyNum, unit } = parseQtyUnit(n.intent?.quantity);
+  let s = [t, br, pr, qtyNum ? `${qtyNum}${unit ? " " + unit : ""}` : null].filter(Boolean).join(" | ");
+  if (s.length > 90) s = s.slice(0, 87) + "…";
+  return s;
+}
+
+/* ---------- handler ---------- */
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}));
     const normalized: Normalized = body?.normalized ?? {};
     const decision: Decision = body?.decision ?? { mode: "create" };
 
-    // Валідація рішень
+    // validate
     if (!decision?.mode) return NextResponse.json({ error: "Bad decision" }, { status: 400 });
-    if (decision.mode === "create" && !decision.orgType) {
+    if (decision.mode === "create" && !decision.orgType)
       return NextResponse.json({ error: "orgType required" }, { status: 400 });
-    }
-    if ((decision.mode === "merge" || decision.mode === "update") && !decision.targetOrgId) {
+    if ((decision.mode === "merge" || decision.mode === "update") && !decision.targetOrgId)
       return NextResponse.json({ error: "targetOrgId required" }, { status: 400 });
-    }
 
     const sql = getSql();
 
-    // Похідні значення
     const src = normalized.who?.source ?? "other";
     const companyName =
       normalized.company?.legalName ||
@@ -43,16 +69,14 @@ export async function POST(req: NextRequest) {
       normalized.company?.domain ||
       "Unknown";
 
-    // нормалізуємо e-mail/domain до lower (щоб співпадати з індексами/дедупом)
     const normEmail = normalized.who?.email ? String(normalized.who.email).toLowerCase() : null;
     const normDomain = normalized.company?.domain ? String(normalized.company.domain).toLowerCase() : null;
 
     let orgId = decision.targetOrgId ?? null;
 
-    // ---- Транзакція (Neon serverless без .begin()) ----
     await sql`BEGIN`;
     try {
-      // 1) Organizations: create / merge-update
+      // 1) organizations
       if (decision.mode === "create") {
         const newOrgId = randomUUID();
         await sql/*sql*/`
@@ -85,15 +109,8 @@ export async function POST(req: NextRequest) {
         `;
       }
 
-      // 2) Inquiries: requested_at має NOT NULL → ставимо now()
-      const summaryParts = [
-        normalized.intent?.type,
-        normalized.intent?.brand,
-        normalized.intent?.product,
-        normalized.intent?.quantity,
-      ].filter(Boolean);
-      const summary = summaryParts.length ? summaryParts.join(" | ") : "New inquiry";
-
+      // 2) inquiries (requested_at is NOT NULL)
+      const summary = compactSummary(normalized);
       const inquiryId = randomUUID();
       await sql/*sql*/`
         insert into inquiries
@@ -103,21 +120,19 @@ export async function POST(req: NextRequest) {
            ${src}, now(), null)
       `;
 
-      // 3) Inquiry item (опційно — якщо є хоч щось із трійки)
-      const hasItem = Boolean(
-        normalized.intent?.brand || normalized.intent?.product || normalized.intent?.quantity
-      );
+      // 3) inquiry_items (optional)
+      const hasItem = Boolean(normalized.intent?.brand || normalized.intent?.product || normalized.intent?.quantity);
       if (hasItem) {
         const itemId = randomUUID();
-        const qtyText = normalized.intent?.quantity ?? null; // як text — безпечніше під будь-який тип
+        const { qtyText, unit } = parseQtyUnit(normalized.intent?.quantity);
         await sql/*sql*/`
           insert into inquiry_items
             (id, inquiry_id, brand, product, quantity, unit, unit_price, created_at,
              quantity_unit, deal_value, currency, notes, updated_at, deleted_at)
           values
             (${itemId}, ${inquiryId}, ${normalized.intent?.brand ?? null},
-             ${normalized.intent?.product ?? null}, ${qtyText}, null, null, now(),
-             null, null, null, null, now(), null)
+             ${normalized.intent?.product ?? null}, ${qtyText}, ${unit}, null, now(),
+             ${unit}, null, null, null, now(), null)
         `;
       }
 
@@ -129,7 +144,6 @@ export async function POST(req: NextRequest) {
     }
   } catch (err: any) {
     console.error("INTAKE CONFIRM ERROR:", err?.message || err);
-    // повертаємо текст помилки, щоб було видно в Network
     return NextResponse.json({ error: err?.message || "Internal error" }, { status: 500 });
   }
 }

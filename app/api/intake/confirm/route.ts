@@ -19,8 +19,8 @@ type Normalized = {
 };
 
 /* ---------- helpers: qty/unit + compact summary ---------- */
-function parseQtyUnit(raw?: string | null): { qtyNum: number | null; unit: string | null; qtyText: string | null } {
-  if (!raw) return { qtyNum: null, unit: null, qtyText: null };
+function parseQtyUnit(raw?: string | null): { qtyNum: number | null; unit: string | null } {
+  if (!raw) return { qtyNum: null, unit: null };
   const s = String(raw).trim();
   const m = s.match(/([\d.,]+)/);
   let qtyNum: number | null = null;
@@ -29,13 +29,15 @@ function parseQtyUnit(raw?: string | null): { qtyNum: number | null; unit: strin
     if (Number.isNaN(qtyNum)) qtyNum = null;
   }
   const unit = s.replace(/[\d.,\s]+/g, "").trim() || null;
-  return { qtyNum, unit, qtyText: s };
+  return { qtyNum, unit };
 }
+
 function shortWords(s?: string | null, maxWords = 4): string | null {
   if (!s) return null;
   const w = s.replace(/\s+/g, " ").trim().split(" ");
   return w.slice(0, maxWords).join(" ");
 }
+
 function compactSummary(n: Normalized): string {
   const t = n.intent?.type || "Inquiry";
   const br = shortWords(n.intent?.brand, 2);
@@ -120,24 +122,34 @@ export async function POST(req: NextRequest) {
            ${src}, now(), null)
       `;
 
-      // 3) inquiry_items (optional)
-      const hasItem = Boolean(normalized.intent?.brand || normalized.intent?.product || normalized.intent?.quantity);
-      if (hasItem) {
+      // 3) inquiry_items (створюємо, якщо є хоч щось осмислене)
+      const brandVal   = (normalized.intent?.brand || "").trim();
+      const productVal = (normalized.intent?.product || "").trim();
+      const qtyRaw     = (normalized.intent?.quantity || "").trim();
+      const { qtyNum, unit } = parseQtyUnit(qtyRaw);
+
+      const shouldCreateItem = Boolean(productVal || brandVal || qtyNum !== null);
+
+      let itemsInserted = 0;
+      let itemSnapshot: any = null;
+
+      if (shouldCreateItem) {
         const itemId = randomUUID();
-        const { qtyText, unit } = parseQtyUnit(normalized.intent?.quantity);
         await sql/*sql*/`
           insert into inquiry_items
             (id, inquiry_id, brand, product, quantity, unit, unit_price, created_at,
              quantity_unit, deal_value, currency, notes, updated_at, deleted_at)
           values
-            (${itemId}, ${inquiryId}, ${normalized.intent?.brand ?? null},
-             ${normalized.intent?.product ?? null}, ${qtyText}, ${unit}, null, now(),
-             ${unit}, null, null, null, now(), null)
+            (${itemId}, ${inquiryId}, ${brandVal || null},
+             ${productVal || null}, ${qtyNum}, ${unit || null}, null, now(),
+             ${unit || null}, null, null, null, now(), null)
         `;
+        itemsInserted = 1;
+        itemSnapshot = { brand: brandVal || null, product: productVal || null, quantity: qtyNum, unit: unit || null };
       }
 
       await sql`COMMIT`;
-      return NextResponse.json({ ok: true, organizationId: orgId, inquiryId });
+      return NextResponse.json({ ok: true, organizationId: orgId, inquiryId, itemsInserted, itemSnapshot });
     } catch (e) {
       await sql`ROLLBACK`;
       throw e;

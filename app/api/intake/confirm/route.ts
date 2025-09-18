@@ -13,12 +13,15 @@ type Decision = {
 
 type Normalized = {
   who?: { name?: string | null; email?: string | null; phone?: string | null; source?: "email" | "whatsapp" | "other" };
-  company?: { legalName?: string | null; displayName?: string | null; domain?: string | null; country?: string | null };
+  company?: {
+    legalName?: string | null; displayName?: string | null; domain?: string | null; country?: string | null;
+    linkedin_url?: string | null; facebook_url?: string | null; // <-- опціонально від LLM
+  };
   intent?: { type?: "RFQ" | "Buy" | "Info" | "Support"; brand?: string | null; product?: string | null; quantity?: string | null; freeText?: string | null };
   meta?: { rawText?: string | null; imageUrl?: string | null; confidence?: number | null };
 };
 
-/* ---------- helpers: qty/unit + compact summary ---------- */
+// ---- helpers: qty/unit + compact summary + url sanitize ----
 function parseQtyUnit(raw?: string | null): { qtyNum: number | null; unit: string | null } {
   if (!raw) return { qtyNum: null, unit: null };
   const s = String(raw).trim();
@@ -31,13 +34,11 @@ function parseQtyUnit(raw?: string | null): { qtyNum: number | null; unit: strin
   const unit = s.replace(/[\d.,\s]+/g, "").trim() || null;
   return { qtyNum, unit };
 }
-
 function shortWords(s?: string | null, maxWords = 4): string | null {
   if (!s) return null;
   const w = s.replace(/\s+/g, " ").trim().split(" ");
   return w.slice(0, maxWords).join(" ");
 }
-
 function compactSummary(n: Normalized): string {
   const t = n.intent?.type || "Inquiry";
   const br = shortWords(n.intent?.brand, 2);
@@ -47,6 +48,15 @@ function compactSummary(n: Normalized): string {
   if (s.length > 90) s = s.slice(0, 87) + "…";
   return s;
 }
+function cleanSocialUrl(u?: any, hostEndsWith?: string): string | null {
+  if (!u) return null;
+  try {
+    const url = new URL(String(u));
+    if (hostEndsWith && !url.hostname.toLowerCase().endsWith(hostEndsWith)) return null;
+    url.hash = "";
+    return url.toString();
+  } catch { return null; }
+}
 
 /* ---------- handler ---------- */
 export async function POST(req: NextRequest) {
@@ -54,6 +64,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({}));
     const normalized: Normalized = body?.normalized ?? {};
     const decision: Decision = body?.decision ?? { mode: "create" };
+    const socialsIn = body?.socials ?? {}; // { linkedin_url?, facebook_url? } з фронта
 
     // validate
     if (!decision?.mode) return NextResponse.json({ error: "Bad decision" }, { status: 400 });
@@ -74,6 +85,16 @@ export async function POST(req: NextRequest) {
     const normEmail = normalized.who?.email ? String(normalized.who.email).toLowerCase() : null;
     const normDomain = normalized.company?.domain ? String(normalized.company.domain).toLowerCase() : null;
 
+    // соцпосилання беремо: пріоритет фронт → якщо пусто, спроба з normalized.company
+    const linkedinUrl = cleanSocialUrl(
+      socialsIn.linkedin_url ?? normalized.company?.linkedin_url,
+      "linkedin.com"
+    );
+    const facebookUrl = cleanSocialUrl(
+      socialsIn.facebook_url ?? normalized.company?.facebook_url,
+      "facebook.com"
+    );
+
     let orgId = decision.targetOrgId ?? null;
 
     await sql`BEGIN`;
@@ -85,14 +106,16 @@ export async function POST(req: NextRequest) {
           insert into organizations
             (id, name, org_type, country, last_contact_at, created_at, updated_at,
              general_email, added_at, domain, industry, status, tags, size_tag, source,
-             contact_name, contact_email, contact_phone, note, brand, product, quantity, deal_value_usd)
+             contact_name, contact_email, contact_phone, note, brand, product, quantity, deal_value_usd,
+             linkedin_url, facebook_url)
           values
             (${newOrgId}, ${companyName}, ${decision.orgType},
              ${normalized.company?.country ?? null}, null, now(), now(),
              null, now(), ${normDomain}, null, 'active', null, null, ${src},
              ${normalized.who?.name ?? null}, ${normEmail}, ${normalized.who?.phone ?? null},
              ${normalized.intent?.freeText ?? null}, ${normalized.intent?.brand ?? null},
-             ${normalized.intent?.product ?? null}, ${normalized.intent?.quantity ?? null}, null)
+             ${normalized.intent?.product ?? null}, ${normalized.intent?.quantity ?? null}, null,
+             ${linkedinUrl}, ${facebookUrl})
         `;
         orgId = newOrgId;
       } else {
@@ -106,7 +129,9 @@ export async function POST(req: NextRequest) {
             note          = coalesce(${normalized.intent?.freeText ?? null}, note),
             brand         = coalesce(${normalized.intent?.brand ?? null}, brand),
             product       = coalesce(${normalized.intent?.product ?? null}, product),
-            quantity      = coalesce(${normalized.intent?.quantity ?? null}, quantity)
+            quantity      = coalesce(${normalized.intent?.quantity ?? null}, quantity),
+            linkedin_url  = coalesce(${linkedinUrl}, linkedin_url),
+            facebook_url  = coalesce(${facebookUrl}, facebook_url)
           where id = ${orgId}
         `;
       }
@@ -149,7 +174,11 @@ export async function POST(req: NextRequest) {
       }
 
       await sql`COMMIT`;
-      return NextResponse.json({ ok: true, organizationId: orgId, inquiryId, itemsInserted, itemSnapshot });
+      return NextResponse.json({
+        ok: true, organizationId: orgId, inquiryId,
+        socials: { linkedin_url: linkedinUrl, facebook_url: facebookUrl },
+        itemsInserted, itemSnapshot
+      });
     } catch (e) {
       await sql`ROLLBACK`;
       throw e;

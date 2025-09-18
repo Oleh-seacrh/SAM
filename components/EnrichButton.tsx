@@ -4,16 +4,22 @@ import { useState } from "react";
 export function EnrichButton({ input }: { input: string }) {
   const [loading, setLoading] = useState(false);
   const [preview, setPreview] = useState<any>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function run() {
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch("/api/enrich", {
         method: "POST",
         headers: {"Content-Type":"application/json"},
         body: JSON.stringify({ input })
-      }).then(r => r.json());
-      setPreview(res);
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Enrich failed");
+      setPreview(data);
+    } catch (e: any) {
+      setError(e?.message || "Enrich failed");
     } finally {
       setLoading(false);
     }
@@ -24,6 +30,9 @@ export function EnrichButton({ input }: { input: string }) {
       <button onClick={run} className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20" disabled={loading}>
         {loading ? "Enriching..." : "Enrich"}
       </button>
+
+      {error && <div className="text-xs text-red-400">{error}</div>}
+
       {preview && (
         <div className="text-xs whitespace-pre-wrap bg-black/30 p-3 rounded">
           <div className="font-semibold mb-1">Trace</div>

@@ -16,6 +16,7 @@ export async function GET() {
       contact_role   AS "contactRole",
       contact_email  AS "contactEmail",
       contact_phone  AS "contactPhone",
+      linkedin_url, facebook_url,   
       status, note, source,
       extract(epoch from added_at)*1000  AS "addedAt",
       extract(epoch from updated_at)*1000 AS "updatedAt"

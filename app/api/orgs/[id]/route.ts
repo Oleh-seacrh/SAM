@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
+// нормалізація домену (прибирає http/https, www, шлях)
 function normalizeDomain(raw?: string | null) {
   if (!raw) return null;
   try {
@@ -20,7 +21,8 @@ const strOrNull = (v: any) => {
   const s = String(v).trim();
   return s === "" ? null : s;
 };
-const numOrNull = (v: any) => (v === "" || v === null || v === undefined ? null : Number(v));
+const numOrNull = (v: any) =>
+  v === "" || v === null || v === undefined ? null : Number(v);
 const isoOrNull = (v: any) => {
   if (v === undefined || v === null || v === "") return null;
   try {
@@ -36,7 +38,7 @@ export async function GET(_req: NextRequest, { params }: { params: { id: string 
     const id = params?.id;
     if (!id) return NextResponse.json({ error: "Missing id" }, { status: 400 });
 
-    // віддаємо весь рядок, щоб UI мав усі поля
+    // Віддаємо весь рядок, щоб UI мав усі поля
     const rows = await sql/*sql*/`
       select *
       from organizations
@@ -70,6 +72,9 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     const country         = strOrNull(body.country);
     const industry        = strOrNull(body.industry);
 
+    const linkedin_url    = strOrNull(body.linkedin_url);
+    const facebook_url    = strOrNull(body.facebook_url);
+
     const general_email   = strOrNull(body.general_email);
     const contact_name    = strOrNull(body.contact_name);
     const contact_email   = strOrNull(body.contact_email);
@@ -92,7 +97,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       const arr = body.tags.map((x: any) => String(x).trim()).filter(Boolean);
       tagsCsv = arr.length ? arr.join(",") : null;
     } else if (typeof body.tags === "string") {
-      const arr = body.tags.split(",").map(s => s.trim()).filter(Boolean);
+      const arr = body.tags.split(",").map((s) => s.trim()).filter(Boolean);
       tagsCsv = arr.length ? arr.join(",") : null;
     }
 
@@ -103,6 +108,8 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
         domain          = ${domain},
         country         = ${country},
         industry        = ${industry},
+        linkedin_url    = ${linkedin_url},
+        facebook_url    = ${facebook_url},
         general_email   = ${general_email},
         contact_name    = ${contact_name},
         contact_email   = ${contact_email},

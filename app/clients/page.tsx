@@ -489,43 +489,47 @@ function Row({
             {/* Contacts */}
             <div className="rounded-xl border border-white/10 p-3">
               <div className="text-sm font-semibold mb-2">Contacts</div>
-              <div className="text-[12px] text-muted-foreground space-y-1">
-                <div>
-                  <span className="text-foreground">Contact person:</span>{" "}
-                  {contactPerson || "—"}
+
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* LEFT: як було */}
+                <div className="text-[12px] text-muted-foreground space-y-1">
+                  <div>
+                    <span className="text-foreground">Contact person:</span>{" "}
+                    {contactPerson || "—"}
+                  </div>
+                  <div>
+                    <span className="text-foreground">General email:</span>{" "}
+                    {generalEmail ? <a className="underline underline-offset-2" href={`mailto:${generalEmail}`}>{generalEmail}</a> : "—"}
+                  </div>
+                  <div>
+                    <span className="text-foreground">Personal email:</span>{" "}
+                    {personalEmail ? <a className="underline underline-offset-2" href={`mailto:${personalEmail}`}>{personalEmail}</a> : "—"}
+                  </div>
+                  <div>
+                    <span className="text-foreground">Phone:</span>{" "}
+                    {phone || "—"}
+                  </div>
                 </div>
-                <div>
-                  <span className="text-foreground">General email:</span>{" "}
-                  {generalEmail ? (
-                    <a
-                      className="underline underline-offset-2"
-                      href={`mailto:${generalEmail}`}
-                    >
-                      {generalEmail}
-                    </a>
-                  ) : (
-                    "—"
-                  )}
-                </div>
-                <div>
-                  <span className="text-foreground">Personal email:</span>{" "}
-                  {personalEmail ? (
-                    <a
-                      className="underline underline-offset-2"
-                      href={`mailto:${personalEmail}`}
-                    >
-                      {personalEmail}
-                    </a>
-                  ) : (
-                    "—"
-                  )}
-                </div>
-                <div>
-                  <span className="text-foreground">Phone:</span>{" "}
-                  {phone || "—"}
+
+                {/* RIGHT: Socials */}
+                <div className="text-[12px] text-muted-foreground space-y-1">
+                  <div className="opacity-70 mb-1">Socials</div>
+                  <div>
+                    <span className="text-foreground">LinkedIn:</span>{" "}
+                    {ext?.linkedin_url
+                      ? <a className="underline underline-offset-2 break-all" target="_blank" href={ext.linkedin_url}>Company page</a>
+                      : "—"}
+                  </div>
+                  <div>
+                    <span className="text-foreground">Facebook:</span>{" "}
+                    {ext?.facebook_url
+                      ? <a className="underline underline-offset-2 break-all" target="_blank" href={ext.facebook_url}>Company page</a>
+                      : "—"}
+                  </div>
                 </div>
               </div>
             </div>
+
 
             {/* Latest inquiry */}
             <div className="rounded-xl border border-white/10 p-3">

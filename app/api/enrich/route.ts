@@ -24,6 +24,21 @@ type EnrichmentResult = {
   status: "enriched" | "partial" | "contact-only" | "needs_review";
 };
 
+export async function PUT(req: Request) {
+  const sql = getSql();
+  const tenantId = await getTenantIdFromSession();
+  const cfg = (await req.json()) as EnrichConfig;
+
+  await sql/*sql*/`
+    insert into tenant_settings (tenant_id, enrich_config)
+    values (${tenantId}, ${cfg}::jsonb)
+    on conflict (tenant_id) do update
+      set enrich_config = excluded.enrich_config,
+          updated_at = now()
+  `;
+  return NextResponse.json({ ok: true });
+}
+
 export async function POST(req: Request) {
   const sql = getSql();
   const tenantId = await getTenantIdFromSession();

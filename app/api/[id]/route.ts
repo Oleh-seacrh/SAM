@@ -124,6 +124,8 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
         contact_name    = ${body.contact_name ?? null},
         contact_email   = ${body.contact_email ?? null},
         contact_phone   = ${body.contact_phone ?? null},
+        linkedin_url    = ${body.linkedin_url ?? null},
+        facebook_url    = ${body.facebook_url ?? null}, 
         status          = ${body.status ?? null},
         size_tag        = ${body.size_tag ?? null},
         source          = ${body.source ?? null},

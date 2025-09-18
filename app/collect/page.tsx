@@ -4,18 +4,24 @@ import { useSelfProfile } from "@/hooks/use-self";
 
 type ParsedInquiry = {
   who: { name?: string|null; email?: string|null; phone?: string|null; source: "email"|"whatsapp"|"other" };
-  company: { legalName?: string|null; displayName?: string|null; domain?: string|null; country?: string|null };
+  company: { legalName?: string|null; displayName?: string|null; domain?: string|null; country?: string|null; linkedin_url?: string|null; facebook_url?: string|null };
   intent: { type: "RFQ"|"Buy"|"Info"|"Support"; brand?: string|null; product?: string|null; quantity?: string|null; freeText?: string|null };
   meta: { confidence: number; rawText: string; imageUrl?: string|null };
 };
 type DedupCandidate = { id: string; name: string; domain?: string|null; match_type: string };
-type IntakePreview = { normalized: ParsedInquiry; dedupe: { candidates: DedupCandidate[] } };
+type IntakePreviewT = { normalized: ParsedInquiry; dedupe: { candidates: DedupCandidate[] } };
+
+// простий тип для збагачення (MVP)
+type EnrichSuggestion = { field: string; value: string; confidence?: number; source?: string };
 
 export default function CollectPage() {
-  const [preview, setPreview] = useState<IntakePreview | null>(null);
+  const [preview, setPreview] = useState<IntakePreviewT | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const { self, setSelf, reset } = useSelfProfile();
+
+  // соцпосилання (передамо в /api/intake/confirm)
+  const [socials, setSocials] = useState<{ linkedin_url: string; facebook_url: string }>({ linkedin_url: "", facebook_url: "" });
 
   const onDrop = useCallback(async (file: File) => {
     setLoading(true); setErr(null);
@@ -28,14 +34,28 @@ export default function CollectPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Upload failed");
       setPreview(json);
+
+      // префіл для socials з parsed (якщо LLM вже дав)
+      const li = json?.normalized?.company?.linkedin_url ?? "";
+      const fb = json?.normalized?.company?.facebook_url ?? "";
+      setSocials({ linkedin_url: li || "", facebook_url: fb || "" });
     } catch (e:any) {
       setErr(e.message || "Error");
     } finally { setLoading(false); }
   }, [self]);
 
-  const onConfirm = useCallback(async (decision: { mode: "create"|"merge"|"update"; targetOrgId?: string|null; orgType?: "supplier"|"prospect"|"client" }) => {
+  const onConfirm = useCallback(async (decision: { mode: "create"|"merge"|"update"; targetOrgId?: string|null; orgType?: "supplier"|"prospect"|"client" }, opts?: { apply?: EnrichSuggestion[] }) => {
     if (!preview) return;
-    const payload = { normalized: preview.normalized, decision };
+
+    // застосовуємо вибрані пропозиції (тільки на клієнті перед відправкою)
+    const normalizedToSave: ParsedInquiry = JSON.parse(JSON.stringify(preview.normalized));
+    const picks = opts?.apply ?? [];
+    for (const s of picks) {
+      if (!s || !s.field) continue;
+      setDeep(normalizedToSave as any, s.field, s.value);
+    }
+
+    const payload = { normalized: normalizedToSave, decision, socials };
     const res = await fetch("/api/intake/confirm", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     });
@@ -43,7 +63,7 @@ export default function CollectPage() {
     if (!res.ok) { alert(json.error || "Failed"); return; }
     setPreview(null);
     alert("Saved ✔");
-  }, [preview]);
+  }, [preview, socials]);
 
   return (
     <div className="p-6 space-y-6">
@@ -56,7 +76,14 @@ export default function CollectPage() {
 
       {err && <div className="text-sm text-red-400">{err}</div>}
 
-      {preview && <IntakePreview data={preview} onConfirm={onConfirm} />}
+      {preview && (
+        <IntakePreview
+          data={preview}
+          onConfirm={onConfirm}
+          socials={socials}
+          onChangeSocials={setSocials}
+        />
+      )}
     </div>
   );
 }
@@ -106,13 +133,66 @@ function DropZone({ onDrop, loading }: { onDrop: (f: File)=>void; loading:boolea
   );
 }
 
-function IntakePreview({ data, onConfirm }: { data: IntakePreview; onConfirm: (d:{mode:"create"|"merge"|"update";targetOrgId?:string|null;orgType?:"supplier"|"prospect"|"client"})=>void }) {
+function IntakePreview({
+  data,
+  onConfirm,
+  socials,
+  onChangeSocials
+}: {
+  data: IntakePreviewT;
+  onConfirm: (d:{mode:"create"|"merge"|"update";targetOrgId?:string|null;orgType?:"supplier"|"prospect"|"client"}, opts?:{apply?:EnrichSuggestion[]})=>void;
+  socials: { linkedin_url: string; facebook_url: string };
+  onChangeSocials: (v:{ linkedin_url: string; facebook_url: string }) => void;
+}) {
   const [mode, setMode] = useState<"create"|"merge"|"update">("create");
   const [orgType, setOrgType] = useState<"supplier"|"prospect"|"client">("prospect");
   const [target, setTarget] = useState<string>("");
 
   const c = data.normalized;
   const candidates = data.dedupe?.candidates || [];
+
+  // enrichment MVP
+  const [findLoading, setFindLoading] = useState(false);
+  const [findErr, setFindErr] = useState<string|null>(null);
+  const [suggestions, setSuggestions] = useState<EnrichSuggestion[]>([]);
+  const [checked, setChecked] = useState<Record<number, boolean>>({});
+
+  const toggle = (i: number) => setChecked(prev => ({ ...prev, [i]: !prev[i] }));
+
+  async function onFindInfo() {
+    try {
+      setFindLoading(true); setFindErr(null);
+      const res = await fetch("/api/enrich/org", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orgId: null,
+          domain: c.company.domain,
+          name: c.company.legalName || c.company.displayName,
+          email: c.who.email
+        })
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to find");
+      const sugg: EnrichSuggestion[] = json?.suggestions || [];
+      setSuggestions(sugg);
+      // автопропозиції: відмітимо тільки ті, де поле порожнє
+      const pre: Record<number, boolean> = {};
+      sugg.forEach((s, i) => {
+        if (!getDeep(c as any, s.field)) pre[i] = true;
+      });
+      setChecked(pre);
+    } catch (e:any) {
+      setFindErr(e.message || "Error");
+    } finally {
+      setFindLoading(false);
+    }
+  }
+
+  function doConfirm() {
+    const apply = suggestions.filter((_, i) => checked[i]);
+    onConfirm({ mode, targetOrgId: target||null, orgType }, { apply });
+  }
 
   return (
     <div className="rounded-xl border border-white/10 p-4 space-y-4">
@@ -127,6 +207,13 @@ function IntakePreview({ data, onConfirm }: { data: IntakePreview; onConfirm: (d
           <Field label="Legal name" value={c.company.legalName || c.company.displayName} />
           <Field label="Domain" value={c.company.domain} />
           <Field label="Country" value={c.company.country} />
+          {/* показати посилання якщо вже є */}
+          {(c.company.linkedin_url || c.company.facebook_url) && (
+            <div className="text-xs mt-2 space-x-3">
+              {c.company.linkedin_url && <a className="underline" href={c.company.linkedin_url} target="_blank">LinkedIn</a>}
+              {c.company.facebook_url && <a className="underline" href={c.company.facebook_url} target="_blank">Facebook</a>}
+            </div>
+          )}
         </Section>
         <Section title="Intent">
           <Field label="Type" value={c.intent.type} />
@@ -136,8 +223,67 @@ function IntakePreview({ data, onConfirm }: { data: IntakePreview; onConfirm: (d
         </Section>
       </div>
 
+      {/* Соцпосилання (без пошуку, просто збереження) */}
+      <fieldset className="mt-2 border border-white/10 rounded p-3">
+        <legend className="px-1 text-sm text-gray-400">Socials (optional)</legend>
+        <div className="grid md:grid-cols-2 gap-3">
+          <label className="text-sm space-y-1">
+            <div className="opacity-70">LinkedIn (company)</div>
+            <input
+              type="url"
+              placeholder="https://www.linkedin.com/company/acme"
+              className="w-full bg-transparent border rounded px-2 py-1"
+              value={socials.linkedin_url}
+              onChange={(e)=>onChangeSocials({ ...socials, linkedin_url: e.target.value })}
+            />
+          </label>
+          <label className="text-sm space-y-1">
+            <div className="opacity-70">Facebook (page)</div>
+            <input
+              type="url"
+              placeholder="https://www.facebook.com/acme"
+              className="w-full bg-transparent border rounded px-2 py-1"
+              value={socials.facebook_url}
+              onChange={(e)=>onChangeSocials({ ...socials, facebook_url: e.target.value })}
+            />
+          </label>
+        </div>
+      </fieldset>
+
+      {/* Find info (MVP): показ пропозицій від бекенда для підтвердження */}
       <div className="space-y-2">
-        <div className="font-medium">Organization action</div>
+        <div className="flex items-center gap-3">
+          <div className="font-medium">Organization action</div>
+          <button
+            className="ml-auto rounded-lg px-3 py-2 bg-white/10 hover:bg-white/20 text-sm"
+            onClick={onFindInfo}
+            disabled={findLoading}
+          >
+            {findLoading ? "Searching…" : "Find info"}
+          </button>
+        </div>
+        {findErr && <div className="text-xs text-red-400">{findErr}</div>}
+
+        {!!suggestions.length && (
+          <div className="rounded border border-white/10 p-3">
+            <div className="text-sm opacity-80 mb-2">Suggestions (tick to apply before save)</div>
+            <div className="space-y-1 text-sm">
+              {suggestions.map((s, i)=>(
+                <label key={i} className="flex items-start gap-2">
+                  <input type="checkbox" checked={!!checked[i]} onChange={()=>toggle(i)} />
+                  <span className="flex-1">
+                    <span className="opacity-70">{s.field}</span>: <span className="font-mono">{String(s.value)}</span>
+                    {typeof s.confidence === "number" && <span className="ml-2 text-xs opacity-60">conf {s.confidence.toFixed(2)}</span>}
+                    {s.source && <span className="ml-2 text-xs underline opacity-60"><a href={s.source} target="_blank">source</a></span>}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="space-y-2">
         <div className="flex flex-wrap gap-4 items-center">
           <label><input type="radio" checked={mode==="create"} onChange={()=>setMode("create")} /> Create new</label>
           <label><input type="radio" checked={mode==="merge"} onChange={()=>setMode("merge")} /> Merge</label>
@@ -167,7 +313,7 @@ function IntakePreview({ data, onConfirm }: { data: IntakePreview; onConfirm: (d
       </div>
 
       <div className="flex gap-3">
-        <button className="rounded-lg px-3 py-2 bg-white/10 hover:bg-white/20" onClick={()=>onConfirm({ mode, targetOrgId: target||null, orgType })}>
+        <button className="rounded-lg px-3 py-2 bg-white/10 hover:bg-white/20" onClick={doConfirm}>
           Confirm & Save
         </button>
       </div>
@@ -190,4 +336,22 @@ function Field({label, value}:{label:string; value:any}) {
       <div className="font-mono text-right break-all">{value ?? <span className="opacity-50">—</span>}</div>
     </div>
   );
+}
+
+/* ---------- невеликі утиліти для мерджа пропозицій ---------- */
+function setDeep(obj: any, path: string, value: any) {
+  if (!path) return;
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const k = parts[i];
+    if (cur[k] == null || typeof cur[k] !== "object") cur[k] = {};
+    cur = cur[k];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+function getDeep(obj: any, path: string) {
+  try {
+    return path.split(".").reduce((acc, k) => (acc ? acc[k] : undefined), obj);
+  } catch { return undefined; }
 }

@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+
 import { NextResponse } from "next/server";
 import { getDefaultEnrichConfig, EnrichConfig } from "@/lib/enrich/config";
 import { getSql } from "@/lib/db";
@@ -7,7 +8,6 @@ import { getTenantIdFromSession } from "@/lib/auth";
 export async function GET() {
   const sql = getSql();
   const tenantId = await getTenantIdFromSession();
-  // якщо таблиці ще нема — повертаємо дефолтний конфіг
   try {
     const rows = await sql/*sql*/`
       select enrich_config

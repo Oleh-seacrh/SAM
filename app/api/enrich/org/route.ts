@@ -52,11 +52,26 @@ function extractEmails(html: string): string[] {
   while ((m = re.exec(html))) set.add(m[0].toLowerCase());
   return [...set];
 }
+function cleanPhone(raw: string): string {
+  // зберігаємо тільки + та цифри
+  const only = raw.replace(/[^\d+]/g, "");
+  const hasPlus = only.startsWith("+");
+  const digits = only.replace(/\D/g, "");
+  // валідний інтервал довжин
+  if (digits.length < 7 || digits.length > 15) return "";
+  return (hasPlus ? "+" : "") + digits;
+}
+
 function extractPhones(html: string): string[] {
   const set = new Set<string>();
+  // шукаємо по «плоскому» тексту без тегів
+  const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
   const re = /\+?\d[\d()\s-]{6,}\d/g;
   let m;
-  while ((m = re.exec(html))) set.add(m[0].replace(/\s+/g, " ").trim());
+  while ((m = re.exec(text))) {
+    const cleaned = cleanPhone(m[0]);
+    if (cleaned) set.add(cleaned);
+  }
   return [...set];
 }
 

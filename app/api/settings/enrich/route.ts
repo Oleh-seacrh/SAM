@@ -18,6 +18,7 @@ export async function GET() {
     const cfg = rows[0]?.enrich_config ?? getDefaultEnrichConfig();
     return NextResponse.json(cfg);
   } catch {
+    // якщо таблиці ще нема або інша помилка — повертаємо дефолт
     return NextResponse.json(getDefaultEnrichConfig());
   }
 }
@@ -30,7 +31,9 @@ export async function PUT(req: Request) {
   await sql/*sql*/`
     insert into tenant_settings (tenant_id, enrich_config)
     values (${tenantId}, ${cfg}::jsonb)
-    on conflict (tenant_id) do update set enrich_config = excluded.enrich_config
+    on conflict (tenant_id) do update
+      set enrich_config = excluded.enrich_config,
+          updated_at = now()
   `;
   return NextResponse.json({ ok: true });
 }

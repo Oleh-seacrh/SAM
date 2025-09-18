@@ -2,7 +2,7 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 
-/** обмежений fetch з таймаутом */
+/** fetch з таймаутом */
 async function fetchWithTimeout(url: string, ms = 6000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
@@ -15,11 +15,10 @@ async function fetchWithTimeout(url: string, ms = 6000) {
   }
 }
 
+// ——— helpers
 function pickBest<T>(arr: T[], score: (x: T) => number): T | null {
   if (!arr.length) return null;
-  return arr
-    .map(v => ({ v, s: score(v) }))
-    .sort((a, b) => b.s - a.s)[0].v;
+  return arr.map(v => ({ v, s: score(v) })).sort((a, b) => b.s - a.s)[0].v;
 }
 
 function extractTitle(html: string): string | null {
@@ -48,26 +47,22 @@ function extractJsonLdName(html: string): string | null {
 function extractEmails(html: string): string[] {
   const set = new Set<string>();
   const re = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
-  let m;
+  let m: RegExpExecArray | null;
   while ((m = re.exec(html))) set.add(m[0].toLowerCase());
   return [...set];
 }
 function cleanPhone(raw: string): string {
-  // зберігаємо тільки + та цифри
   const only = raw.replace(/[^\d+]/g, "");
   const hasPlus = only.startsWith("+");
   const digits = only.replace(/\D/g, "");
-  // валідний інтервал довжин
   if (digits.length < 7 || digits.length > 15) return "";
   return (hasPlus ? "+" : "") + digits;
 }
-
 function extractPhones(html: string): string[] {
   const set = new Set<string>();
-  // шукаємо по «плоскому» тексту без тегів
   const text = html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
   const re = /\+?\d[\d()\s-]{6,}\d/g;
-  let m;
+  let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     const cleaned = cleanPhone(m[0]);
     if (cleaned) set.add(cleaned);
@@ -75,6 +70,7 @@ function extractPhones(html: string): string[] {
   return [...set];
 }
 
+// ——— handler
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -85,8 +81,17 @@ export async function POST(req: Request) {
     const suggestions: { field: string; value: string; confidence?: number; source?: string }[] = [];
     if (!domainRaw) return NextResponse.json({ suggestions });
 
-    const domain = domainRaw.replace(/^https?:\/\//i, "").replace(/^www\./i, "").split("/")[0];
-    const bases = [`https://${domain}/`, `https://${domain}/about`, `https://${domain}/contact`, `https://${domain}/contacts`];
+    const domain = String(domainRaw)
+      .replace(/^https?:\/\//i, "")
+      .replace(/^www\./i, "")
+      .split("/")[0];
+
+    const bases = [
+      `https://${domain}/`,
+      `https://${domain}/about`,
+      `https://${domain}/contact`,
+      `https://${domain}/contacts`,
+    ];
 
     const pages: { url: string; html: string }[] = [];
     for (const u of bases) {
@@ -110,7 +115,7 @@ export async function POST(req: Request) {
     const bestName = pickBest(names, x => x.conf + (nameHint && x.val.includes(nameHint) ? 0.1 : 0));
     if (bestName) {
       suggestions.push({ field: "name", value: bestName.val, confidence: bestName.conf, source: bestName.src });
-      // для Collect (щоб було корисно і там)
+      // для Collect
       suggestions.push({ field: "company.displayName", value: bestName.val, confidence: bestName.conf, source: bestName.src });
     }
 
@@ -122,10 +127,11 @@ export async function POST(req: Request) {
     const dedupEmails = [...new Set(emails.map(e => e.val))];
     if (dedupEmails.length) {
       const corp = dedupEmails.find(e => e.endsWith(`@${domain}`)) || dedupEmails[0];
-      suggestions.push({ field: "general_email", value: corp, confidence: 0.85, source: emails.find(e => e.val === corp)?.src });
-      suggestions.push({ field: "contact_email", value: corp, confidence: 0.7, source: emails.find(e => e.val === corp)?.src });
+      const corpSrc = emails.find(e => e.val === corp)?.src;
+      suggestions.push({ field: "general_email", value: corp, confidence: 0.85, source: corpSrc });
+      suggestions.push({ field: "contact_email", value: corp, confidence: 0.70, source: corpSrc });
       // для Collect
-      suggestions.push({ field: "who.email", value: corp, confidence: 0.7, source: emails.find(e => e.val === corp)?.src });
+      suggestions.push({ field: "who.email", value: corp, confidence: 0.70, source: corpSrc });
     }
 
     // ---- PHONES
@@ -136,13 +142,17 @@ export async function POST(req: Request) {
     const dedupPhones = [...new Set(phones.map(p => p.val))];
     if (dedupPhones.length) {
       const ph = dedupPhones[0];
-      suggestions.push({ field: "contact_phone", value: ph, confidence: 0.6, source: phones.find(x => x.val === ph)?.src });
-      // для Collect
-      suggestions.push({ field: "who.phone", value: ph, confidence: 0.6, source: phones.find(x => x.val === ph)?.src });
+      const phSrc = phones.find(x => x.val === ph)?.src;
+      suggestions.push({ field: "contact_phone", value: ph, confidence: 0.60, source: phSrc });
+      // для Collect (не мапимо в форму автоматично)
+      suggestions.push({ field: "who.phone", value: ph, confidence: 0.60, source: phSrc });
     }
+
+    // (опціонально) якщо нема корпоративного домену, але є emailHint, можна додати reverse-lookup тут
 
     return NextResponse.json({ suggestions });
   } catch (e: any) {
+    // не ламаємо UX — повертаємо 200 з пустим списком та текстом помилки
     return NextResponse.json({ suggestions: [], error: e?.message ?? "enrich failed" }, { status: 200 });
   }
 }

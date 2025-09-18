@@ -10,6 +10,8 @@ type OrgDto = {
   domain: string | null;
   country: string | null;
   industry: string | null;
+  linkedin_url: string | null;
+  facebook_url: string | null;
   general_email: string | null;
   contact_name: string | null;
   contact_email: string | null;
@@ -40,6 +42,8 @@ type Form = {
   domain: string;
   country: string;
   industry: string;
+  linkedin_url: string;
+  facebook_url: string;
   general_email: string;
   contact_name: string;
   contact_email: string;
@@ -61,6 +65,8 @@ const emptyForm: Form = {
   domain: "",
   country: "",
   industry: "",
+  linkedin_url: "",
+  facebook_url: "",
   general_email: "",
   contact_name: "",
   contact_email: "",
@@ -82,6 +88,11 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Form>(emptyForm);
+
+  // enrichment (MVP)
+  const [enriching, setEnriching] = useState(false);
+  const [suggestions, setSuggestions] = useState<{ field:string; value:string; confidence?:number; source?:string }[]>([]);
+  const [pick, setPick] = useState<Record<number, boolean>>({});
 
   // Закрити по Escape
   useEffect(() => {
@@ -112,6 +123,8 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
             domain: org.domain ?? "",
             country: org.country ?? "",
             industry: org.industry ?? "",
+            linkedin_url: org.linkedin_url ?? "",
+            facebook_url: org.facebook_url ?? "",
             general_email: org.general_email ?? "",
             contact_name: org.contact_name ?? "",
             contact_email: org.contact_email ?? "",
@@ -151,6 +164,8 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
         domain: form.domain || null,
         country: form.country || null,
         industry: form.industry || null,
+        linkedin_url: form.linkedin_url || null,
+        facebook_url: form.facebook_url || null,
         general_email: form.general_email || null,
         contact_name: form.contact_name || null,
         contact_email: form.contact_email || null,
@@ -190,6 +205,57 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     }
   };
 
+  // -------- Enrich (MVP) ----------
+  function setDeep(obj: any, path: string, value: any) {
+    if (!path) return;
+    const parts = path.split(".");
+    let cur = obj;
+    for (let i = 0; i < parts.length - 1; i++) {
+      const k = parts[i];
+      if (cur[k] == null || typeof cur[k] !== "object") cur[k] = {};
+      cur = cur[k];
+    }
+    cur[parts[parts.length - 1]] = value;
+  }
+  function getDeep(obj: any, path: string) {
+    try { return path.split(".").reduce((acc, k) => (acc ? (acc as any)[k] : undefined), obj); }
+    catch { return undefined; }
+  }
+
+  const onFindInfo = async () => {
+    try {
+      setEnriching(true);
+      setSuggestions([]);
+      setPick({});
+      const r = await fetch("/api/enrich/org", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orgId,
+          domain: form.domain || null,
+          name: form.name || null,
+          email: form.contact_email || form.general_email || null,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+
+      const sugg = (j?.suggestions ?? []) as { field:string; value:string; confidence?:number; source?:string }[];
+      setSuggestions(sugg);
+
+      // автопозначимо ті, де поле у формі порожнє
+      const pre: Record<number, boolean> = {};
+      sugg.forEach((s, i) => {
+        if (!getDeep(form as any, s.field)) pre[i] = true;
+      });
+      setPick(pre);
+    } catch (e: any) {
+      alert(e?.message || "Enrich failed");
+    } finally {
+      setEnriching(false);
+    }
+  };
+
   if (!open) return null;
 
   return (
@@ -204,12 +270,22 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
         {/* Header */}
         <div className="flex items-center justify-between border-b px-5 py-4 border-[var(--border,#1f2937)]">
           <h2 className="text-lg font-semibold">{title}</h2>
-          <button
-            onClick={() => onOpenChange(false)}
-            className="rounded-md px-2 py-1 text-sm hover:bg-white/10"
-          >
-            ✕
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onFindInfo}
+              className="rounded-md px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 disabled:opacity-50"
+              disabled={enriching}
+              title="Find info from the website (about/contact pages)"
+            >
+              {enriching ? "Searching…" : "Find info"}
+            </button>
+            <button
+              onClick={() => onOpenChange(false)}
+              className="rounded-md px-2 py-1 text-sm hover:bg-white/10"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
         {/* Body */}
@@ -217,83 +293,148 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
           {loading ? (
             <div className="text-sm text-zinc-400">Loading…</div>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <L label="Company name">
-                <input className="input" value={form.name} onChange={set("name")} />
-              </L>
-              <L label="Domain">
-                <input className="input" placeholder="example.com" value={form.domain} onChange={set("domain")} />
-              </L>
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <L label="Company name">
+                  <input className="input" value={form.name} onChange={set("name")} />
+                </L>
+                <L label="Domain">
+                  <input className="input" placeholder="example.com" value={form.domain} onChange={set("domain")} />
+                </L>
 
-              <L label="Country">
-                <input className="input" value={form.country} onChange={set("country")} />
-              </L>
-              <L label="Industry">
-                <input className="input" value={form.industry} onChange={set("industry")} />
-              </L>
+                <L label="Country">
+                  <input className="input" value={form.country} onChange={set("country")} />
+                </L>
+                <L label="Industry">
+                  <input className="input" value={form.industry} onChange={set("industry")} />
+                </L>
 
-              <L label="General email">
-                <input className="input" value={form.general_email} onChange={set("general_email")} />
-              </L>
-              <L label="Contact person">
-                <input className="input" value={form.contact_name} onChange={set("contact_name")} />
-              </L>
+                {/* NEW: Socials */}
+                <L label="LinkedIn URL">
+                  <input
+                    className="input"
+                    placeholder="https://www.linkedin.com/company/..."
+                    value={form.linkedin_url}
+                    onChange={set("linkedin_url")}
+                  />
+                </L>
+                <L label="Facebook URL">
+                  <input
+                    className="input"
+                    placeholder="https://www.facebook.com/..."
+                    value={form.facebook_url}
+                    onChange={set("facebook_url")}
+                  />
+                </L>
 
-              <L label="Personal email">
-                <input className="input" value={form.contact_email} onChange={set("contact_email")} />
-              </L>
-              <L label="Phone">
-                <input className="input" value={form.contact_phone} onChange={set("contact_phone")} />
-              </L>
+                <L label="General email">
+                  <input className="input" value={form.general_email} onChange={set("general_email")} />
+                </L>
+                <L label="Contact person">
+                  <input className="input" value={form.contact_name} onChange={set("contact_name")} />
+                </L>
 
-              <L label="Status">
-                <select className="input" value={form.status} onChange={set("status")}>
-                  <option value="">—</option>
-                  <option value="New">New</option>
-                  <option value="In progress">In progress</option>
-                  <option value="Won">Won</option>
-                  <option value="Lost">Lost</option>
-                </select>
-              </L>
-              <L label="Size tag (S/M/L)">
-                <select className="input" value={form.size_tag} onChange={set("size_tag")}>
-                  <option value="">—</option>
-                  <option value="S">S</option>
-                  <option value="M">M</option>
-                  <option value="L">L</option>
-                </select>
-              </L>
+                <L label="Personal email">
+                  <input className="input" value={form.contact_email} onChange={set("contact_email")} />
+                </L>
+                <L label="Phone">
+                  <input className="input" value={form.contact_phone} onChange={set("contact_phone")} />
+                </L>
 
-              <L label="Source">
-                <input className="input" value={form.source} onChange={set("source")} />
-              </L>
-              <L label="Tags (comma separated)">
-                <input className="input" value={form.tags} onChange={set("tags")} />
-              </L>
+                <L label="Status">
+                  <select className="input" value={form.status} onChange={set("status")}>
+                    <option value="">—</option>
+                    <option value="New">New</option>
+                    <option value="In progress">In progress</option>
+                    <option value="Won">Won</option>
+                    <option value="Lost">Lost</option>
+                  </select>
+                </L>
+                <L label="Size tag (S/M/L)">
+                  <select className="input" value={form.size_tag} onChange={set("size_tag")}>
+                    <option value="">—</option>
+                    <option value="S">S</option>
+                    <option value="M">M</option>
+                    <option value="L">L</option>
+                  </select>
+                </L>
 
-              <L label="Last contact at">
-                <input className="input" placeholder="YYYY-MM-DD or ISO" value={form.last_contact_at} onChange={set("last_contact_at")} />
-              </L>
-              <L label="Brand">
-                <input className="input" value={form.brand} onChange={set("brand")} />
-              </L>
+                <L label="Source">
+                  <input className="input" value={form.source} onChange={set("source")} />
+                </L>
+                <L label="Tags (comma separated)">
+                  <input className="input" value={form.tags} onChange={set("tags")} />
+                </L>
 
-              <L label="Product">
-                <input className="input" value={form.product} onChange={set("product")} />
-              </L>
-              <L label="Quantity">
-                <input className="input" value={form.quantity} onChange={set("quantity")} />
-              </L>
+                <L label="Last contact at">
+                  <input className="input" placeholder="YYYY-MM-DD or ISO" value={form.last_contact_at} onChange={set("last_contact_at")} />
+                </L>
+                <L label="Brand">
+                  <input className="input" value={form.brand} onChange={set("brand")} />
+                </L>
 
-              <L label="Deal value USD">
-                <input className="input" value={form.deal_value_usd} onChange={set("deal_value_usd")} />
-              </L>
+                <L label="Product">
+                  <input className="input" value={form.product} onChange={set("product")} />
+                </L>
+                <L label="Quantity">
+                  <input className="input" value={form.quantity} onChange={set("quantity")} />
+                </L>
 
-              <div className="md:col-span-2">
-                <label className="label">Notes</label>
-                <textarea className="input min-h-[120px]" value={form.note} onChange={set("note")} />
+                <L label="Deal value USD">
+                  <input className="input" value={form.deal_value_usd} onChange={set("deal_value_usd")} />
+                </L>
+
+                <div className="md:col-span-2">
+                  <label className="label">Notes</label>
+                  <textarea className="input min-h-[120px]" value={form.note} onChange={set("note")} />
+                </div>
               </div>
-            </div>
+
+              {/* Suggestions from enrich */}
+              {!!suggestions.length && (
+                <div className="mt-3 rounded border border-white/10 p-3">
+                  <div className="text-sm opacity-80 mb-2">Suggestions (tick to apply)</div>
+                  <div className="space-y-1 text-sm">
+                    {suggestions.map((s, i) => (
+                      <label key={i} className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={!!pick[i]}
+                          onChange={() => setPick((prev) => ({ ...prev, [i]: !prev[i] }))}
+                        />
+                        <span className="flex-1">
+                          <span className="opacity-70">{s.field}</span>:{" "}
+                          <span className="font-mono">{String(s.value)}</span>
+                          {typeof s.confidence === "number" && (
+                            <span className="ml-2 text-xs opacity-60">conf {s.confidence.toFixed(2)}</span>
+                          )}
+                          {s.source && (
+                            <span className="ml-2 text-xs underline opacity-60">
+                              <a href={s.source} target="_blank">source</a>
+                            </span>
+                          )}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      className="rounded-lg px-3 py-2 bg-white/10 hover:bg-white/20 text-sm"
+                      onClick={() => {
+                        const chosen = suggestions.filter((_, i) => pick[i]);
+                        const next = { ...form };
+                        for (const s of chosen) setDeep(next as any, s.field, s.value);
+                        setForm(next);
+                      }}
+                    >
+                      Apply selected
+                    </button>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </div>
 

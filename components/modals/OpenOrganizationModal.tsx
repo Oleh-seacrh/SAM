@@ -222,6 +222,79 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     catch { return undefined; }
   }
 
+  // ——— валідації/мапінг підказок
+  function isEmail(v: string) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
+  }
+  function normalizePhone(v: string): string | null {
+    const only = v.replace(/[^\d+]/g, "");
+    const hasPlus = only.startsWith("+");
+    const digits = only.replace(/\D/g, "");
+    if (digits.length < 7 || digits.length > 15) return null;
+    return (hasPlus ? "+" : "") + digits;
+  }
+  function normalizeDomainClient(raw: string): string | null {
+    try {
+      let v = String(raw).trim().toLowerCase();
+      if (!v) return null;
+      if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname;
+      else v = v.split("/")[0];
+      return v.replace(/^www\./, "");
+    } catch {
+      const s = String(raw).trim().toLowerCase();
+      return s ? s.replace(/^www\./, "") : null;
+    }
+  }
+
+  function mapSuggestionToForm(
+    s: { field: string; value: string },
+    current: Form
+  ): { key?: keyof Form; val?: string } | null {
+    const field = s.field;
+    const value = String(s.value || "").trim();
+    const domain = (current.domain || "").toLowerCase();
+
+    if (field === "name" || field === "company.displayName") {
+      return { key: "name", val: value };
+    }
+    if (field === "domain") {
+      const d = normalizeDomainClient(value);
+      if (d) return { key: "domain", val: d };
+      return null;
+    }
+
+    if (field === "general_email" && isEmail(value)) {
+      return { key: "general_email", val: value.toLowerCase() };
+    }
+
+    if (field === "contact_email" && isEmail(value)) {
+      if (!current.contact_email) return { key: "contact_email", val: value.toLowerCase() };
+      return null; // не перезаписуємо персональний
+    }
+
+    if (field === "who.email" && isEmail(value)) {
+      if (domain && value.toLowerCase().endsWith("@" + domain)) {
+        return { key: "general_email", val: value.toLowerCase() };
+      }
+      return null; // не корпоративний → ігноруємо
+    }
+
+    if (field === "contact_phone") {
+      const p = normalizePhone(value);
+      if (p && !current.contact_phone) return { key: "contact_phone", val: p };
+      return null; // не перезаписуємо персональний
+    }
+
+    if (field === "who.phone") return null; // ніколи не пишемо
+
+    return null;
+  }
+
+  function canApplySuggestion(s: { field: string; value: string }, current: Form) {
+    const m = mapSuggestionToForm(s, current);
+    return !!(m && m.key && m.val != null);
+  }
+
   const onFindInfo = async () => {
     try {
       setEnriching(true);
@@ -243,10 +316,11 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       const sugg = (j?.suggestions ?? []) as { field:string; value:string; confidence?:number; source?:string }[];
       setSuggestions(sugg);
 
-      // автопозначимо ті, де поле у формі порожнє
+      // автопозначаємо тільки ті, що реально можна застосувати і цільове поле зараз порожнє
       const pre: Record<number, boolean> = {};
       sugg.forEach((s, i) => {
-        if (!getDeep(form as any, s.field)) pre[i] = true;
+        const m = mapSuggestionToForm(s, form);
+        if (m?.key && !form[m.key]) pre[i] = true;
       });
       setPick(pre);
     } catch (e: any) {
@@ -395,27 +469,43 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                 <div className="mt-3 rounded border border-white/10 p-3">
                   <div className="text-sm opacity-80 mb-2">Suggestions (tick to apply)</div>
                   <div className="space-y-1 text-sm">
-                    {suggestions.map((s, i) => (
-                      <label key={i} className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={!!pick[i]}
-                          onChange={() => setPick((prev) => ({ ...prev, [i]: !prev[i] }))}
-                        />
-                        <span className="flex-1">
-                          <span className="opacity-70">{s.field}</span>:{" "}
-                          <span className="font-mono">{String(s.value)}</span>
-                          {typeof s.confidence === "number" && (
-                            <span className="ml-2 text-xs opacity-60">conf {s.confidence.toFixed(2)}</span>
-                          )}
-                          {s.source && (
-                            <span className="ml-2 text-xs underline opacity-60">
-                              <a href={s.source} target="_blank">source</a>
-                            </span>
-                          )}
-                        </span>
-                      </label>
-                    ))}
+                    {suggestions.map((s, i) => {
+                      const applicable = canApplySuggestion(s, form);
+                      const personalNote =
+                        s.field === "contact_email" || s.field === "contact_phone" || s.field === "who.phone"
+                          ? " (personal — won't overwrite)"
+                          : s.field === "who.email"
+                            ? " (mapped to general_email if corporate)"
+                            : s.field === "domain"
+                              ? " (will normalize)"
+                              : "";
+
+                      return (
+                        <label key={i} className={`flex items-start gap-2 ${applicable ? "" : "opacity-50"}`}>
+                          <input
+                            type="checkbox"
+                            checked={!!pick[i]}
+                            disabled={!applicable}
+                            onChange={() => {
+                              if (!applicable) return;
+                              setPick((prev) => ({ ...prev, [i]: !prev[i] }));
+                            }}
+                          />
+                          <span className="flex-1">
+                            <span className="opacity-70">{s.field}</span>{personalNote}:{" "}
+                            <span className="font-mono">{String(s.value)}</span>
+                            {typeof s.confidence === "number" && (
+                              <span className="ml-2 text-xs opacity-60">conf {s.confidence.toFixed(2)}</span>
+                            )}
+                            {s.source && (
+                              <span className="ml-2 text-xs underline opacity-60">
+                                <a href={s.source} target="_blank">source</a>
+                              </span>
+                            )}
+                          </span>
+                        </label>
+                      );
+                    })}
                   </div>
 
                   <div className="mt-2">
@@ -425,7 +515,12 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                       onClick={() => {
                         const chosen = suggestions.filter((_, i) => pick[i]);
                         const next = { ...form };
-                        for (const s of chosen) setDeep(next as any, s.field, s.value);
+                        for (const s of chosen) {
+                          const m = mapSuggestionToForm(s, next);
+                          if (m?.key && m.val != null) {
+                            (next as any)[m.key] = m.val;
+                          }
+                        }
                         setForm(next);
                       }}
                     >

@@ -107,5 +107,8 @@ export async function POST(req: Request) {
     status: companyName ? "partial" : "needs_review",
   };
 
-  return NextResponse.json(result);
-}
+await db.query(
+  "insert into enrichment_logs (tenant_id, input, result) values ($1, $2, $3)",
+  [tenantId, raw, result]
+);
+return NextResponse.json(result);

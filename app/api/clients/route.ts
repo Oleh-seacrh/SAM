@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+export const dynamic = 'force-dynamic';
 import { getSql, toPgTextArray } from "@/lib/db";
 
 export async function GET() {

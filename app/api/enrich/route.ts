@@ -1,4 +1,5 @@
 export const runtime = "nodejs";
+export const dynamic = 'force-dynamic';
 import { NextResponse } from "next/server";
 import { getDefaultEnrichConfig, EnrichConfig } from "@/lib/enrich/config";
 import { normalizeDomain, normalizeEmail, normalizePhone } from "@/lib/enrich/normalize";

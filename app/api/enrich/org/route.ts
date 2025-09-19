@@ -15,12 +15,11 @@ async function fetchWithTimeout(url: string, ms = 6000) {
   }
 }
 
-// ——— helpers
+// helpers
 function pickBest<T>(arr: T[], score: (x: T) => number): T | null {
   if (!arr.length) return null;
   return arr.map(v => ({ v, s: score(v) })).sort((a, b) => b.s - a.s)[0].v;
 }
-
 function extractTitle(html: string): string | null {
   const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
   return m ? m[1].replace(/\s+/g, " ").trim() : null;
@@ -35,10 +34,10 @@ function extractJsonLdName(html: string): string | null {
   for (const b of blocks) {
     try {
       const j = JSON.parse(b[1]);
-      const cand = Array.isArray(j) ? j : [j];
-      for (const x of cand) {
+      const arr = Array.isArray(j) ? j : [j];
+      for (const x of arr) {
         const name = x?.name || x?.legalName || x?.publisher?.name || x?.author?.name;
-        if (name && typeof name === "string") return name.trim();
+        if (typeof name === "string" && name.trim()) return name.trim();
       }
     } catch {}
   }
@@ -70,7 +69,6 @@ function extractPhones(html: string): string[] {
   return [...set];
 }
 
-// ——— handler
 export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}));
@@ -86,7 +84,7 @@ export async function POST(req: Request) {
       .replace(/^www\./i, "")
       .split("/")[0];
 
-    const bases = [
+    const urls = [
       `https://${domain}/`,
       `https://${domain}/about`,
       `https://${domain}/contact`,
@@ -94,15 +92,15 @@ export async function POST(req: Request) {
     ];
 
     const pages: { url: string; html: string }[] = [];
-    for (const u of bases) {
+    for (const u of urls) {
       try {
         const html = await fetchWithTimeout(u, 5500);
-        if (html && html.length) pages.push({ url: u, html });
+        if (html?.length) pages.push({ url: u, html });
       } catch {}
     }
     if (!pages.length) return NextResponse.json({ suggestions });
 
-    // ---- NAME
+    // NAME
     const names: { val: string; src: string; conf: number }[] = [];
     for (const p of pages) {
       const n1 = extractJsonLdName(p.html);
@@ -115,11 +113,10 @@ export async function POST(req: Request) {
     const bestName = pickBest(names, x => x.conf + (nameHint && x.val.includes(nameHint) ? 0.1 : 0));
     if (bestName) {
       suggestions.push({ field: "name", value: bestName.val, confidence: bestName.conf, source: bestName.src });
-      // для Collect
       suggestions.push({ field: "company.displayName", value: bestName.val, confidence: bestName.conf, source: bestName.src });
     }
 
-    // ---- EMAILS
+    // EMAILS
     const emails: { val: string; src: string }[] = [];
     for (const p of pages) {
       for (const e of extractEmails(p.html)) emails.push({ val: e, src: p.url });
@@ -130,11 +127,10 @@ export async function POST(req: Request) {
       const corpSrc = emails.find(e => e.val === corp)?.src;
       suggestions.push({ field: "general_email", value: corp, confidence: 0.85, source: corpSrc });
       suggestions.push({ field: "contact_email", value: corp, confidence: 0.70, source: corpSrc });
-      // для Collect
       suggestions.push({ field: "who.email", value: corp, confidence: 0.70, source: corpSrc });
     }
 
-    // ---- PHONES
+    // PHONES
     const phones: { val: string; src: string }[] = [];
     for (const p of pages) {
       for (const ph of extractPhones(p.html)) phones.push({ val: ph, src: p.url });
@@ -144,15 +140,13 @@ export async function POST(req: Request) {
       const ph = dedupPhones[0];
       const phSrc = phones.find(x => x.val === ph)?.src;
       suggestions.push({ field: "contact_phone", value: ph, confidence: 0.60, source: phSrc });
-      // для Collect (не мапимо в форму автоматично)
       suggestions.push({ field: "who.phone", value: ph, confidence: 0.60, source: phSrc });
     }
 
-    // (опціонально) якщо нема корпоративного домену, але є emailHint, можна додати reverse-lookup тут
+    // (опціонально) якщо нема корпоративного домену, але є emailHint — тут можна додати reverse-lookup
 
     return NextResponse.json({ suggestions });
   } catch (e: any) {
-    // не ламаємо UX — повертаємо 200 з пустим списком та текстом помилки
     return NextResponse.json({ suggestions: [], error: e?.message ?? "enrich failed" }, { status: 200 });
   }
 }

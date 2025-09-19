@@ -1,5 +1,6 @@
 // app/api/orgs/route.ts
 export const runtime = "nodejs";
+export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from "next/server";
 import { getSql } from "@/lib/db";

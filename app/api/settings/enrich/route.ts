@@ -18,7 +18,6 @@ export async function GET() {
     const cfg = rows[0]?.enrich_config ?? getDefaultEnrichConfig();
     return NextResponse.json(cfg);
   } catch {
-    // якщо таблиці ще нема або інша помилка — повертаємо дефолт
     return NextResponse.json(getDefaultEnrichConfig());
   }
 }
@@ -36,4 +35,9 @@ export async function PUT(req: Request) {
           updated_at = now()
   `;
   return NextResponse.json({ ok: true });
+}
+
+// Додаємо POST як синонім до PUT, щоб уникнути 405 при невідповідності методу
+export async function POST(req: Request) {
+  return PUT(req);
 }

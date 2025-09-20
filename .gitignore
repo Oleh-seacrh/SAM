@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Next.js build output
+.next/
+
+# TypeScript build output
+dist/
+
+# ESLint configuration (generated)
+.eslintrc.json
+
+# IDE files
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Test output
+coverage/
+*.log

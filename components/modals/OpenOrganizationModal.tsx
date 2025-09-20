@@ -499,7 +499,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                             )}
                             {s.source && (
                               <span className="ml-2 text-xs underline opacity-60">
-                                <a href={s.source} target="_blank">source</a>
+                                <a href={s.source} target="_blank" rel="noopener noreferrer">source</a>
                               </span>
                             )}
                           </span>

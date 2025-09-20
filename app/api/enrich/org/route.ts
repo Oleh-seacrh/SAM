@@ -68,6 +68,47 @@ function extractPhones(html: string): string[] {
   }
   return [...set];
 }
+function extractSocialUrls(html: string): { linkedin: string[], facebook: string[] } {
+  const linkedin = new Set<string>();
+  const facebook = new Set<string>();
+  
+  // Extract all href attributes from anchor tags
+  const hrefMatches = html.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*>/gi);
+  
+  for (const match of hrefMatches) {
+    const url = match[1];
+    
+    // Check for LinkedIn company URLs
+    if (/linkedin\.com\/company\//i.test(url)) {
+      // Normalize the URL to ensure it's a full URL
+      let normalizedUrl = url;
+      if (url.startsWith('//')) {
+        normalizedUrl = 'https:' + url;
+      } else if (url.startsWith('/')) {
+        normalizedUrl = 'https://linkedin.com' + url;
+      } else if (!url.match(/^https?:\/\//)) {
+        normalizedUrl = 'https://' + url;
+      }
+      linkedin.add(normalizedUrl);
+    }
+    
+    // Check for Facebook URLs
+    if (/facebook\.com\//i.test(url)) {
+      // Normalize the URL to ensure it's a full URL
+      let normalizedUrl = url;
+      if (url.startsWith('//')) {
+        normalizedUrl = 'https:' + url;
+      } else if (url.startsWith('/')) {
+        normalizedUrl = 'https://facebook.com' + url;
+      } else if (!url.match(/^https?:\/\//)) {
+        normalizedUrl = 'https://' + url;
+      }
+      facebook.add(normalizedUrl);
+    }
+  }
+  
+  return { linkedin: [...linkedin], facebook: [...facebook] };
+}
 
 export async function POST(req: Request) {
   try {
@@ -141,6 +182,29 @@ export async function POST(req: Request) {
       const phSrc = phones.find(x => x.val === ph)?.src;
       suggestions.push({ field: "contact_phone", value: ph, confidence: 0.60, source: phSrc });
       suggestions.push({ field: "who.phone", value: ph, confidence: 0.60, source: phSrc });
+    }
+
+    // SOCIAL URLS
+    const linkedinUrls: { val: string; src: string }[] = [];
+    const facebookUrls: { val: string; src: string }[] = [];
+    for (const p of pages) {
+      const socialUrls = extractSocialUrls(p.html);
+      for (const url of socialUrls.linkedin) linkedinUrls.push({ val: url, src: p.url });
+      for (const url of socialUrls.facebook) facebookUrls.push({ val: url, src: p.url });
+    }
+    
+    const dedupLinkedinUrls = [...new Set(linkedinUrls.map(l => l.val))];
+    if (dedupLinkedinUrls.length) {
+      const linkedinUrl = dedupLinkedinUrls[0];
+      const linkedinSrc = linkedinUrls.find(x => x.val === linkedinUrl)?.src;
+      suggestions.push({ field: "linkedin_url", value: linkedinUrl, source: linkedinSrc });
+    }
+    
+    const dedupFacebookUrls = [...new Set(facebookUrls.map(f => f.val))];
+    if (dedupFacebookUrls.length) {
+      const facebookUrl = dedupFacebookUrls[0];
+      const facebookSrc = facebookUrls.find(x => x.val === facebookUrl)?.src;
+      suggestions.push({ field: "facebook_url", value: facebookUrl, source: facebookSrc });
     }
 
     // (опціонально) якщо нема корпоративного домену, але є emailHint — тут можна додати reverse-lookup

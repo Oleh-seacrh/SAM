@@ -68,6 +68,26 @@ function extractPhones(html: string): string[] {
   }
   return [...set];
 }
+// Соцмережі
+function firstMatch(re: RegExp, html: string): string | null {
+  const m = re.exec(html);
+  return m ? m[1] : null;
+}
+function normalizeUrl(u?: string | null): string | null {
+  if (!u) return null;
+  try {
+    const url = new URL(u);
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+function extractSocials(html: string): { linkedin?: string; facebook?: string } {
+  const li = firstMatch(/href=["']([^"']*linkedin\.com\/(company|school|showcase)\/[^"']+)["']/i, html);
+  const fb = firstMatch(/href=["']([^"']*facebook\.com\/[^"']+)["']/i, html);
+  return { linkedin: normalizeUrl(li) || undefined, facebook: normalizeUrl(fb) || undefined };
+}
 
 export async function POST(req: Request) {
   try {
@@ -77,9 +97,32 @@ export async function POST(req: Request) {
     const emailHint: string | null = body?.email ?? null;
 
     const suggestions: { field: string; value: string; confidence?: number; source?: string }[] = [];
-    if (!domainRaw) return NextResponse.json({ suggestions });
+    const seen = new Set<string>(); // dedupe by field+value
 
-    const domain = String(domainRaw)
+    function pushUnique(s: { field: string; value: string; confidence?: number; source?: string }) {
+      const key = `${s.field}::${String(s.value).toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        suggestions.push(s);
+      }
+    }
+
+    // reverse-lite: якщо домен не передано, але є email → беремо домен з email
+    let effectiveDomain = domainRaw;
+    if (!effectiveDomain && emailHint && typeof emailHint === "string") {
+      const m = emailHint.toLowerCase().match(/@([a-z0-9.-]+\.[a-z]{2,})$/i);
+      if (m) {
+        effectiveDomain = m[1];
+        pushUnique({ field: "domain", value: effectiveDomain, confidence: 0.9, source: "email" });
+      }
+    }
+
+    if (!effectiveDomain) {
+      // Нічого зберігати — без домену сайту цей MVP нічого не скрапить
+      return NextResponse.json({ suggestions });
+    }
+
+    const domain = String(effectiveDomain)
       .replace(/^https?:\/\//i, "")
       .replace(/^www\./i, "")
       .split("/")[0];
@@ -112,8 +155,9 @@ export async function POST(req: Request) {
     }
     const bestName = pickBest(names, x => x.conf + (nameHint && x.val.includes(nameHint) ? 0.1 : 0));
     if (bestName) {
-      suggestions.push({ field: "name", value: bestName.val, confidence: bestName.conf, source: bestName.src });
-      suggestions.push({ field: "company.displayName", value: bestName.val, confidence: bestName.conf, source: bestName.src });
+      pushUnique({ field: "name", value: bestName.val, confidence: bestName.conf, source: bestName.src });
+      // не дублюємо company.displayName, якщо те саме значення (ключ у seen не дасть продублювати)
+      pushUnique({ field: "company.displayName", value: bestName.val, confidence: bestName.conf, source: bestName.src });
     }
 
     // EMAILS
@@ -125,9 +169,9 @@ export async function POST(req: Request) {
     if (dedupEmails.length) {
       const corp = dedupEmails.find(e => e.endsWith(`@${domain}`)) || dedupEmails[0];
       const corpSrc = emails.find(e => e.val === corp)?.src;
-      suggestions.push({ field: "general_email", value: corp, confidence: 0.85, source: corpSrc });
-      suggestions.push({ field: "contact_email", value: corp, confidence: 0.70, source: corpSrc });
-      suggestions.push({ field: "who.email", value: corp, confidence: 0.70, source: corpSrc });
+      pushUnique({ field: "general_email", value: corp, confidence: 0.85, source: corpSrc });
+      pushUnique({ field: "contact_email", value: corp, confidence: 0.70, source: corpSrc });
+      pushUnique({ field: "who.email", value: corp, confidence: 0.70, source: corpSrc });
     }
 
     // PHONES
@@ -139,14 +183,24 @@ export async function POST(req: Request) {
     if (dedupPhones.length) {
       const ph = dedupPhones[0];
       const phSrc = phones.find(x => x.val === ph)?.src;
-      suggestions.push({ field: "contact_phone", value: ph, confidence: 0.60, source: phSrc });
-      suggestions.push({ field: "who.phone", value: ph, confidence: 0.60, source: phSrc });
+      pushUnique({ field: "contact_phone", value: ph, confidence: 0.60, source: phSrc });
+      pushUnique({ field: "who.phone", value: ph, confidence: 0.60, source: phSrc });
     }
 
-    // (опціонально) якщо нема корпоративного домену, але є emailHint — тут можна додати reverse-lookup
+    // SOCIALS
+    for (const p of pages) {
+      const socials = extractSocials(p.html);
+      if (socials.linkedin) {
+        pushUnique({ field: "linkedin_url", value: socials.linkedin, confidence: 0.9, source: p.url });
+      }
+      if (socials.facebook) {
+        pushUnique({ field: "facebook_url", value: socials.facebook, confidence: 0.8, source: p.url });
+      }
+    }
 
     return NextResponse.json({ suggestions });
   } catch (e: any) {
-    return NextResponse.json({ suggestions: [], error: e?.message ?? "enrich failed" }, { status: 200 });
+    // важливо: повертати 500, а не 200 з error
+    return NextResponse.json({ suggestions: [], error: e?.message ?? "enrich failed" }, { status: 500 });
   }
 }

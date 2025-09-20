@@ -210,8 +210,8 @@ function IntakePreview({
           {/* показати посилання якщо вже є */}
           {(c.company.linkedin_url || c.company.facebook_url) && (
             <div className="text-xs mt-2 space-x-3">
-              {c.company.linkedin_url && <a className="underline" href={c.company.linkedin_url} target="_blank">LinkedIn</a>}
-              {c.company.facebook_url && <a className="underline" href={c.company.facebook_url} target="_blank">Facebook</a>}
+              {c.company.linkedin_url && <a className="underline" href={c.company.linkedin_url} target="_blank" rel="noopener noreferrer">LinkedIn</a>}
+              {c.company.facebook_url && <a className="underline" href={c.company.facebook_url} target="_blank" rel="noopener noreferrer">Facebook</a>}
             </div>
           )}
         </Section>
@@ -274,7 +274,7 @@ function IntakePreview({
                   <span className="flex-1">
                     <span className="opacity-70">{s.field}</span>: <span className="font-mono">{String(s.value)}</span>
                     {typeof s.confidence === "number" && <span className="ml-2 text-xs opacity-60">conf {s.confidence.toFixed(2)}</span>}
-                    {s.source && <span className="ml-2 text-xs underline opacity-60"><a href={s.source} target="_blank">source</a></span>}
+                    {s.source && <span className="ml-2 text-xs underline opacity-60"><a href={s.source} target="_blank" rel="noopener noreferrer">source</a></span>}
                   </span>
                 </label>
               ))}

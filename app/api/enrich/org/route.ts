@@ -1,6 +1,9 @@
 // app/api/enrich/org/route.ts
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
+import { loadTenantEnrichConfig, EnrichConfig } from "@/lib/enrich/config";
+import { getSql } from "@/lib/db";
+import { getTenantIdFromSession } from "@/lib/auth";
 
 /** fetch з таймаутом */
 async function fetchWithTimeout(url: string, ms = 6000) {
@@ -71,6 +74,12 @@ function extractPhones(html: string): string[] {
 
 export async function POST(req: Request) {
   try {
+    const sql = getSql();
+    const tenantId = await getTenantIdFromSession();
+    
+    // Load tenant config to respect flags
+    const cfg = await loadTenantEnrichConfig(sql, tenantId);
+    
     const body = await req.json().catch(() => ({}));
     const domainRaw: string | null = body?.domain ?? null;
     const nameHint: string | null = body?.name ?? null;
@@ -78,6 +87,12 @@ export async function POST(req: Request) {
 
     const suggestions: { field: string; value: string; confidence?: number; source?: string }[] = [];
     if (!domainRaw) return NextResponse.json({ suggestions });
+
+    // Gate website fetching based on enrichBy.website flag
+    if (!cfg.enrichBy.website) {
+      // If website enrichment is disabled, return empty suggestions
+      return NextResponse.json({ suggestions });
+    }
 
     const domain = String(domainRaw)
       .replace(/^https?:\/\//i, "")
@@ -116,34 +131,41 @@ export async function POST(req: Request) {
       suggestions.push({ field: "company.displayName", value: bestName.val, confidence: bestName.conf, source: bestName.src });
     }
 
-    // EMAILS
-    const emails: { val: string; src: string }[] = [];
-    for (const p of pages) {
-      for (const e of extractEmails(p.html)) emails.push({ val: e, src: p.url });
+    // EMAILS - prepare for future gating with cfg.enrichBy.email
+    if (cfg.enrichBy.email) {
+      const emails: { val: string; src: string }[] = [];
+      for (const p of pages) {
+        for (const e of extractEmails(p.html)) emails.push({ val: e, src: p.url });
+      }
+      const dedupEmails = [...new Set(emails.map(e => e.val))];
+      if (dedupEmails.length) {
+        const corp = dedupEmails.find(e => e.endsWith(`@${domain}`)) || dedupEmails[0];
+        const corpSrc = emails.find(e => e.val === corp)?.src;
+        suggestions.push({ field: "general_email", value: corp, confidence: 0.85, source: corpSrc });
+        suggestions.push({ field: "contact_email", value: corp, confidence: 0.70, source: corpSrc });
+        suggestions.push({ field: "who.email", value: corp, confidence: 0.70, source: corpSrc });
+      }
     }
-    const dedupEmails = [...new Set(emails.map(e => e.val))];
-    if (dedupEmails.length) {
-      const corp = dedupEmails.find(e => e.endsWith(`@${domain}`)) || dedupEmails[0];
-      const corpSrc = emails.find(e => e.val === corp)?.src;
-      suggestions.push({ field: "general_email", value: corp, confidence: 0.85, source: corpSrc });
-      suggestions.push({ field: "contact_email", value: corp, confidence: 0.70, source: corpSrc });
-      suggestions.push({ field: "who.email", value: corp, confidence: 0.70, source: corpSrc });
-    }
+    // TODO: Future implementation - reverse-lookup by email when cfg.enrichBy.email is enabled
 
-    // PHONES
-    const phones: { val: string; src: string }[] = [];
-    for (const p of pages) {
-      for (const ph of extractPhones(p.html)) phones.push({ val: ph, src: p.url });
+    // PHONES - prepare for future gating with cfg.enrichBy.phone  
+    if (cfg.enrichBy.phone) {
+      const phones: { val: string; src: string }[] = [];
+      for (const p of pages) {
+        for (const ph of extractPhones(p.html)) phones.push({ val: ph, src: p.url });
+      }
+      const dedupPhones = [...new Set(phones.map(p => p.val))];
+      if (dedupPhones.length) {
+        const ph = dedupPhones[0];
+        const phSrc = phones.find(x => x.val === ph)?.src;
+        suggestions.push({ field: "contact_phone", value: ph, confidence: 0.60, source: phSrc });
+        suggestions.push({ field: "who.phone", value: ph, confidence: 0.60, source: phSrc });
+      }
     }
-    const dedupPhones = [...new Set(phones.map(p => p.val))];
-    if (dedupPhones.length) {
-      const ph = dedupPhones[0];
-      const phSrc = phones.find(x => x.val === ph)?.src;
-      suggestions.push({ field: "contact_phone", value: ph, confidence: 0.60, source: phSrc });
-      suggestions.push({ field: "who.phone", value: ph, confidence: 0.60, source: phSrc });
-    }
+    // TODO: Future implementation - reverse-lookup by phone when cfg.enrichBy.phone is enabled
 
-    // (опціонально) якщо нема корпоративного домену, але є emailHint — тут можна додати reverse-lookup
+    // TODO: Future socials implementation using cfg.sources.socials.*
+    // TODO: Future platforms implementation using cfg.sources.platforms.*
 
     return NextResponse.json({ suggestions });
   } catch (e: any) {

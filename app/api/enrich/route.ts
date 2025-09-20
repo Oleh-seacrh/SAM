@@ -1,6 +1,6 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDefaultEnrichConfig, EnrichConfig } from "@/lib/enrich/config";
+import { getDefaultEnrichConfig, loadTenantEnrichConfig, EnrichConfig } from "@/lib/enrich/config";
 import { normalizeDomain, normalizeEmail, normalizePhone } from "@/lib/enrich/normalize";
 import { fetchSite } from "@/lib/enrich/site";
 import { searchWeb } from "@/lib/enrich/web";
@@ -57,11 +57,7 @@ export async function POST(req: Request) {
   }
 
   // конфіг
-  let cfg: EnrichConfig = getDefaultEnrichConfig();
-  try {
-    const rows = await sql/*sql*/`select enrich_config from tenant_settings where tenant_id = ${tenantId} limit 1`;
-    cfg = rows[0]?.enrich_config ?? cfg;
-  } catch {/* ignore */ }
+  const cfg = await loadTenantEnrichConfig(sql, tenantId);
 
   // нормалізація
   let domain = body.input_type === "domain" ? normalizeDomain(raw) : null;

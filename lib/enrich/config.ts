@@ -23,3 +23,18 @@ export function getDefaultEnrichConfig(): EnrichConfig {
     perSourceTimeoutMs: { site: 3000, web: 2000, linkedin: 2000, platforms: 3000 }
   };
 }
+
+/**
+ * Helper function to load enrich config for a tenant.
+ * Loads from tenant_settings or falls back to default config.
+ */
+export async function loadTenantEnrichConfig(sql: any, tenantId: string): Promise<EnrichConfig> {
+  let cfg: EnrichConfig = getDefaultEnrichConfig();
+  try {
+    const rows = await sql/*sql*/`select enrich_config from tenant_settings where tenant_id = ${tenantId} limit 1`;
+    cfg = rows[0]?.enrich_config ?? cfg;
+  } catch {
+    // ignore errors and use default config
+  }
+  return cfg;
+}

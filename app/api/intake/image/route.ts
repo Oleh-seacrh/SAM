@@ -94,20 +94,39 @@ export async function POST(req: NextRequest) {
   const processed = await maybeProcessImage(src);
   const rawText = await runOCR(processed);
 
-  // повний data URL (важливо для vision)
-  const imageDataUrl = `data:${file.type};base64,${processed.toString("base64")}`;
+    // повний data URL (важливо для vision)
+  const imageDataUrl = `data:${file.type || "image/png"};base64,${processed.toString("base64")}`;
 
   // оголошуємо provider ДО використання
   const provider = ((process.env.SAM_LLM_PROVIDER || "openai").toLowerCase() as LLMProvider);
   const prompt = buildPrompt(self, rawText, imageDataUrl);
 
-  // реальний виклик LLM
-  const extracted = await extractInquiry({
-    provider,
-    model: process.env.OPENAI_MODEL, // або свій env під кожного провайдера
-    prompt,
-    imageDataUrl,
-  });
+  // ✅ SAFE: реальний виклик LLM з дефолтною моделлю і фолбеком
+  let extracted: any;
+  try {
+    // опціональний таймаут, щоб не підвисати назавжди
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 15000); // 15s
+    try {
+      extracted = await extractInquiry({
+        provider,
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini", // дефолт, якщо не задано
+        prompt,
+        imageDataUrl,
+        signal: (ctrl as any).signal, // якщо твій extractInquiry підтримує signal
+      } as any);
+    } finally {
+      clearTimeout(t);
+    }
+  } catch (e: any) {
+    console.error("extractInquiry failed:", e?.message || e);
+    // Фолбек без LLM — повертаємо мінімально валідні поля, щоб UI жив
+    extracted = {
+      who:       { name: null, email: null, phone: null, source: "other" as const },
+      company:   { legalName: null, displayName: null, domain: null, country: null },
+      intent:    { type: "Info" as const, brand: null, product: null, quantity: null, freeText: null },
+    };
+  }
 
   // приводимо до єдиного формату + мета
   const parsed = {
@@ -130,4 +149,3 @@ export async function POST(req: NextRequest) {
   });
 
   return NextResponse.json({ normalized: parsed, dedupe: { candidates } });
-}

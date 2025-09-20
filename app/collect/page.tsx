@@ -1,6 +1,7 @@
 "use client";
 import { useState, useCallback } from "react";
 import { useSelfProfile } from "@/hooks/use-self";
+import { shouldPreCheckSuggestion } from "@/lib/enrich/mapSuggestionToForm";
 
 type ParsedInquiry = {
   who: { name?: string|null; email?: string|null; phone?: string|null; source: "email"|"whatsapp"|"other" };
@@ -178,8 +179,21 @@ function IntakePreview({
       setSuggestions(sugg);
       // автопропозиції: відмітимо тільки ті, де поле порожнє
       const pre: Record<number, boolean> = {};
+      
+      // Convert ParsedInquiry to Form-like structure for the shared utility
+      const formLike = {
+        domain: c.company.domain || "",
+        name: c.company.legalName || c.company.displayName || "",
+        general_email: "", // Not directly available in ParsedInquiry
+        contact_email: c.who.email || "",
+        contact_phone: c.who.phone || "",
+        linkedin_url: c.company.linkedin_url || "",
+        facebook_url: c.company.facebook_url || "",
+        country: c.company.country || ""
+      };
+      
       sugg.forEach((s, i) => {
-        if (!getDeep(c as any, s.field)) pre[i] = true;
+        if (shouldPreCheckSuggestion(s, formLike)) pre[i] = true;
       });
       setChecked(pre);
     } catch (e:any) {
@@ -349,9 +363,4 @@ function setDeep(obj: any, path: string, value: any) {
     cur = cur[k];
   }
   cur[parts[parts.length - 1]] = value;
-}
-function getDeep(obj: any, path: string) {
-  try {
-    return path.split(".").reduce((acc, k) => (acc ? acc[k] : undefined), obj);
-  } catch { return undefined; }
 }

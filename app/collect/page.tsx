@@ -14,6 +14,24 @@ type IntakePreviewT = { normalized: ParsedInquiry; dedupe: { candidates: DedupCa
 // простий тип для збагачення (MVP)
 type EnrichSuggestion = { field: string; value: string; confidence?: number; source?: string };
 
+/* ------- Safe response utils to avoid 'Unexpected end of JSON input' ------- */
+async function parseResponseSafe(res: Response): Promise<any | null> {
+  const ct = res.headers.get("content-type") || "";
+  if (ct.includes("application/json")) {
+    try { return await res.json(); } catch { return null; }
+  }
+  try {
+    const text = await res.text();
+    return text ? { message: text } : null;
+  } catch { return null; }
+}
+function pickErrorMessage(res: Response, body: any | null, fallback = "Request failed") {
+  if (body?.error) return String(body.error);
+  if (body?.message) return String(body.message);
+  if (!res.ok) return `${res.status} ${res.statusText}`.trim();
+  return "Empty response from server";
+}
+
 export default function CollectPage() {
   const [preview, setPreview] = useState<IntakePreviewT | null>(null);
   const [loading, setLoading] = useState(false);
@@ -31,13 +49,16 @@ export default function CollectPage() {
     fd.append("self_json", JSON.stringify(self));
     try {
       const res = await fetch("/api/intake/image", { method: "POST", body: fd });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Upload failed");
-      setPreview(json);
+      const payload = await parseResponseSafe(res);
+
+      if (!res.ok) throw new Error(pickErrorMessage(res, payload, "Upload failed"));
+      if (!payload) throw new Error("Empty response from server");
+
+      setPreview(payload);
 
       // префіл для socials з parsed (якщо LLM вже дав)
-      const li = json?.normalized?.company?.linkedin_url ?? "";
-      const fb = json?.normalized?.company?.facebook_url ?? "";
+      const li = payload?.normalized?.company?.linkedin_url ?? "";
+      const fb = payload?.normalized?.company?.facebook_url ?? "";
       setSocials({ linkedin_url: li || "", facebook_url: fb || "" });
     } catch (e:any) {
       setErr(e.message || "Error");
@@ -59,8 +80,10 @@ export default function CollectPage() {
     const res = await fetch("/api/intake/confirm", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     });
-    const json = await res.json();
-    if (!res.ok) { alert(json.error || "Failed"); return; }
+
+    const out = await parseResponseSafe(res);
+    if (!res.ok) { alert(pickErrorMessage(res, out, "Failed")); return; }
+
     setPreview(null);
     alert("Saved ✔");
   }, [preview, socials]);
@@ -172,9 +195,9 @@ function IntakePreview({
           email: c.who.email
         })
       });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to find");
-      const sugg: EnrichSuggestion[] = json?.suggestions || [];
+      const json = await parseResponseSafe(res);
+      if (!res.ok) throw new Error(pickErrorMessage(res, json, "Failed to find"));
+      const sugg: EnrichSuggestion[] = (json?.suggestions || []) as EnrichSuggestion[];
       setSuggestions(sugg);
       // автопропозиції: відмітимо тільки ті, де поле порожнє
       const pre: Record<number, boolean> = {};

@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { mapSuggestionToForm, canApplySuggestion, shouldPreCheckSuggestion } from "@/lib/enrich/mapSuggestionToForm";
 
 type OrgDto = {
   id: string;
@@ -222,78 +223,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     catch { return undefined; }
   }
 
-  // ——— валідації/мапінг підказок
-  function isEmail(v: string) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
-  }
-  function normalizePhone(v: string): string | null {
-    const only = v.replace(/[^\d+]/g, "");
-    const hasPlus = only.startsWith("+");
-    const digits = only.replace(/\D/g, "");
-    if (digits.length < 7 || digits.length > 15) return null;
-    return (hasPlus ? "+" : "") + digits;
-  }
-  function normalizeDomainClient(raw: string): string | null {
-    try {
-      let v = String(raw).trim().toLowerCase();
-      if (!v) return null;
-      if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname;
-      else v = v.split("/")[0];
-      return v.replace(/^www\./, "");
-    } catch {
-      const s = String(raw).trim().toLowerCase();
-      return s ? s.replace(/^www\./, "") : null;
-    }
-  }
 
-  function mapSuggestionToForm(
-    s: { field: string; value: string },
-    current: Form
-  ): { key?: keyof Form; val?: string } | null {
-    const field = s.field;
-    const value = String(s.value || "").trim();
-    const domain = (current.domain || "").toLowerCase();
-
-    if (field === "name" || field === "company.displayName") {
-      return { key: "name", val: value };
-    }
-    if (field === "domain") {
-      const d = normalizeDomainClient(value);
-      if (d) return { key: "domain", val: d };
-      return null;
-    }
-
-    if (field === "general_email" && isEmail(value)) {
-      return { key: "general_email", val: value.toLowerCase() };
-    }
-
-    if (field === "contact_email" && isEmail(value)) {
-      if (!current.contact_email) return { key: "contact_email", val: value.toLowerCase() };
-      return null; // не перезаписуємо персональний
-    }
-
-    if (field === "who.email" && isEmail(value)) {
-      if (domain && value.toLowerCase().endsWith("@" + domain)) {
-        return { key: "general_email", val: value.toLowerCase() };
-      }
-      return null; // не корпоративний → ігноруємо
-    }
-
-    if (field === "contact_phone") {
-      const p = normalizePhone(value);
-      if (p && !current.contact_phone) return { key: "contact_phone", val: p };
-      return null; // не перезаписуємо персональний
-    }
-
-    if (field === "who.phone") return null; // ніколи не пишемо
-
-    return null;
-  }
-
-  function canApplySuggestion(s: { field: string; value: string }, current: Form) {
-    const m = mapSuggestionToForm(s, current);
-    return !!(m && m.key && m.val != null);
-  }
 
   const onFindInfo = async () => {
     try {
@@ -319,8 +249,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       // автопозначаємо тільки ті, що реально можна застосувати і цільове поле зараз порожнє
       const pre: Record<number, boolean> = {};
       sugg.forEach((s, i) => {
-        const m = mapSuggestionToForm(s, form);
-        if (m?.key && !form[m.key]) pre[i] = true;
+        if (shouldPreCheckSuggestion(s, form)) pre[i] = true;
       });
       setPick(pre);
     } catch (e: any) {

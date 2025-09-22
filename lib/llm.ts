@@ -2,13 +2,64 @@
 
 export type LLMProvider = "openai" | "anthropic" | "gemini";
 
+/* ===================== Defaults & helpers ===================== */
+export const DEFAULT_MODELS = {
+  openai: "gpt-4o-mini",
+  anthropic: "claude-3-haiku-20240307",
+  gemini: "gemini-1.5-flash",
+} as const;
+
+function ensureModel(provider: LLMProvider, model?: string) {
+  if (model && model.trim()) return model;
+  return DEFAULT_MODELS[provider] as string;
+}
+
+export function extractJson(text: string) {
+  const block = text.match(/```json([\s\S]*?)```/i)?.[1] ?? text;
+  const firstBrace = block.indexOf("{");
+  const firstBracket = block.indexOf("[");
+  const start =
+    firstBrace === -1 ? firstBracket : firstBracket === -1 ? firstBrace : Math.min(firstBrace, firstBracket);
+  const raw = start >= 0 ? block.slice(start) : block;
+  return JSON.parse(raw);
+}
+
+function safeParseJsonObject(text: string): any {
+  try { return JSON.parse(text); } catch {}
+  try { return extractJson(text); } catch {}
+  const i1 = text.indexOf("{");
+  const i2 = text.indexOf("[");
+  const i = (i1 === -1) ? i2 : (i2 === -1 ? i1 : Math.min(i1, i2));
+  if (i >= 0) {
+    const t = text.slice(i);
+    try { return JSON.parse(t); } catch {}
+  }
+  return {};
+}
+
+function parseDataUrl(dataUrl?: string): { mime?: string; base64?: string } {
+  if (!dataUrl) return {};
+  const m = dataUrl.match(/^data:([^;]+);base64,(.*)$/);
+  if (!m) return {};
+  return { mime: m[1], base64: m[2] };
+}
+
+export function hasVisionKeys(provider: LLMProvider) {
+  switch (provider) {
+    case "openai":    return !!process.env.OPENAI_API_KEY;
+    case "anthropic": return !!process.env.ANTHROPIC_API_KEY;
+    case "gemini":    return !!process.env.GEMINI_API_KEY;
+  }
+}
+
 /* ===================== TEXT-ONLY ===================== */
 export async function callLLM(opts: {
   provider: LLMProvider;
   model?: string;
   prompt: string;
+  signal?: AbortSignal;
 }): Promise<string> {
-  const { provider, model, prompt } = opts;
+  const { provider, model, prompt, signal } = opts;
 
   if (provider === "openai") {
     const key = process.env.OPENAI_API_KEY;
@@ -19,8 +70,9 @@ export async function callLLM(opts: {
         "content-type": "application/json",
         Authorization: `Bearer ${key}`,
       },
+      signal,
       body: JSON.stringify({
-        model: model || "gpt-4o-mini",
+        model: ensureModel("openai", model),
         temperature: 0,
         messages: [
           { role: "system", content: "You are a concise business research assistant." },
@@ -34,55 +86,12 @@ export async function callLLM(opts: {
   }
 
   if (provider === "anthropic") {
-    const key = process.env.ANTHROPIC_API_KEY;
-    if (!key) throw new Error("Missing ANTHROPIC_API_KEY");
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: model || "claude-3-haiku-20240307",
-        max_tokens: 1500,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const json = await res.json();
-    if (!res.ok) throw new Error(json?.error?.message || "Anthropic error");
-    const text =
-      json?.content?.[0]?.text ??
-      (Array.isArray(json?.content) ? json.content.map((p: any) => p?.text).join("\n") : "");
-    return text || "";
+    // Заглушка (щоб не ламати існуючі виклики)
+    throw new Error("Anthropic text-only call is not implemented yet");
   }
 
-  // gemini
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error("Missing GEMINI_API_KEY");
-  const usedModel = (model || "gemini-1.5-flash").replace(":generateContent", "");
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${usedModel}:generateContent?key=${key}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
-    }),
-  });
-  const json = await res.json();
-  if (!res.ok) throw new Error(json?.error?.message || "Gemini error");
-  return json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-}
-
-/* ===================== JSON EXTRACT (helper) ===================== */
-export function extractJson(text: string) {
-  const block = text.match(/```json([\s\S]*?)```/i)?.[1] ?? text;
-  const firstBrace = block.indexOf("{");
-  const firstBracket = block.indexOf("[");
-  const start =
-    firstBrace === -1 ? firstBracket : firstBracket === -1 ? firstBrace : Math.min(firstBrace, firstBracket);
-  const raw = start >= 0 ? block.slice(start) : block;
-  return JSON.parse(raw);
+  // provider === "gemini"
+  throw new Error("Gemini text-only call is not implemented yet");
 }
 
 /* ===================== VISION + STRICT JSON ===================== */
@@ -116,99 +125,86 @@ function normalizeInquiry(j: any): InquiryJSON {
   };
 }
 
-function parseDataUrl(dataUrl?: string): { mime?: string; base64?: string } {
-  if (!dataUrl) return {};
-  const m = dataUrl.match(/^data:([^;]+);base64,(.*)$/);
-  if (!m) return {};
-  return { mime: m[1], base64: m[2] };
-}
-
-/** Vision-витяг суворого JSON з підтримкою OpenAI/Anthropic/Gemini */
+/** Vision-витяг суворого JSON: OpenAI реалізовано, інші — заглушки */
 export async function extractInquiry(opts: {
   provider: LLMProvider;
   model?: string;
   prompt: string;
   imageDataUrl?: string;
+  signal?: AbortSignal;
 }): Promise<InquiryJSON> {
-  const { provider, model, prompt, imageDataUrl } = opts;
+  const { provider, model, prompt, imageDataUrl, signal } = opts;
+  const effectiveModel = ensureModel(provider, model);
 
   if (provider === "openai") {
     const key = process.env.OPENAI_API_KEY;
     if (!key) throw new Error("Missing OPENAI_API_KEY");
 
+    // Використовуємо Responses API, якщо ввімкнено прапор (стабільніше з json_object)
+    if (process.env.OPENAI_USE_RESPONSES === "1") {
+      const res = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
+        signal,
+        body: JSON.stringify({
+          model: effectiveModel,
+          input: [
+            {
+              role: "user",
+              content: [
+                { type: "text", text: prompt },
+                ...(imageDataUrl ? [{ type: "input_image", image_url: imageDataUrl }] : []),
+              ],
+            },
+          ],
+          response_format: { type: "json_object" },
+          temperature: 0,
+          max_output_tokens: 700,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error?.message || `OpenAI error ${res.status}`);
+
+      const text =
+        data?.output?.[0]?.content?.[0]?.text ||
+        data?.output_text ||
+        data?.choices?.[0]?.message?.content ||
+        "{}";
+
+      return normalizeInquiry(safeParseJsonObject(text));
+    }
+
+    // Chat Completions з мультимодалкою
     const messages: any[] = [{
       role: "user",
       content: [
         { type: "text", text: prompt },
-        ...(imageDataUrl ? [{ type: "image_url", image_url: { url: imageDataUrl } }] : [])
-      ]
+        ...(imageDataUrl ? [{ type: "image_url", image_url: { url: imageDataUrl } }] : []),
+      ],
     }];
 
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", Authorization: `Bearer ${key}` },
+      signal,
       body: JSON.stringify({
-        model: model || "gpt-4o-mini",
+        model: effectiveModel,
         temperature: 0,
         response_format: { type: "json_object" },
-        messages
+        messages,
       }),
     });
     const json = await res.json();
-    if (!res.ok) throw new Error(json?.error?.message || "OpenAI error");
-    return normalizeInquiry(JSON.parse(json.choices?.[0]?.message?.content || "{}"));
+    if (!res.ok) throw new Error(json?.error?.message || `OpenAI error ${res.status}`);
+    const text = json?.choices?.[0]?.message?.content || "{}";
+    return normalizeInquiry(safeParseJsonObject(text));
   }
 
   if (provider === "anthropic") {
-    const key = process.env.ANTHROPIC_API_KEY;
-    if (!key) throw new Error("Missing ANTHROPIC_API_KEY");
-
-    const img = parseDataUrl(imageDataUrl);
-    const content: any[] = [{ type: "text", text: prompt }];
-    if (img?.base64 && img?.mime) {
-      content.push({ type: "image", source: { type: "base64", media_type: img.mime, data: img.base64 } });
-    }
-
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": key,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify({
-        model: model || "claude-3-haiku-20240307",
-        max_tokens: 1500,
-        messages: [{ role: "user", content }]
-      }),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data?.error?.message || "Anthropic error");
-    const text =
-      data?.content?.[0]?.text ??
-      (Array.isArray(data?.content) ? data.content.map((p: any) => p?.text).join("\n") : "{}");
-    return normalizeInquiry(extractJson(text));
+    // Акуратна заглушка
+    throw new Error("Anthropic vision extract is not implemented yet");
   }
 
-  // gemini
-  const key = process.env.GEMINI_API_KEY;
-  if (!key) throw new Error("Missing GEMINI_API_KEY");
-
-  const usedModel = (model || "gemini-1.5-flash").replace(":generateContent", "");
-  const parts: any[] = [{ text: prompt }];
-  const img = parseDataUrl(imageDataUrl);
-  if (img?.base64 && img?.mime) {
-    parts.push({ inline_data: { mime_type: img.mime, data: img.base64 } });
-  }
-
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${usedModel}:generateContent?key=${key}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ contents: [{ role: "user", parts }] }),
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data?.error?.message || "Gemini error");
-  const text = data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).join("") || "{}";
-  return normalizeInquiry(extractJson(text));
+  // provider === "gemini"
+  throw new Error("Gemini vision extract is not implemented yet");
 }

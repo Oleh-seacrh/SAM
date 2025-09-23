@@ -208,3 +208,4 @@ export async function extractInquiry(opts: {
   // provider === "gemini"
   throw new Error("Gemini vision extract is not implemented yet");
 }
+ 

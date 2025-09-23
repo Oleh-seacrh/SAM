@@ -1,48 +1,32 @@
+// components/EnrichButton.tsx
 "use client";
-import { useState } from "react";
 
-export function EnrichButton({ input }: { input: string }) {
-  const [loading, setLoading] = useState(false);
-  const [preview, setPreview] = useState<any>(null);
-  const [error, setError] = useState<string | null>(null);
+import * as React from "react";
 
-  async function run() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/enrich", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify({ input })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data?.error || "Enrich failed");
-      setPreview(data);
-    } catch (e: any) {
-      setError(e?.message || "Enrich failed");
-    } finally {
-      setLoading(false);
-    }
-  }
+/**
+ * Deprecated: use "Find info" flow instead.
+ * Залишено як no-op, щоб не ламати існуючі імпорти.
+ */
 
-  return (
-    <div className="space-y-2">
-      <button onClick={run} className="px-3 py-2 rounded-md bg-white/10 hover:bg-white/20" disabled={loading}>
-        {loading ? "Enriching..." : "Enrich"}
-      </button>
+export type EnrichButtonProps = {
+  input?: string; // зберігаємо підпис пропсів для сумісності
+  className?: string;
+  disabled?: boolean;
+  children?: React.ReactNode;
+};
 
-      {error && <div className="text-xs text-red-400">{error}</div>}
+export function EnrichButton(_props: EnrichButtonProps) {
+  React.useEffect(() => {
+    // Один раз попереджаємо в консолі, якщо компонент все ще змонтовано десь у UI
+    // (допомагає знайти забуті використання)
+    // eslint-disable-next-line no-console
+    console.warn("EnrichButton is deprecated; use 'Find info' instead.");
+  }, []);
 
-      {preview && (
-        <div className="text-xs whitespace-pre-wrap bg-black/30 p-3 rounded">
-          <div className="font-semibold mb-1">Trace</div>
-          {preview.trace?.map((t: string, i: number) => <div key={i}>• {t}</div>)}
-          <div className="mt-2 font-semibold">Organization</div>
-          <div>Name: {preview.organization?.name || "-"}</div>
-          <div>Domain: {preview.organization?.domain || "-"}</div>
-          <div>Status: {preview.status}</div>
-        </div>
-      )}
-    </div>
-  );
+  // Повний no-op: нічого не рендеримо і ніяких запитів не робимо
+  return null;
 }
+
+// Опційно лишаємо default export для максимальної сумісності.
+// Якщо десь імпортували як default — теж не зламається.
+export default EnrichButton;

@@ -1,3 +1,4 @@
+// app/collect/page.tsx
 "use client";
 import { useState, useCallback } from "react";
 import { useSelfProfile } from "@/hooks/use-self";
@@ -185,20 +186,28 @@ function IntakePreview({
   async function onFindInfo() {
     try {
       setFindLoading(true); setFindErr(null);
+
+      // Готуємо заголовки: Content-Type + умовно X-Org-ID (лише якщо target не порожній)
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (target) headers["X-Org-ID"] = String(target);
+
       const res = await fetch("/api/enrich/org", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
-          orgId: null,
+          orgId: null, // залишаємо як є; бек це поле наразі не використовує
           domain: c.company.domain,
           name: c.company.legalName || c.company.displayName,
           email: c.who.email
         })
       });
+
       const json = await parseResponseSafe(res);
       if (!res.ok) throw new Error(pickErrorMessage(res, json, "Failed to find"));
+
       const sugg: EnrichSuggestion[] = (json?.suggestions || []) as EnrichSuggestion[];
       setSuggestions(sugg);
+
       // автопропозиції: відмітимо тільки ті, де поле порожнє
       const pre: Record<number, boolean> = {};
       sugg.forEach((s, i) => {
@@ -348,33 +357,4 @@ function Section({title, children}:{title:string; children:any}) {
   return (
     <div>
       <div className="text-sm font-medium mb-2">{title}</div>
-      <div className="space-y-1 text-sm">{children}</div>
-    </div>
-  );
-}
-function Field({label, value}:{label:string; value:any}) {
-  return (
-    <div className="flex justify-between gap-4">
-      <div className="opacity-70">{label}</div>
-      <div className="font-mono text-right break-all">{value ?? <span className="opacity-50">—</span>}</div>
-    </div>
-  );
-}
-
-/* ---------- невеликі утиліти для мерджа пропозицій ---------- */
-function setDeep(obj: any, path: string, value: any) {
-  if (!path) return;
-  const parts = path.split(".");
-  let cur = obj;
-  for (let i = 0; i < parts.length - 1; i++) {
-    const k = parts[i];
-    if (cur[k] == null || typeof cur[k] !== "object") cur[k] = {};
-    cur = cur[k];
-  }
-  cur[parts[parts.length - 1]] = value;
-}
-function getDeep(obj: any, path: string) {
-  try {
-    return path.split(".").reduce((acc, k) => (acc ? acc[k] : undefined), obj);
-  } catch { return undefined; }
-}
+      <div className="space-y-1 text-sm">{children}</

@@ -93,6 +93,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
   const [enriching, setEnriching] = useState(false);
   const [suggestions, setSuggestions] = useState<{ field:string; value:string; confidence?:number; source?:string }[]>([]);
   const [pick, setPick] = useState<Record<number, boolean>>({});
+  const [enrichReason, setEnrichReason] = useState<string | null>(null); // <-- нове: причина порожнього результату
 
   // Закрити по Escape
   useEffect(() => {
@@ -300,8 +301,9 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       setEnriching(true);
       setSuggestions([]);
       setPick({});
+      setEnrichReason(null);
 
-      // Формуємо заголовки: Content-Type + умовно X-Org-ID
+      // Заголовки: Content-Type + умовно X-Org-ID
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(orgId ? { "X-Org-ID": String(orgId) } : {}),
@@ -311,17 +313,26 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
         method: "POST",
         headers,
         body: JSON.stringify({
-          orgId, // лишаємо як є; бек зараз не використовує
+          orgId, // лишаємо як є; бек наразі не використовує
           domain: form.domain || null,
           name: form.name || null,
+          country: form.country || null, // <-- нове: допомагає пошуку за назвою
           email: form.contact_email || form.general_email || null,
         }),
       });
+
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
 
       const sugg = (j?.suggestions ?? []) as { field:string; value:string; confidence?:number; source?:string }[];
       setSuggestions(sugg);
+
+      if (!sugg.length) {
+        // показуємо причину, чому порожньо (приходить з бекенду)
+        setEnrichReason(typeof j?.reason === "string" ? j.reason : "no_contacts_found");
+      } else {
+        setEnrichReason(null);
+      }
 
       // автопозначаємо тільки ті, що реально можна застосувати і цільове поле зараз порожнє
       const pre: Record<number, boolean> = {};
@@ -470,6 +481,19 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                   <textarea className="input min-h=[120px]" value={form.note} onChange={set("note")} />
                 </div>
               </div>
+
+              {/* Reason banner when no suggestions */}
+              {enrichReason && (
+                <div className="mt-3 rounded border border-white/10 p-3 text-sm">
+                  <div className="opacity-80">
+                    {enrichReason === "no_domain_input" && "Not enough input to search. Add company name, email or phone."}
+                    {enrichReason === "domain_not_resolved" && "Couldn’t resolve the company website from the provided data."}
+                    {enrichReason === "pages_unreachable" && "Website found, but pages (/, about, contact) were unreachable."}
+                    {enrichReason === "no_contacts_found" && "Website opened, but no contacts/socials were detected on common pages."}
+                    {!["no_domain_input","domain_not_resolved","pages_unreachable","no_contacts_found"].includes(enrichReason) && enrichReason}
+                  </div>
+                </div>
+              )}
 
               {/* Suggestions from enrich */}
               {!!suggestions.length && (

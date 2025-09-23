@@ -353,8 +353,22 @@ function IntakePreview({
   );
 }
 
-function Section({title, children}:{title:string; children:any}) {
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <div>
       <div className="text-sm font-medium mb-2">{title}</div>
-      <div className="space-y-1 text-sm">{children}</
+      <div className="space-y-1 text-sm">{children}</div>
+    </div>
+  );
+}
+
+function Field({ label, value }: { label: string; value: any }) {
+  return (
+    <div className="flex justify-between gap-4">
+      <div className="opacity-70">{label}</div>
+      <div className="font-mono text-right break-all">
+        {value ?? <span className="opacity-50">—</span>}
+      </div>
+    </div>
+  );
+}

@@ -5,7 +5,7 @@ import { searchByName, searchByEmail, searchByPhone, WebCandidate } from "@/lib/
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ---------- утиліти ----------
+// ---------- utils ----------
 function normalizeDomainClient(raw?: string | null): string | null {
   if (!raw) return null;
   try {
@@ -24,7 +24,6 @@ function domainFromEmail(email?: string | null): string | null {
   const m = String(email).toLowerCase().match(/@([a-z0-9.-]+\.[a-z]{2,})$/i);
   if (!m) return null;
   const host = m[1].replace(/^www\./, "");
-  // фільтр публічних поштовиків
   if (/^(gmail|yahoo|hotmail|outlook|proton|icloud)\./i.test(host)) return null;
   return host;
 }
@@ -46,19 +45,16 @@ function pickHomepage(cands: WebCandidate[], nameHint?: string | null) {
       const home = c.homepage || toHomepage(c.link);
       if (!home) return null;
       const host = new URL(home).hostname;
-      // базовий скоринг
       let score = 0;
       if (!isSocialHost(host)) score += 5; else score -= 5;
       if (!isMarketplace(host)) score += 2; else score -= 2;
-      // коротші хости краще
       score += Math.max(0, 5 - (host.split(".").length - 2));
-      // евристика збігу назви (дуже проста)
       const nh = String(nameHint || "").toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").trim();
       const th = String(c.title || "").toLowerCase();
       if (nh && th.includes(nh)) score += 2;
-      return { home, host, score, link: c.link, title: c.title };
+      return { home, host, score };
     })
-    .filter(Boolean) as Array<{ home: string; host: string; score: number; link: string; title: string }>;
+    .filter(Boolean) as Array<{ home: string; host: string; score: number }>;
 
   scored.sort((a, b) => b.score - a.score);
   return scored[0]?.home || null;
@@ -128,7 +124,6 @@ function extractSocials(html: string): { linkedin?: string; facebook?: string } 
   if (fb?.length) socials.facebook = new URL(fb[0]).toString();
   return socials;
 }
-
 function pushUnique<T extends { field: string; value: string }>(arr: T[], item: T) {
   if (!item.value) return;
   const key = `${item.field}:::${item.value}`;
@@ -147,43 +142,61 @@ export async function POST(req: NextRequest) {
     const domainIn: string | null = body?.domain ?? null;
     const phoneIn: string | null = body?.phone ?? null;
 
-    // 1) Визначаємо domain
+    // trace structure
+    const trace: any = {
+      input: { name: name || "", email: emailIn || "", phone: phoneIn || "", domain: domainIn || "" },
+      domainResolution: [] as Array<{ stage: string; result: "hit" | "miss"; value?: string }>,
+      pages: [] as Array<{ url: string; ok: boolean; status?: number | string; bytes?: number }>,
+      extracted: { emails: 0, phones: 0, socials: { linkedin: false, facebook: false }, name: false },
+    };
+
+    // 1) resolve domain
     let domain = normalizeDomainClient(domainIn);
-    let reason: "no_domain_input" | "domain_not_resolved" | "pages_unreachable" | "no_contacts_found" | undefined;
+    if (domain) trace.domainResolution.push({ stage: "input.domain", result: "hit", value: domain });
+    else trace.domainResolution.push({ stage: "input.domain", result: "miss" });
 
     if (!domain) {
-      // з email
-      domain = domainFromEmail(emailIn);
+      const d = domainFromEmail(emailIn);
+      if (d) {
+        domain = d;
+        trace.domainResolution.push({ stage: "from.email", result: "hit", value: domain });
+      } else {
+        trace.domainResolution.push({ stage: "from.email", result: "miss" });
+      }
     }
 
     if (!domain) {
-      // web search: name → email → phone
       let candidates: WebCandidate[] = [];
-      if (name) candidates = await searchByName(name, country);
-      if (!candidates?.length && emailIn) candidates = await searchByEmail(emailIn);
-      if (!candidates?.length && phoneIn) candidates = await searchByPhone(phoneIn);
+      if (name) {
+        candidates = await searchByName(name, country);
+        trace.domainResolution.push({ stage: "searchByName", result: candidates.length ? "hit" : "miss" });
+      }
+      if (!candidates?.length && emailIn) {
+        candidates = await searchByEmail(emailIn);
+        trace.domainResolution.push({ stage: "searchByEmail", result: candidates.length ? "hit" : "miss" });
+      }
+      if (!candidates?.length && phoneIn) {
+        candidates = await searchByPhone(phoneIn);
+        trace.domainResolution.push({ stage: "searchByPhone", result: candidates.length ? "hit" : "miss" });
+      }
 
-      if (!candidates?.length) {
-        if (!name && !emailIn && !phoneIn) {
-          return NextResponse.json({ suggestions: [], reason: "no_domain_input" as const }, { status: 200 });
-        }
-        reason = "domain_not_resolved";
-      } else {
-        // вибираємо homepage
+      if (candidates?.length) {
         const home = pickHomepage(candidates, name);
         if (home) {
           domain = new URL(home).hostname.replace(/^www\./, "");
+          trace.domainResolution.push({ stage: "homepage.pick", result: "hit", value: domain });
         } else {
-          reason = "domain_not_resolved";
+          trace.domainResolution.push({ stage: "homepage.pick", result: "miss" });
         }
       }
     }
 
     if (!domain) {
-      return NextResponse.json({ suggestions: [], reason: reason || "domain_not_resolved" }, { status: 200 });
+      // not an error, soft return
+      return NextResponse.json({ suggestions: [], reason: "domain_not_resolved" as const, trace }, { status: 200 });
     }
 
-    // 2) Фетчим сторінки сайту
+    // 2) fetch common pages
     const origin = `https://${domain}/`;
     const paths = [
       "", "about", "about-us", "company", "company/about",
@@ -191,41 +204,51 @@ export async function POST(req: NextRequest) {
     ];
     const pages: Array<{ url: string; html: string }> = [];
     for (const p of paths) {
+      const url = p ? new URL(p, origin).toString() : origin;
       try {
-        const url = p ? new URL(p, origin).toString() : origin;
         const res = await fetchWithTimeout(url, 8000);
-        if (!res.ok) continue;
+        if (!res.ok) {
+          trace.pages.push({ url, ok: false, status: res.status });
+          continue;
+        }
         const html = await res.text();
+        trace.pages.push({ url, ok: true, status: res.status, bytes: html?.length || 0 });
         if (html && html.length) pages.push({ url, html });
-      } catch { /* ignore */ }
+      } catch {
+        trace.pages.push({ url, ok: false, status: "error" });
+      }
     }
 
     if (!pages.length) {
-      return NextResponse.json({ suggestions: [], reason: "pages_unreachable" as const }, { status: 200 });
+      return NextResponse.json({ suggestions: [], reason: "pages_unreachable" as const, trace }, { status: 200 });
     }
 
-    // 3) Парсимо
+    // 3) parse
     const suggestions: Array<{ field: string; value: string; confidence?: number; source?: string }> = [];
-    // домен (якщо прийшов із email, підкажемо з джерелом)
+
+    // domain (if inferred)
     if (domain && !normalizeDomainClient(domainIn)) {
       pushUnique(suggestions, { field: "domain", value: domain, confidence: 0.9, source: emailIn ? "email" : "web-search" });
     }
 
-    // Назва (title / og:title / JSON-LD)
+    // name
     let bestName: string | null = null;
     for (const pg of pages) {
       const t = extractJsonLdName(pg.html) || extractOG(pg.html, "title") || extractTitle(pg.html);
       if (t && (!bestName || t.length < (bestName.length || 999))) bestName = t;
     }
     if (bestName) {
+      trace.extracted.name = true;
       pushUnique(suggestions, { field: "name", value: bestName, confidence: 0.7 });
       pushUnique(suggestions, { field: "company.displayName", value: bestName, confidence: 0.7 });
     }
 
-    // Емейли
+    // emails
     const emailsAll = new Set<string>();
     for (const pg of pages) extractEmails(pg.html).forEach(e => emailsAll.add(e));
     const emails = Array.from(emailsAll);
+    trace.extracted.emails = emails.length;
+
     const corp = emails.filter(e => e.endsWith(`@${domain}`));
     const generalPreferred = corp.find(e => /^(info|sales|contact|office|hello|support)@/i.test(e)) || corp[0];
     if (generalPreferred) {
@@ -233,20 +256,19 @@ export async function POST(req: NextRequest) {
     } else if (corp[0]) {
       pushUnique(suggestions, { field: "general_email", value: corp[0], confidence: 0.7 });
     } else if (emails[0]) {
-      // не корпоративний, але краще, ніж нічого — у UI це може бути відфільтровано
       pushUnique(suggestions, { field: "who.email", value: emails[0], confidence: 0.4 });
     }
 
-    // Телефони
+    // phones
     const phonesAll = new Set<string>();
     for (const pg of pages) cleanPhoneRaw(pg.html).forEach(p => phonesAll.add(p));
     const phones = Array.from(phonesAll);
+    trace.extracted.phones = phones.length;
     if (phones.length) {
-      // персональний в UI не перезаписуємо; все одно повернемо як contact_phone (він там захищений)
       pushUnique(suggestions, { field: "contact_phone", value: phones[0], confidence: 0.6 });
     }
 
-    // Соцмережі
+    // socials
     let linkedin_url: string | undefined;
     let facebook_url: string | undefined;
     for (const pg of pages) {
@@ -254,14 +276,14 @@ export async function POST(req: NextRequest) {
       if (!linkedin_url && soc.linkedin) linkedin_url = soc.linkedin;
       if (!facebook_url && soc.facebook) facebook_url = soc.facebook;
     }
-    if (linkedin_url) pushUnique(suggestions, { field: "linkedin_url", value: linkedin_url, confidence: 0.8 });
-    if (facebook_url) pushUnique(suggestions, { field: "facebook_url", value: facebook_url, confidence: 0.8 });
+    if (linkedin_url) { trace.extracted.socials.linkedin = true; pushUnique(suggestions, { field: "linkedin_url", value: linkedin_url, confidence: 0.8 }); }
+    if (facebook_url) { trace.extracted.socials.facebook = true; pushUnique(suggestions, { field: "facebook_url", value: facebook_url, confidence: 0.8 }); }
 
-    // 4) Фінальна відповідь
+    // 4) respond
     if (!suggestions.length) {
-      return NextResponse.json({ suggestions: [], reason: "no_contacts_found" as const }, { status: 200 });
+      return NextResponse.json({ suggestions: [], reason: "no_contacts_found" as const, trace }, { status: 200 });
     }
-    return NextResponse.json({ suggestions }, { status: 200 });
+    return NextResponse.json({ suggestions, trace }, { status: 200 });
 
   } catch (e: any) {
     console.error("ENRICH ORG ERROR:", e?.message || e);

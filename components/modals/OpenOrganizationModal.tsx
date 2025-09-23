@@ -93,7 +93,8 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
   const [enriching, setEnriching] = useState(false);
   const [suggestions, setSuggestions] = useState<{ field:string; value:string; confidence?:number; source?:string }[]>([]);
   const [pick, setPick] = useState<Record<number, boolean>>({});
-  const [enrichReason, setEnrichReason] = useState<string | null>(null); // <-- нове: причина порожнього результату
+  const [enrichReason, setEnrichReason] = useState<string | null>(null);
+  const [enrichTrace, setEnrichTrace] = useState<any | null>(null); // trace from API (diagnostics)
 
   // Закрити по Escape
   useEffect(() => {
@@ -302,6 +303,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       setSuggestions([]);
       setPick({});
       setEnrichReason(null);
+      setEnrichTrace(null);
 
       // Заголовки: Content-Type + умовно X-Org-ID
       const headers: Record<string, string> = {
@@ -313,26 +315,22 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
         method: "POST",
         headers,
         body: JSON.stringify({
-          orgId, // лишаємо як є; бек наразі не використовує
+          orgId, // залишаємо як є; бек може ігнорувати
           domain: form.domain || null,
           name: form.name || null,
-          country: form.country || null, // <-- нове: допомагає пошуку за назвою
+          country: form.country || null,
           email: form.contact_email || form.general_email || null,
+          phone: form.contact_phone || null, // додаємо phone
         }),
       });
-
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
 
       const sugg = (j?.suggestions ?? []) as { field:string; value:string; confidence?:number; source?:string }[];
       setSuggestions(sugg);
 
-      if (!sugg.length) {
-        // показуємо причину, чому порожньо (приходить з бекенду)
-        setEnrichReason(typeof j?.reason === "string" ? j.reason : "no_contacts_found");
-      } else {
-        setEnrichReason(null);
-      }
+      setEnrichReason(typeof j?.reason === "string" ? j.reason : null);
+      setEnrichTrace(j?.trace || null);
 
       // автопозначаємо тільки ті, що реально можна застосувати і цільове поле зараз порожнє
       const pre: Record<number, boolean> = {};
@@ -478,20 +476,49 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
 
                 <div className="md:col-span-2">
                   <label className="label">Notes</label>
-                  <textarea className="input min-h=[120px]" value={form.note} onChange={set("note")} />
+                  <textarea className="input min-h-[120px]" value={form.note} onChange={set("note")} />
                 </div>
               </div>
 
-              {/* Reason banner when no suggestions */}
+              {/* Reason + Trace (optional diagnostics) */}
               {enrichReason && (
                 <div className="mt-3 rounded border border-white/10 p-3 text-sm">
-                  <div className="opacity-80">
+                  <div className="opacity-80 mb-1">
                     {enrichReason === "no_domain_input" && "Not enough input to search. Add company name, email or phone."}
-                    {enrichReason === "domain_not_resolved" && "Couldn’t resolve the company website from the provided data."}
-                    {enrichReason === "pages_unreachable" && "Website found, but pages (/, about, contact) were unreachable."}
+                    {enrichReason === "domain_not_resolved" && "We couldn't resolve the company website from the provided data."}
+                    {enrichReason === "pages_unreachable" && "Website found, but common pages (/, about, contact) were unreachable."}
                     {enrichReason === "no_contacts_found" && "Website opened, but no contacts/socials were detected on common pages."}
                     {!["no_domain_input","domain_not_resolved","pages_unreachable","no_contacts_found"].includes(enrichReason) && enrichReason}
                   </div>
+
+                  {enrichTrace && (
+                    <div className="text-xs opacity-70 space-y-1">
+                      <div>
+                        <span className="opacity-80">Resolve:</span>{" "}
+                        {Array.isArray(enrichTrace.domainResolution) && enrichTrace.domainResolution.length
+                          ? enrichTrace.domainResolution.map((s: any, idx: number) =>
+                              `${idx ? " → " : ""}${s.stage}:${s.result}${s.value ? `(${s.value})` : ""}`
+                            )
+                          : "—"}
+                      </div>
+                      <div>
+                        <span className="opacity-80">Pages:</span>{" "}
+                        {Array.isArray(enrichTrace.pages) && enrichTrace.pages.length
+                          ? (() => {
+                              const total = enrichTrace.pages.length;
+                              const ok = enrichTrace.pages.filter((p: any) => p.ok).length;
+                              return `${total} tried, ${ok} reachable`;
+                            })()
+                          : "—"}
+                      </div>
+                      <div>
+                        <span className="opacity-80">Extracted:</span>{" "}
+                        {enrichTrace.extracted
+                          ? `emails ${enrichTrace.extracted.emails || 0}, phones ${enrichTrace.extracted.phones || 0}, LinkedIn ${enrichTrace.extracted.socials?.linkedin ? "✓" : "✗"}, Facebook ${enrichTrace.extracted.socials?.facebook ? "✓" : "✗"}, name ${enrichTrace.extracted.name ? "✓" : "✗"}`
+                          : "—"}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 

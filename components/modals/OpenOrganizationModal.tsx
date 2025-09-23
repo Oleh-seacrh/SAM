@@ -300,11 +300,18 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       setEnriching(true);
       setSuggestions([]);
       setPick({});
+
+      // Формуємо заголовки: Content-Type + умовно X-Org-ID
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+        ...(orgId ? { "X-Org-ID": String(orgId) } : {}),
+      };
+
       const r = await fetch("/api/enrich/org", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify({
-          orgId,
+          orgId, // лишаємо як є; бек зараз не використовує
           domain: form.domain || null,
           name: form.name || null,
           email: form.contact_email || form.general_email || null,
@@ -460,7 +467,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
 
                 <div className="md:col-span-2">
                   <label className="label">Notes</label>
-                  <textarea className="input min-h-[120px]" value={form.note} onChange={set("note")} />
+                  <textarea className="input min-h=[120px]" value={form.note} onChange={set("note")} />
                 </div>
               </div>
 

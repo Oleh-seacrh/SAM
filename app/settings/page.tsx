@@ -4,10 +4,7 @@ import React, { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 
 /**
- * Мінімальний хотфікс (Варіант 1):
- *  - Один файл без винесення в окремий компонент.
- *  - Використовуємо <Suspense> для useSearchParams().
- *  - Примушуємо динамічний рендер щоб уникнути prerender помилки.
+ * Примушуємо динамічний рендер, щоб уникнути пререндер-issue на /settings.
  */
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -15,10 +12,16 @@ export const revalidate = 0;
 /* ---------- Tabs ---------- */
 type Tab = "profile" | "organization" | "users" | "billing" | "enrichment";
 function isTab(v: string | null): v is Tab {
-  return v === "profile" || v === "organization" || v === "users" || v === "billing" || v === "enrichment";
+  return (
+    v === "profile" ||
+    v === "organization" ||
+    v === "users" ||
+    v === "billing" ||
+    v === "enrichment"
+  );
 }
 
-/* ---------- Enrichment config (як було) ---------- */
+/* ---------- Enrichment config ---------- */
 type EnrichConfig = {
   enrichBy: { website: boolean; email: boolean; phone: boolean };
   sources: {
@@ -55,7 +58,7 @@ const EnrichmentTab: React.FC = () => {
     (async () => {
       try {
         setLoading(true);
-        const res = await fetch("/api/settings/enrich");
+        const res = await fetch("/api/settings/enrich", { cache: "no-store" });
         const data = await res.json().catch(() => ({}));
         if (!ignore) setCfg({ ...DEFAULT_CFG, ...data });
       } catch (e: any) {
@@ -64,11 +67,13 @@ const EnrichmentTab: React.FC = () => {
         if (!ignore) setLoading(false);
       }
     })();
-    return () => { ignore = true; };
+    return () => {
+      ignore = true;
+    };
   }, []);
 
   const toggle = (path: string[]) => {
-    setCfg(prev => {
+    setCfg((prev) => {
       const next: EnrichConfig = JSON.parse(JSON.stringify(prev));
       if (path.length === 2) {
         // @ts-ignore
@@ -124,18 +129,32 @@ const EnrichmentTab: React.FC = () => {
 
       <section>
         <h3 className="text-lg font-medium mb-2">Inputs</h3>
-        <p className="text-sm opacity-80 mb-3">Оберіть, які типи даних SAM приймає для авто-збагачення.</p>
+        <p className="text-sm opacity-80 mb-3">
+          Оберіть, які типи даних SAM приймає для авто-збагачення.
+        </p>
         <div className="space-y-2">
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={cfg.enrichBy.website} onChange={() => toggle(["enrichBy","website"])} />
+            <input
+              type="checkbox"
+              checked={cfg.enrichBy.website}
+              onChange={() => toggle(["enrichBy", "website"])}
+            />
             <span>Website / Domain</span>
           </label>
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={cfg.enrichBy.email} onChange={() => toggle(["enrichBy","email"])} />
+            <input
+              type="checkbox"
+              checked={cfg.enrichBy.email}
+              onChange={() => toggle(["enrichBy", "email"])}
+            />
             <span>Email</span>
           </label>
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={cfg.enrichBy.phone} onChange={() => toggle(["enrichBy","phone"])} />
+            <input
+              type="checkbox"
+              checked={cfg.enrichBy.phone}
+              onChange={() => toggle(["enrichBy", "phone"])}
+            />
             <span>Phone</span>
           </label>
         </div>
@@ -145,7 +164,11 @@ const EnrichmentTab: React.FC = () => {
         <h3 className="text-lg font-medium mb-2">Sources</h3>
         <div className="space-y-4">
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={cfg.sources.web} onChange={() => toggle(["sources","web"])} />
+            <input
+              type="checkbox"
+              checked={cfg.sources.web}
+              onChange={() => toggle(["sources", "web"])}
+            />
             <span>Web Search</span>
           </label>
 
@@ -153,33 +176,59 @@ const EnrichmentTab: React.FC = () => {
             <div className="text-sm opacity-80 mb-1">Platforms</div>
             <div className="space-y-2">
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={cfg.sources.platforms.alibaba} onChange={() => toggle(["sources","platforms","alibaba"])} />
+                <input
+                  type="checkbox"
+                  checked={cfg.sources.platforms.alibaba}
+                  onChange={() => toggle(["sources", "platforms", "alibaba"])}
+                />
                 <span>Alibaba</span>
               </label>
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={cfg.sources.platforms.madeInChina} onChange={() => toggle(["sources","platforms","madeInChina"])} />
+                <input
+                  type="checkbox"
+                  checked={cfg.sources.platforms.madeInChina}
+                  onChange={() =>
+                    toggle(["sources", "platforms", "madeInChina"])
+                  }
+                />
                 <span>Made-in-China</span>
               </label>
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={cfg.sources.platforms.indiamart} onChange={() => toggle(["sources","platforms","indiamart"])} />
+                <input
+                  type="checkbox"
+                  checked={cfg.sources.platforms.indiamart}
+                  onChange={() => toggle(["sources", "platforms", "indiamart"])}
+                />
                 <span>Indiamart</span>
               </label>
             </div>
           </div>
 
-            <div>
+          <div>
             <div className="text-sm opacity-80 mb-1">Socials</div>
             <div className="space-y-2">
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={cfg.sources.socials.linkedin} onChange={() => toggle(["sources","socials","linkedin"])} />
+                <input
+                  type="checkbox"
+                  checked={cfg.sources.socials.linkedin}
+                  onChange={() => toggle(["sources", "socials", "linkedin"])}
+                />
                 <span>LinkedIn</span>
               </label>
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={cfg.sources.socials.facebook} onChange={() => toggle(["sources","socials","facebook"])} />
+                <input
+                  type="checkbox"
+                  checked={cfg.sources.socials.facebook}
+                  onChange={() => toggle(["sources", "socials", "facebook"])}
+                />
                 <span>Facebook</span>
               </label>
               <label className="flex items-center gap-2">
-                <input type="checkbox" checked={cfg.sources.socials.instagram} onChange={() => toggle(["sources","socials","instagram"])} />
+                <input
+                  type="checkbox"
+                  checked={cfg.sources.socials.instagram}
+                  onChange={() => toggle(["sources", "socials", "instagram"])}
+                />
                 <span>Instagram</span>
               </label>
             </div>
@@ -194,12 +243,15 @@ const EnrichmentTab: React.FC = () => {
             <input
               type="checkbox"
               checked={cfg.strictMatching}
-              onChange={() => setCfg(p => ({ ...p, strictMatching: !p.strictMatching }))}
+              onChange={() =>
+                setCfg((p) => ({ ...p, strictMatching: !p.strictMatching }))
+              }
             />
             <span>Strict matching for company name</span>
           </label>
           <p className="text-xs opacity-70">
-            Коли увімкнено — LinkedIn/платформи використовуються лише якщо назву компанії знайдено і вона достатньо близька.
+            Коли увімкнено — LinkedIn/платформи використовуються лише якщо назву
+            компанії знайдено і вона достатньо близька.
           </p>
         </div>
       </section>
@@ -207,19 +259,33 @@ const EnrichmentTab: React.FC = () => {
       <section>
         <h3 className="text-lg font-medium mb-2">Output fields</h3>
         <div className="space-y-2">
-          <label className="flex items-center gap-2"><input type="checkbox" defaultChecked /> <span>Company Name</span></label>
-          <label className="flex items-center gap-2"><input type="checkbox" defaultChecked /> <span>Country (ISO-2)</span></label>
-          <label className="flex items-center gap-2"><input type="checkbox" defaultChecked /> <span>Industry / Category</span></label>
-          <label className="flex items-center gap-2"><input type="checkbox" defaultChecked /> <span>Contacts (email/phone/person)</span></label>
-          <label className="flex items-center gap-2"><input type="checkbox" /> <span>Size (employees)</span></label>
-          <label className="flex items-center gap-2"><input type="checkbox" /> <span>Tags (Medical / NDT / Other)</span></label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" defaultChecked /> <span>Company Name</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" defaultChecked /> <span>Country (ISO-2)</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" defaultChecked />{" "}
+            <span>Industry / Category</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" defaultChecked />{" "}
+            <span>Contacts (email/phone/person)</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" /> <span>Size (employees)</span>
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" /> <span>Tags (Medical / NDT / Other)</span>
+          </label>
         </div>
       </section>
     </div>
   );
 };
 
-/* ---------- Profile Tab (реальна форма) ---------- */
+/* ---------- Profile Tab (форма) ---------- */
 type Profile = {
   contact_name: string;
   company_name: string;
@@ -248,7 +314,9 @@ function ProfileTab() {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setLoading(true); setErr(null); setOk(false);
+      setLoading(true);
+      setErr(null);
+      setOk(false);
       try {
         const r = await fetch("/api/settings/profile", { cache: "no-store" });
         const j = await r.json().catch(() => ({}));
@@ -260,15 +328,20 @@ function ProfileTab() {
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const setField = (k: keyof Profile) =>
+  const setField =
+    (k: keyof Profile) =>
     (e: React.ChangeEvent<HTMLInputElement>) =>
-      setForm(s => ({ ...s, [k]: e.target.value }));
+      setForm((s) => ({ ...s, [k]: e.target.value }));
 
   async function onSave() {
-    setSaving(true); setErr(null); setOk(false);
+    setSaving(true);
+    setErr(null);
+    setOk(false);
     try {
       const r = await fetch("/api/settings/profile", {
         method: "PUT",
@@ -291,16 +364,55 @@ function ProfileTab() {
     <section className="space-y-6 max-w-3xl">
       <h2 className="text-xl font-semibold">Profile</h2>
       <p className="text-sm opacity-80">
-        Ці дані зберігаються для вашого tenant і використовуються у промптах та під час парсингу.
+        Ці дані зберігаються для вашого tenant і використовуються у промптах та
+        під час парсингу.
       </p>
 
       <div className="grid md:grid-cols-2 gap-3">
-        <L label="Your name"><input className="input" value={form.contact_name} onChange={setField("contact_name")} /></L>
-        <L label="Company name"><input className="input" value={form.company_name} onChange={setField("company_name")} /></L>
-        <L label="Company email"><input className="input" value={form.company_email} onChange={setField("company_email")} /></L>
-        <L label="Company phone"><input className="input" value={form.company_phone} onChange={setField("company_phone")} /></L>
-        <L label="Company domain"><input className="input" placeholder="example.com" value={form.company_domain} onChange={setField("company_domain")} /></L>
-        <L label="Country"><input className="input" placeholder="UA / Ukraine" value={form.company_country} onChange={setField("company_country")} /></L>
+        <L label="Your name">
+          <input
+            className="input"
+            value={form.contact_name}
+            onChange={setField("contact_name")}
+          />
+        </L>
+        <L label="Company name">
+          <input
+            className="input"
+            value={form.company_name}
+            onChange={setField("company_name")}
+          />
+        </L>
+        <L label="Company email">
+          <input
+            className="input"
+            value={form.company_email}
+            onChange={setField("company_email")}
+          />
+        </L>
+        <L label="Company phone">
+          <input
+            className="input"
+            value={form.company_phone}
+            onChange={setField("company_phone")}
+          />
+        </L>
+        <L label="Company domain">
+          <input
+            className="input"
+            placeholder="example.com"
+            value={form.company_domain}
+            onChange={setField("company_domain")}
+          />
+        </L>
+        <L label="Country">
+          <input
+            className="input"
+            placeholder="UA / Ukraine"
+            value={form.company_country}
+            onChange={setField("company_country")}
+          />
+        </L>
       </div>
 
       <div className="flex items-center gap-2">
@@ -316,15 +428,15 @@ function ProfileTab() {
       </div>
 
       <style jsx>{`
-        .input{
-          width:100%;
-          border-radius:0.5rem;
-          border:1px solid var(--border,#1f2937);
-          padding:0.5rem 0.75rem;
-          font-size:0.875rem;
-          background: var(--bg,#0b0b0d);
-          color: var(--text,#e5e7eb);
-          outline:none;
+        .input {
+          width: 100%;
+          border-radius: 0.5rem;
+          border: 1px solid var(--border, #1f2937);
+          padding: 0.5rem 0.75rem;
+          font-size: 0.875rem;
+          background: var(--bg, #0b0b0d);
+          color: var(--text, #e5e7eb);
+          outline: none;
         }
       `}</style>
     </section>
@@ -368,34 +480,43 @@ function SettingsInner() {
   return (
     <div className="flex h-full">
       <aside className="w-60 border-r border-white/10 bg-[var(--card)]">
-        <div className="h-14 flex items-center px-4 text-lg font-semibold">Settings</div>
+        <div className="h-14 flex items-center px-4 text-lg font-semibold">
+          Settings
+        </div>
         <nav className="px-2 pb-4 space-y-1">
-          {(["profile","organization","users","billing","enrichment"] as Tab[]).map(tab => (
-            <button
-              key={tab}
-              onClick={() => selectTab(tab)}
-              className={`w-full text-left px-3 py-2 rounded-md ${activeTab === tab ? "bg-white/10 font-medium" : "hover:bg-white/5"}`}
-            >
-              {tab.charAt(0).toUpperCase() + tab.slice(1)}
-            </button>
-          ))}
+          {(["profile", "organization", "users", "billing", "enrichment"] as Tab[]).map(
+            (tab) => (
+              <button
+                key={tab}
+                onClick={() => selectTab(tab)}
+                className={`w-full text-left px-3 py-2 rounded-md ${
+                  activeTab === tab ? "bg-white/10 font-medium" : "hover:bg-white/5"
+                }`}
+              >
+                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+              </button>
+            )
+          )}
         </nav>
       </aside>
 
       <main className="flex-1 p-6 overflow-y-auto">
         {activeTab === "profile" && <ProfileTab />}
+
         {activeTab === "organization" && (
           <section className="space-y-4">
             <h2 className="text-xl font-semibold">Organization</h2>
             <p className="text-sm opacity-80">Draft секція — заповнимо пізніше.</p>
           </section>
         )}
+
         {activeTab === "users" && (
           <section className="space-y-4">
             <h2 className="text-xl font-semibold">Users & Roles</h2>
             <p className="text-sm opacity-80">Draft секція — заповнимо пізніше.</p>
           </section>
         )}
+
         {activeTab === "billing" && (
           <section className="space-y-4">
             <h2 className="text-xl font-semibold">Billing</h2>
@@ -406,6 +527,7 @@ function SettingsInner() {
             </ul>
           </section>
         )}
+
         {activeTab === "enrichment" && <EnrichmentTab />}
       </main>
     </div>
@@ -415,7 +537,9 @@ function SettingsInner() {
 /* ---------- Кореневий експорт з Suspense ---------- */
 export default function SettingsPage() {
   return (
-    <Suspense fallback={<div className="p-6 text-sm opacity-70">Loading settings…</div>}>
+    <Suspense
+      fallback={<div className="p-6 text-sm opacity-70">Loading settings…</div>}
+    >
       <SettingsInner />
     </Suspense>
   );

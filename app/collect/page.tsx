@@ -149,7 +149,9 @@ export default function CollectPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-3">
         <h1 className="text-xl font-semibold">Collect Info</h1>
-        <a href="/settings?tab=profile" className="text-sm underline opacity-80">Edit profile in Settings →</a>
+        <a href="/settings?tab=profile" className="text-sm underline opacity-80">
+          Edit profile in Settings →
+        </a>
       </div>
 
       {/* READ-ONLY profile from tenant settings */}

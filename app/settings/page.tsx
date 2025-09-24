@@ -1,15 +1,24 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, Suspense } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
 
+/**
+ * Мінімальний хотфікс (Варіант 1):
+ *  - Один файл без винесення в окремий компонент.
+ *  - Використовуємо <Suspense> для useSearchParams().
+ *  - Примушуємо динамічний рендер щоб уникнути prerender помилки.
+ */
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 /* ---------- Tabs ---------- */
-export type Tab = "profile" | "organization" | "users" | "billing" | "enrichment";
+type Tab = "profile" | "organization" | "users" | "billing" | "enrichment";
 function isTab(v: string | null): v is Tab {
   return v === "profile" || v === "organization" || v === "users" || v === "billing" || v === "enrichment";
 }
 
-/* ---------- Enrichment config (залишено як було) ---------- */
+/* ---------- Enrichment config (як було) ---------- */
 type EnrichConfig = {
   enrichBy: { website: boolean; email: boolean; phone: boolean };
   sources: {
@@ -125,7 +134,7 @@ const EnrichmentTab: React.FC = () => {
             <input type="checkbox" checked={cfg.enrichBy.email} onChange={() => toggle(["enrichBy","email"])} />
             <span>Email</span>
           </label>
-            <label className="flex items-center gap-2">
+          <label className="flex items-center gap-2">
             <input type="checkbox" checked={cfg.enrichBy.phone} onChange={() => toggle(["enrichBy","phone"])} />
             <span>Phone</span>
           </label>
@@ -158,7 +167,7 @@ const EnrichmentTab: React.FC = () => {
             </div>
           </div>
 
-          <div>
+            <div>
             <div className="text-sm opacity-80 mb-1">Socials</div>
             <div className="space-y-2">
               <label className="flex items-center gap-2">
@@ -182,7 +191,11 @@ const EnrichmentTab: React.FC = () => {
         <h3 className="text-lg font-medium mb-2">Match policy</h3>
         <div className="space-y-2">
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={cfg.strictMatching} onChange={() => setCfg(p => ({ ...p, strictMatching: !p.strictMatching }))} />
+            <input
+              type="checkbox"
+              checked={cfg.strictMatching}
+              onChange={() => setCfg(p => ({ ...p, strictMatching: !p.strictMatching }))}
+            />
             <span>Strict matching for company name</span>
           </label>
           <p className="text-xs opacity-70">
@@ -206,7 +219,7 @@ const EnrichmentTab: React.FC = () => {
   );
 };
 
-/* ---------- Profile Tab (нова форма) ---------- */
+/* ---------- Profile Tab (реальна форма) ---------- */
 type Profile = {
   contact_name: string;
   company_name: string;
@@ -250,7 +263,7 @@ function ProfileTab() {
     return () => { cancelled = true; };
   }, []);
 
-  const set = (k: keyof Profile) =>
+  const setField = (k: keyof Profile) =>
     (e: React.ChangeEvent<HTMLInputElement>) =>
       setForm(s => ({ ...s, [k]: e.target.value }));
 
@@ -282,12 +295,12 @@ function ProfileTab() {
       </p>
 
       <div className="grid md:grid-cols-2 gap-3">
-        <L label="Your name"><input className="input" value={form.contact_name} onChange={set("contact_name")} /></L>
-        <L label="Company name"><input className="input" value={form.company_name} onChange={set("company_name")} /></L>
-        <L label="Company email"><input className="input" value={form.company_email} onChange={set("company_email")} /></L>
-        <L label="Company phone"><input className="input" value={form.company_phone} onChange={set("company_phone")} /></L>
-        <L label="Company domain"><input className="input" placeholder="example.com" value={form.company_domain} onChange={set("company_domain")} /></L>
-        <L label="Country"><input className="input" placeholder="UA / Ukraine" value={form.company_country} onChange={set("company_country")} /></L>
+        <L label="Your name"><input className="input" value={form.contact_name} onChange={setField("contact_name")} /></L>
+        <L label="Company name"><input className="input" value={form.company_name} onChange={setField("company_name")} /></L>
+        <L label="Company email"><input className="input" value={form.company_email} onChange={setField("company_email")} /></L>
+        <L label="Company phone"><input className="input" value={form.company_phone} onChange={setField("company_phone")} /></L>
+        <L label="Company domain"><input className="input" placeholder="example.com" value={form.company_domain} onChange={setField("company_domain")} /></L>
+        <L label="Country"><input className="input" placeholder="UA / Ukraine" value={form.company_country} onChange={setField("company_country")} /></L>
       </div>
 
       <div className="flex items-center gap-2">
@@ -303,10 +316,10 @@ function ProfileTab() {
       </div>
 
       <style jsx>{`
-        .input {
+        .input{
           width:100%;
           border-radius:0.5rem;
-            border:1px solid var(--border,#1f2937);
+          border:1px solid var(--border,#1f2937);
           padding:0.5rem 0.75rem;
           font-size:0.875rem;
           background: var(--bg,#0b0b0d);
@@ -327,12 +340,11 @@ function L({ label, children }: { label: string; children: React.ReactNode }) {
   );
 }
 
-/* ---------- Settings Page Wrapper з синхронізацією query ---------- */
-export default function SettingsPage() {
+/* ---------- Внутрішній компонент з useSearchParams ---------- */
+function SettingsInner() {
   const searchParams = useSearchParams();
   const router = useRouter();
 
-  // Початковий таб
   const initialTab: Tab = (() => {
     const q = searchParams.get("tab");
     return isTab(q) ? q : "profile";
@@ -340,7 +352,6 @@ export default function SettingsPage() {
 
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
 
-  // Слухаємо зміни query (назад/вперед)
   useEffect(() => {
     const q = searchParams.get("tab");
     if (isTab(q) && q !== activeTab) setActiveTab(q);
@@ -398,5 +409,14 @@ export default function SettingsPage() {
         {activeTab === "enrichment" && <EnrichmentTab />}
       </main>
     </div>
+  );
+}
+
+/* ---------- Кореневий експорт з Suspense ---------- */
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm opacity-70">Loading settings…</div>}>
+      <SettingsInner />
+    </Suspense>
   );
 }

@@ -1,7 +1,5 @@
-// app/collect/page.tsx
 "use client";
-import { useState, useCallback } from "react";
-import { useSelfProfile } from "@/hooks/use-self";
+import { useState, useCallback, useEffect } from "react";
 
 type ParsedInquiry = {
   who: { name?: string|null; email?: string|null; phone?: string|null; source: "email"|"whatsapp"|"other" };
@@ -14,6 +12,16 @@ type IntakePreviewT = { normalized: ParsedInquiry; dedupe: { candidates: DedupCa
 
 // простий тип для збагачення (MVP)
 type EnrichSuggestion = { field: string; value: string; confidence?: number; source?: string };
+
+// Модель профілю з /api/settings/profile
+type TenantProfile = {
+  contact_name: string;
+  company_name: string;
+  company_email: string;
+  company_phone: string;
+  company_domain: string;
+  company_country: string;
+};
 
 /* ------- Safe response utils to avoid 'Unexpected end of JSON input' ------- */
 async function parseResponseSafe(res: Response): Promise<any | null> {
@@ -37,7 +45,38 @@ export default function CollectPage() {
   const [preview, setPreview] = useState<IntakePreviewT | null>(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const { self, setSelf, reset } = useSelfProfile();
+
+  // ---- NEW: tenant profile from server (read-only) ----
+  const [profile, setProfile] = useState<TenantProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileErr, setProfileErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setProfileLoading(true);
+      setProfileErr(null);
+      try {
+        const r = await fetch("/api/settings/profile", { cache: "no-store" });
+        const j = await r.json().catch(() => ({}));
+        const p: TenantProfile = {
+          contact_name: "",
+          company_name: "",
+          company_email: "",
+          company_phone: "",
+          company_domain: "",
+          company_country: "",
+          ...(j?.profile || {}),
+        };
+        if (!cancelled) setProfile(p);
+      } catch (e: any) {
+        if (!cancelled) setProfileErr(e?.message || "Failed to load profile");
+      } finally {
+        if (!cancelled) setProfileLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // соцпосилання (передамо в /api/intake/confirm)
   const [socials, setSocials] = useState<{ linkedin_url: string; facebook_url: string }>({ linkedin_url: "", facebook_url: "" });
@@ -46,8 +85,25 @@ export default function CollectPage() {
     setLoading(true); setErr(null);
     const fd = new FormData();
     fd.append("file", file);
-    // ← важливо: прокидуємо профіль у промпт через form-data
-    fd.append("self_json", JSON.stringify(self));
+
+    // ← важливо: прокидуємо профіль у промпт через form-data (замість session-only)
+    const safeProfile = profile || {
+      contact_name: "",
+      company_name: "",
+      company_email: "",
+      company_phone: "",
+      company_domain: "",
+      company_country: "",
+    };
+    fd.append("self_json", JSON.stringify({
+      name: safeProfile.contact_name || "",
+      company: safeProfile.company_name || "",
+      email: safeProfile.company_email || "",
+      phone: safeProfile.company_phone || "",
+      domain: safeProfile.company_domain || "",
+      country: safeProfile.company_country || "",
+    }));
+
     try {
       const res = await fetch("/api/intake/image", { method: "POST", body: fd });
       const payload = await parseResponseSafe(res);
@@ -64,7 +120,7 @@ export default function CollectPage() {
     } catch (e:any) {
       setErr(e.message || "Error");
     } finally { setLoading(false); }
-  }, [self]);
+  }, [profile]);
 
   const onConfirm = useCallback(async (decision: { mode: "create"|"merge"|"update"; targetOrgId?: string|null; orgType?: "supplier"|"prospect"|"client" }, opts?: { apply?: EnrichSuggestion[] }) => {
     if (!preview) return;
@@ -91,10 +147,13 @@ export default function CollectPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <h1 className="text-xl font-semibold">Collect Info</h1>
+      <div className="flex items-center gap-3">
+        <h1 className="text-xl font-semibold">Collect Info</h1>
+        <a href="/settings/profile" className="text-sm underline opacity-80">Edit profile in Settings →</a>
+      </div>
 
-      {/* My profile — живе тільки в sessionStorage цієї сесії */}
-      <SelfPanel value={self} onChange={setSelf} onReset={reset} />
+      {/* READ-ONLY profile from tenant settings */}
+      <ProfileReadOnly profile={profile} loading={profileLoading} err={profileErr} />
 
       <DropZone onDrop={onDrop} loading={loading} />
 
@@ -112,22 +171,23 @@ export default function CollectPage() {
   );
 }
 
-function SelfPanel({ value, onChange, onReset }:{
-  value: { name:string; company:string; email:string; phone:string; domain:string },
-  onChange: (v:any)=>void, onReset: ()=>void
-}) {
+function ProfileReadOnly({ profile, loading, err }: { profile: TenantProfile | null; loading: boolean; err: string | null }) {
+  if (loading) return <div className="rounded-xl border border-white/10 p-4 text-sm opacity-80">Loading profile…</div>;
+  if (err) return <div className="rounded-xl border border-white/10 p-4 text-sm text-red-400">Profile: {err}</div>;
+  const p = profile || {
+    contact_name: "", company_name: "", company_email: "", company_phone: "", company_domain: "", company_country: "",
+  };
   return (
     <div className="rounded-xl border border-white/10 p-4 space-y-3">
-      <div className="text-sm font-medium">My profile (session only)</div>
-      <div className="grid md:grid-cols-5 gap-3">
-        <Input label="Name"   value={value.name}    onChange={e=>onChange({...value, name: e.target.value})} />
-        <Input label="Company" value={value.company} onChange={e=>onChange({...value, company: e.target.value})} />
-        <Input label="Email"  value={value.email}   onChange={e=>onChange({...value, email: e.target.value})} />
-        <Input label="Phone"  value={value.phone}   onChange={e=>onChange({...value, phone: e.target.value})} />
-        <Input label="Domain" value={value.domain}  onChange={e=>onChange({...value, domain: e.target.value})} />
+      <div className="text-sm font-medium">My profile (from tenant settings)</div>
+      <div className="grid md:grid-cols-3 gap-3 text-sm">
+        <Field label="Name" value={p.contact_name || "—"} />
+        <Field label="Company" value={p.company_name || "—"} />
+        <Field label="Email" value={p.company_email || "—"} />
+        <Field label="Phone" value={p.company_phone || "—"} />
+        <Field label="Domain" value={p.company_domain || "—"} />
+        <Field label="Country" value={p.company_country || "—"} />
       </div>
-      <div className="text-xs opacity-70">Ці дані не пишуться в БД — тільки на час сесії (sessionStorage). Вони будуть включені у промпт для парсингу.</div>
-      <div><button className="rounded-lg px-3 py-1 bg-white/10 hover:bg-white/20 text-sm" onClick={onReset}>Clear</button></div>
     </div>
   );
 }
@@ -186,8 +246,6 @@ function IntakePreview({
   async function onFindInfo() {
     try {
       setFindLoading(true); setFindErr(null);
-
-      // Готуємо заголовки: Content-Type + умовно X-Org-ID (лише якщо target не порожній)
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (target) headers["X-Org-ID"] = String(target);
 
@@ -195,20 +253,17 @@ function IntakePreview({
         method: "POST",
         headers,
         body: JSON.stringify({
-          orgId: null, // залишаємо як є; бек це поле наразі не використовує
+          orgId: null,
           domain: c.company.domain,
           name: c.company.legalName || c.company.displayName,
           email: c.who.email
         })
       });
-
       const json = await parseResponseSafe(res);
       if (!res.ok) throw new Error(pickErrorMessage(res, json, "Failed to find"));
-
       const sugg: EnrichSuggestion[] = (json?.suggestions || []) as EnrichSuggestion[];
       setSuggestions(sugg);
-
-      // автопропозиції: відмітимо тільки ті, де поле порожнє
+      // автопропозиції: лише ті, де поле порожнє
       const pre: Record<number, boolean> = {};
       sugg.forEach((s, i) => {
         if (!getDeep(c as any, s.field)) pre[i] = true;
@@ -239,7 +294,6 @@ function IntakePreview({
           <Field label="Legal name" value={c.company.legalName || c.company.displayName} />
           <Field label="Domain" value={c.company.domain} />
           <Field label="Country" value={c.company.country} />
-          {/* показати посилання якщо вже є */}
           {(c.company.linkedin_url || c.company.facebook_url) && (
             <div className="text-xs mt-2 space-x-3">
               {c.company.linkedin_url && <a className="underline" href={c.company.linkedin_url} target="_blank" rel="noopener noreferrer">LinkedIn</a>}
@@ -255,7 +309,7 @@ function IntakePreview({
         </Section>
       </div>
 
-      {/* Соцпосилання (без пошуку, просто збереження) */}
+      {/* Соцпосилання */}
       <fieldset className="mt-2 border border-white/10 rounded p-3">
         <legend className="px-1 text-sm text-gray-400">Socials (optional)</legend>
         <div className="grid md:grid-cols-2 gap-3">
@@ -282,7 +336,7 @@ function IntakePreview({
         </div>
       </fieldset>
 
-      {/* Find info (MVP): показ пропозицій від бекенда для підтвердження */}
+      {/* Find info (MVP) */}
       <div className="space-y-2">
         <div className="flex items-center gap-3">
           <div className="font-medium">Organization action</div>
@@ -353,7 +407,7 @@ function IntakePreview({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({title, children}:{title:string; children:any}) {
   return (
     <div>
       <div className="text-sm font-medium mb-2">{title}</div>
@@ -361,14 +415,29 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     </div>
   );
 }
-
-function Field({ label, value }: { label: string; value: any }) {
+function Field({label, value}:{label:string; value:any}) {
   return (
     <div className="flex justify-between gap-4">
       <div className="opacity-70">{label}</div>
-      <div className="font-mono text-right break-all">
-        {value ?? <span className="opacity-50">—</span>}
-      </div>
+      <div className="font-mono text-right break-all">{value ?? <span className="opacity-50">—</span>}</div>
     </div>
   );
+}
+
+/* ---------- невеликі утиліти для мерджа пропозицій ---------- */
+function setDeep(obj: any, path: string, value: any) {
+  if (!path) return;
+  const parts = path.split(".");
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    const k = parts[i];
+    if (cur[k] == null || typeof cur[k] !== "object") cur[k] = {};
+    cur = cur[k];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+function getDeep(obj: any, path: string) {
+  try {
+    return path.split(".").reduce((acc, k) => (acc ? acc[k] : undefined), obj);
+  } catch { return undefined; }
 }

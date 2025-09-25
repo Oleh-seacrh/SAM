@@ -4,47 +4,27 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
 
-const ZERO_TENANT = "00000000-0000-0000-0000-000000000000";
-
-/* ---------- helpers ---------- */
-function isUuid(v: unknown): v is string {
-  return typeof v === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+// Дуже м’які нормалізації, без фанатизму
+function normStr(v: unknown) { return (typeof v === "string" ? v.trim() : ""); }
+function normEmail(v: unknown) {
+  const s = normStr(v).toLowerCase();
+  return s && s.includes("@") && s.includes(".") ? s : "";
 }
-function isSoftEmail(v: unknown): boolean {
-  if (typeof v !== "string") return false;
-  const s = v.trim();
-  return !!s && s.includes("@") && s.includes(".");
+function normPhone(v: unknown) {
+  const s = normStr(v).replace(/[^0-9+]/g, "");
+  return s; // приймаємо будь-який "цифри та +"
 }
-function isSoftDomain(v: unknown): boolean {
-  if (typeof v !== "string") return false;
-  let s = v.trim().toLowerCase();
-  if (!s) return false;
-  s = s.replace(/^https?:\/\//, "").replace(/^www\./, "");
-  return /\.[a-z0-9-]{2,}$/.test(s);
-}
-function normalizeDomain(raw?: string | null): string | null {
-  if (!raw) return null;
-  let v = raw.trim().toLowerCase();
+function normDomain(raw: unknown) {
+  let s = normStr(raw).toLowerCase();
+  if (!s) return "";
   try {
-    if (v.startsWith("http://") || v.startsWith("https://")) v = new URL(v).hostname;
+    if (s.startsWith("http://") || s.startsWith("https://")) s = new URL(s).hostname;
   } catch {}
-  v = v.replace(/^www\./, "");
-  return v || null;
-}
-function normalizePhone(raw?: string | null): string {
-  if (!raw) return "";
-  return raw.replace(/[^0-9+]/g, "");
-}
-function normalizeName(raw?: string | null): string {
-  if (!raw) return "";
-  return raw.trim().replace(/\s+/g, " ");
-}
-function normalizeEmail(raw?: string | null): string {
-  return (raw || "").trim().toLowerCase();
+  s = s.replace(/^www\./, "");
+  return s;
 }
 
-type PutBody = {
+type Body = {
   contact_name?: string;
   company_name?: string;
   company_email?: string;
@@ -53,83 +33,90 @@ type PutBody = {
   company_country?: string;
 };
 
-/* ---------- GET ---------- */
 export async function GET() {
   const sql = getSql();
-  // м’який фолбек на ZERO tenant
-  const rawTenant = await getTenantIdFromSession().catch(() => undefined);
-  const tenantId = isUuid(rawTenant) ? rawTenant : ZERO_TENANT;
+  const tenantId = await getTenantIdFromSession();
 
   try {
     const rows = await sql/*sql*/`
-      select profile
+      select
+        contact_name,
+        company_name,
+        company_email,
+        company_phone,
+        company_domain,
+        company_country
       from tenant_settings
       where tenant_id = ${tenantId}
       limit 1
     `;
-    const profile = rows?.[0]?.profile ?? {};
+
+    const r = rows[0] || {};
+    const profile = {
+      contact_name:    r.contact_name    ?? "",
+      company_name:    r.company_name    ?? "",
+      company_email:   r.company_email   ?? "",
+      company_phone:   r.company_phone   ?? "",
+      company_domain:  r.company_domain  ?? "",
+      company_country: r.company_country ?? "",
+    };
+
     return NextResponse.json({ profile });
   } catch (e: any) {
-    console.error("GET /api/settings/profile error:", e?.message || e);
-    return NextResponse.json({ profile: {} });
+    console.error("GET /api/settings/profile error", e);
+    // Повертаємо порожній профіль, але без 500 — хай UI просто показує пусто
+    return NextResponse.json({ profile: {
+      contact_name: "", company_name: "", company_email: "",
+      company_phone: "", company_domain: "", company_country: ""
+    }});
   }
 }
 
-/* ---------- PUT/POST ---------- */
 export async function PUT(req: Request) {
   const sql = getSql();
+  const tenantId = await getTenantIdFromSession();
 
-  const rawTenant = await getTenantIdFromSession().catch(() => undefined);
-  const tenantId = isUuid(rawTenant) ? rawTenant : ZERO_TENANT;
-
-  let body: PutBody;
+  let body: Body;
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const contact_name   = normalizeName(body.contact_name);
-  const company_name   = normalizeName(body.company_name);
-  const company_email  = normalizeEmail(body.company_email);
-  const company_phone  = normalizePhone(body.company_phone);
-  const domainRaw      = body.company_domain || "";
-  const company_domain = domainRaw ? (normalizeDomain(domainRaw) || "") : "";
-  const company_country= (body.company_country || "").trim();
-
-  if (company_email && !isSoftEmail(company_email)) {
-    return NextResponse.json({ error: "Invalid company_email" }, { status: 400 });
-  }
-  if (domainRaw && !isSoftDomain(domainRaw)) {
-    return NextResponse.json({ error: "Invalid company_domain" }, { status: 400 });
-  }
-
-  const profile = {
-    contact_name,
-    company_name,
-    company_email,
-    company_phone,
-    company_domain,
-    company_country,
-  };
+  const contact_name    = normStr(body.contact_name);
+  const company_name    = normStr(body.company_name);
+  const company_email   = normEmail(body.company_email);
+  const company_phone   = normPhone(body.company_phone);
+  const company_domain  = normDomain(body.company_domain);
+  const company_country = normStr(body.company_country);
 
   try {
     await sql/*sql*/`
-      insert into tenant_settings (tenant_id, profile)
-      values (${tenantId}, ${profile}::jsonb)
-      on conflict (tenant_id) do update
-        set profile = excluded.profile,
-            updated_at = now()
+      insert into tenant_settings (
+        tenant_id,
+        contact_name, company_name, company_email, company_phone, company_domain, company_country
+      ) values (
+        ${tenantId},
+        ${contact_name}, ${company_name}, ${company_email}, ${company_phone}, ${company_domain}, ${company_country}
+      )
+      on conflict (tenant_id) do update set
+        contact_name    = excluded.contact_name,
+        company_name    = excluded.company_name,
+        company_email   = excluded.company_email,
+        company_phone   = excluded.company_phone,
+        company_domain  = excluded.company_domain,
+        company_country = excluded.company_country,
+        updated_at      = now()
     `;
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    console.error("PUT /api/settings/profile error:", e?.message || e);
-    // покажемо коротку причину в UI
+    console.error("PUT /api/settings/profile error", e);
     return NextResponse.json({ error: "DB upsert failed" }, { status: 500 });
   }
 }
 
-// POST як синонім PUT
+// Для зручності дозволяємо POST як синонім PUT
 export async function POST(req: Request) {
   return PUT(req);
 }

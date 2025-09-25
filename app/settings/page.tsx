@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 import React, { useEffect, useState } from "react";
 
-type Tab = "profile" | "organization" | "users" | "billing" | "enrichment";
+type Tab = "profile" | "products" | "users" | "billing" | "enrichment";
 
 /* ------------------ PAGE ------------------ */
 export default function SettingsPage() {
@@ -24,7 +24,7 @@ export default function SettingsPage() {
           Settings
         </div>
         <nav className="px-2 pb-4 space-y-1">
-          {(["profile","organization","users","billing","enrichment"] as Tab[]).map(t => {
+          {(["profile","products","users","billing","enrichment"] as Tab[]).map(t => {
             const active = activeTab === t;
             const label = t.charAt(0).toUpperCase() + t.slice(1);
             return (
@@ -45,7 +45,7 @@ export default function SettingsPage() {
       {/* Content */}
       <main className="flex-1 p-6 overflow-y-auto">
         {activeTab === "profile" && <ProfileTab />}
-        {activeTab === "organization" && <DraftSection title="Organization" />}
+        {activeTab === "products" && <DraftSection title="Products" />}
         {activeTab === "users" && <DraftSection title="Users & Roles" />}
         {activeTab === "billing" && (
           <DraftSection
@@ -481,6 +481,145 @@ function EnrichmentTab() {
         </label>
       </section>
     </div>
+  );
+}
+function ProductsTab() {
+  const [brands, setBrands] = useState<string[]>([""]);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string|null>(null);
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true); setErr(null); setOk(false);
+      try {
+        const r = await fetch("/api/settings/brands", { cache: "no-store" });
+        const j = await r.json().catch(()=>({}));
+        const list: string[] = Array.isArray(j?.brands) ? j.brands : [];
+        if (!cancelled) {
+          setBrands(list.length ? list : [""]);
+        }
+      } catch (e:any) {
+        if (!cancelled) setErr(e?.message || "Failed to load brands");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  function setRow(i: number, val: string) {
+    setBrands(prev => {
+      const next = prev.slice();
+      next[i] = val;
+      return next;
+    });
+  }
+  function addRow() {
+    setBrands(prev => (prev.length >= 10 ? prev : [...prev, ""]));
+  }
+  function removeRow(i: number) {
+    setBrands(prev => {
+      const next = prev.slice();
+      next.splice(i,1);
+      return next.length ? next : [""];
+    });
+  }
+
+  async function onSave() {
+    setSaving(true); setErr(null); setOk(false);
+    try {
+      const payload = {
+        brands: brands.map(s => String(s || "").trim()).filter(Boolean).slice(0,10)
+      };
+      const r = await fetch("/api/settings/brands", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setOk(true);
+      // нормалізувати форму після збереження
+      setBrands(payload.brands.length ? payload.brands : [""]);
+    } catch (e:any) {
+      setErr(e?.message || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="space-y-6 max-w-3xl">
+      <h2 className="text-xl font-semibold">Products</h2>
+      <p className="text-sm opacity-80">Поки що тільки <b>brands</b>. До 10 штук. Пізніше додамо товари.</p>
+
+      {loading ? (
+        <div className="text-sm opacity-70">Loading…</div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="text-lg font-medium">Brands</div>
+            <button
+              type="button"
+              onClick={addRow}
+              disabled={brands.length >= 10}
+              className="rounded-md px-2 py-1 text-sm bg-white/10 hover:bg-white/20 disabled:opacity-50"
+            >
+              + Add
+            </button>
+          </div>
+
+          <div className="space-y-2">
+            {brands.map((b, i) => (
+              <div key={i} className="flex items-center gap-2">
+                <input
+                  className="input flex-1"
+                  placeholder="e.g. Konica Minolta"
+                  value={b}
+                  onChange={(e)=>setRow(i, e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={()=>removeRow(i)}
+                  className="rounded-md px-2 py-1 text-sm bg-white/10 hover:bg-white/20"
+                  title="Remove"
+                >
+                  −
+                </button>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-2 pt-2">
+            <button
+              className="rounded-lg px-3 py-2 bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+              onClick={onSave}
+              disabled={saving}
+            >
+              {saving ? "Saving…" : "Save"}
+            </button>
+            {err && <span className="text-sm text-red-400">{err}</span>}
+            {ok && <span className="text-sm text-emerald-400">Saved ✔</span>}
+          </div>
+
+          <style jsx>{`
+            .input{
+              width:100%;
+              border-radius:0.5rem;
+              border:1px solid var(--border,#1f2937);
+              padding:0.5rem 0.75rem;
+              font-size:0.875rem;
+              background: var(--bg,#0b0b0d);
+              color: var(--text,#e5e7eb);
+              outline:none;
+            }
+          `}</style>
+        </div>
+      )}
+    </section>
   );
 }
 

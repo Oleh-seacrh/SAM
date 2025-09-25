@@ -24,7 +24,7 @@ export default function SettingsPage() {
           Settings
         </div>
         <nav className="px-2 pb-4 space-y-1">
-          {(["profile","products","users","billing","enrichment"] as Tab[]).map(t => {
+          {(["profile","products","users","billing","enrichment"] as Tab[]).map((t) => {
             const active = activeTab === t;
             const label = t.charAt(0).toUpperCase() + t.slice(1);
             return (
@@ -45,7 +45,7 @@ export default function SettingsPage() {
       {/* Content */}
       <main className="flex-1 p-6 overflow-y-auto">
         {activeTab === "profile" && <ProfileTab />}
-        {{activeTab === "products" && <ProductsTab />}
+        {activeTab === "products" && <ProductsTab />}
         {activeTab === "users" && <DraftSection title="Users & Roles" />}
         {activeTab === "billing" && (
           <DraftSection
@@ -62,6 +62,7 @@ export default function SettingsPage() {
     </div>
   );
 }
+
 
 /* ------------------ REUSABLES ------------------ */
 function DraftSection({ title, items }: { title: string; items?: string[] }) {

@@ -4,24 +4,25 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
 
-// М'яка перевірка email (мінімальна; у репо подібний підхід)
+const ZERO_TENANT = "00000000-0000-0000-0000-000000000000";
+
+/* ---------- helpers ---------- */
+function isUuid(v: unknown): v is string {
+  return typeof v === "string" &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
+}
 function isSoftEmail(v: unknown): boolean {
   if (typeof v !== "string") return false;
   const s = v.trim();
   return !!s && s.includes("@") && s.includes(".");
 }
-
-// М'яка перевірка домену: дозволяємо піддомени; без протоколу (зрізаємо якщо є)
 function isSoftDomain(v: unknown): boolean {
   if (typeof v !== "string") return false;
   let s = v.trim().toLowerCase();
   if (!s) return false;
   s = s.replace(/^https?:\/\//, "").replace(/^www\./, "");
-  // дуже проста форма: щонайменше одна крапка, tld 2+ символи
   return /\.[a-z0-9-]{2,}$/.test(s);
 }
-
-// Нормалізація домену — як у вже існуючих місцях (спрощена)
 function normalizeDomain(raw?: string | null): string | null {
   if (!raw) return null;
   let v = raw.trim().toLowerCase();
@@ -31,21 +32,14 @@ function normalizeDomain(raw?: string | null): string | null {
   v = v.replace(/^www\./, "");
   return v || null;
 }
-
-// Нормалізація телефону (мінімальна): залишити цифри та +
 function normalizePhone(raw?: string | null): string {
   if (!raw) return "";
-  const digits = raw.replace(/[^0-9+]/g, "");
-  return digits;
+  return raw.replace(/[^0-9+]/g, "");
 }
-
-// Нормалізація імені / назви
 function normalizeName(raw?: string | null): string {
   if (!raw) return "";
   return raw.trim().replace(/\s+/g, " ");
 }
-
-// Нормалізація email (підхід, подібний до вже існуючого)
 function normalizeEmail(raw?: string | null): string {
   return (raw || "").trim().toLowerCase();
 }
@@ -59,9 +53,13 @@ type PutBody = {
   company_country?: string;
 };
 
+/* ---------- GET ---------- */
 export async function GET() {
   const sql = getSql();
-  const tenantId = await getTenantIdFromSession();
+  // м’який фолбек на ZERO tenant
+  const rawTenant = await getTenantIdFromSession().catch(() => undefined);
+  const tenantId = isUuid(rawTenant) ? rawTenant : ZERO_TENANT;
+
   try {
     const rows = await sql/*sql*/`
       select profile
@@ -69,17 +67,20 @@ export async function GET() {
       where tenant_id = ${tenantId}
       limit 1
     `;
-    const profile = rows[0]?.profile ?? {};
+    const profile = rows?.[0]?.profile ?? {};
     return NextResponse.json({ profile });
-  } catch (e) {
-    console.error("GET /api/settings/profile error", e);
+  } catch (e: any) {
+    console.error("GET /api/settings/profile error:", e?.message || e);
     return NextResponse.json({ profile: {} });
   }
 }
 
+/* ---------- PUT/POST ---------- */
 export async function PUT(req: Request) {
   const sql = getSql();
-  const tenantId = await getTenantIdFromSession();
+
+  const rawTenant = await getTenantIdFromSession().catch(() => undefined);
+  const tenantId = isUuid(rawTenant) ? rawTenant : ZERO_TENANT;
 
   let body: PutBody;
   try {
@@ -88,18 +89,18 @@ export async function PUT(req: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const contact_name = normalizeName(body.contact_name);
-  const company_name = normalizeName(body.company_name);
-  const company_email = body.company_email ? normalizeEmail(body.company_email) : "";
-  const company_phone = body.company_phone ? normalizePhone(body.company_phone) : "";
-  const company_domain_raw = body.company_domain || "";
-  const company_domain_norm = company_domain_raw ? normalizeDomain(company_domain_raw) : "";
-  const company_country = (body.company_country || "").trim();
+  const contact_name   = normalizeName(body.contact_name);
+  const company_name   = normalizeName(body.company_name);
+  const company_email  = normalizeEmail(body.company_email);
+  const company_phone  = normalizePhone(body.company_phone);
+  const domainRaw      = body.company_domain || "";
+  const company_domain = domainRaw ? (normalizeDomain(domainRaw) || "") : "";
+  const company_country= (body.company_country || "").trim();
 
   if (company_email && !isSoftEmail(company_email)) {
     return NextResponse.json({ error: "Invalid company_email" }, { status: 400 });
   }
-  if (company_domain_raw && !isSoftDomain(company_domain_raw)) {
+  if (domainRaw && !isSoftDomain(domainRaw)) {
     return NextResponse.json({ error: "Invalid company_domain" }, { status: 400 });
   }
 
@@ -108,22 +109,27 @@ export async function PUT(req: Request) {
     company_name,
     company_email,
     company_phone,
-    company_domain: company_domain_norm || "",
+    company_domain,
     company_country,
   };
 
-  await sql/*sql*/`
-    insert into tenant_settings (tenant_id, profile)
-    values (${tenantId}, ${profile}::jsonb)
-    on conflict (tenant_id) do update
-      set profile = excluded.profile,
-          updated_at = now()
-  `;
-
-  return NextResponse.json({ ok: true });
+  try {
+    await sql/*sql*/`
+      insert into tenant_settings (tenant_id, profile)
+      values (${tenantId}, ${profile}::jsonb)
+      on conflict (tenant_id) do update
+        set profile = excluded.profile,
+            updated_at = now()
+    `;
+    return NextResponse.json({ ok: true });
+  } catch (e: any) {
+    console.error("PUT /api/settings/profile error:", e?.message || e);
+    // покажемо коротку причину в UI
+    return NextResponse.json({ error: "DB upsert failed" }, { status: 500 });
+  }
 }
 
-// POST як синонім PUT (аналог підходу enrich)
+// POST як синонім PUT
 export async function POST(req: Request) {
   return PUT(req);
 }

@@ -45,7 +45,7 @@ export default function SettingsPage() {
       {/* Content */}
       <main className="flex-1 p-6 overflow-y-auto">
         {activeTab === "profile" && <ProfileTab />}
-        {activeTab === "products" && <DraftSection title="Products" />}
+        {{activeTab === "products" && <ProductsTab />}
         {activeTab === "users" && <DraftSection title="Users & Roles" />}
         {activeTab === "billing" && (
           <DraftSection

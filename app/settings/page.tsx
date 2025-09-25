@@ -1,113 +1,69 @@
 "use client";
 
+/**
+ * Форсуємо динамічний рендер сторінки (щоб Next не намагався її пререндерити / кешувати)
+ * Якщо root layout уже має глобальний dynamic, можна це прибрати — але поки лишаємо.
+ */
+export const dynamic = "force-dynamic";
+// revalidate тут не обов'язковий: при force-dynamic воно й так динамічне. Залишу для ясності.
+// export const revalidate = 0;
+
 import React, { useEffect, useState } from "react";
 
-/** Уникаємо prerender/ISR для /settings */
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
-/* ---------- Tabs ---------- */
 type Tab = "profile" | "organization" | "users" | "billing" | "enrichment";
 
-/* ---------- Error Boundary щоб не мати «порожній» екран ---------- */
-class SettingsErrorBoundary extends React.Component<
-  { children: React.ReactNode },
-  { error: string | null }
-> {
-  constructor(props: any) {
-    super(props);
-    this.state = { error: null };
-  }
-  static getDerivedStateFromError(err: any) {
-    return { error: err?.message || "Unknown error" };
-  }
-  componentDidCatch(err: any, info: any) {
-    console.error("Settings page error:", err, info);
-  }
-  render() {
-    if (this.state.error) {
-      return (
-        <div className="p-6 text-sm space-y-4">
-          <div className="text-red-400 font-semibold">Settings crashed</div>
-            <div className="opacity-80">{this.state.error}</div>
-            <button
-              className="px-3 py-1 rounded bg-white/10 hover:bg-white/20"
-              onClick={() => this.setState({ error: null })}
-            >
-              Retry
-            </button>
-        </div>
-      );
-    }
-    return this.props.children;
-  }
-}
-
+/* ------------------ PAGE ------------------ */
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("enrichment");
 
   return (
-    <SettingsErrorBoundary>
-      <div className="flex h-full">
-        {/* Sidebar */}
-        <aside className="w-60 border-r border-white/10 bg-[var(--card,#0b0b0d)]">
-          <div className="h-14 flex items-center px-4 text-lg font-semibold">
-            Settings
-          </div>
-          <nav className="px-2 pb-4 space-y-1">
-            <TabButton tab="profile" activeTab={activeTab} setActiveTab={setActiveTab} />
-            <TabButton tab="organization" activeTab={activeTab} setActiveTab={setActiveTab} />
-            <TabButton tab="users" activeTab={activeTab} setActiveTab={setActiveTab} />
-            <TabButton tab="billing" activeTab={activeTab} setActiveTab={setActiveTab} />
-            <TabButton tab="enrichment" activeTab={activeTab} setActiveTab={setActiveTab} />
-          </nav>
-        </aside>
+    <div className="min-h-screen flex text-sm text-white">
+      {/* Sidebar */}
+      <aside className="w-60 border-r border-white/10 bg-[var(--card,#0b0b0d)] flex flex-col">
+        <div className="h-14 flex items-center px-4 text-lg font-semibold">
+          Settings
+        </div>
+        <nav className="px-2 pb-4 space-y-1">
+          {(["profile","organization","users","billing","enrichment"] as Tab[]).map(t => {
+            const active = activeTab === t;
+            const label = t.charAt(0).toUpperCase() + t.slice(1);
+            return (
+              <button
+                key={t}
+                onClick={() => setActiveTab(t)}
+                className={`w-full text-left px-3 py-2 rounded-md transition ${
+                  active ? "bg-white/10 font-medium" : "hover:bg-white/5"
+                }`}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </nav>
+      </aside>
 
-        {/* Content */}
-        <main className="flex-1 p-6 overflow-y-auto">
-          {activeTab === "profile" && <ProfileTab />}
-          {activeTab === "organization" && <DraftSection title="Organization" />}
-            {activeTab === "users" && <DraftSection title="Users & Roles" />}
-          {activeTab === "billing" && (
-            <DraftSection
-              title="Billing"
-              items={[
-                "Поточний план, ліміти",
-                "Upgrade → редірект на сайт/Stripe",
-                "Історія оплат / customer portal",
-              ]}
-            />
-          )}
-          {activeTab === "enrichment" && <EnrichmentTab />}
-        </main>
-      </div>
-    </SettingsErrorBoundary>
+      {/* Content */}
+      <main className="flex-1 p-6 overflow-y-auto">
+        {activeTab === "profile" && <ProfileTab />}
+        {activeTab === "organization" && <DraftSection title="Organization" />}
+        {activeTab === "users" && <DraftSection title="Users & Roles" />}
+        {activeTab === "billing" && (
+          <DraftSection
+            title="Billing"
+            items={[
+              "Поточний план, ліміти",
+              "Upgrade → редірект на сайт/Stripe",
+              "Історія оплат / customer portal",
+            ]}
+          />
+        )}
+        {activeTab === "enrichment" && <EnrichmentTab />}
+      </main>
+    </div>
   );
 }
 
-function TabButton({
-  tab,
-  activeTab,
-  setActiveTab,
-}: {
-  tab: Tab;
-  activeTab: Tab;
-  setActiveTab: (t: Tab) => void;
-}) {
-  const label = tab.charAt(0).toUpperCase() + tab.slice(1);
-  const active = activeTab === tab;
-  return (
-    <button
-      onClick={() => setActiveTab(tab)}
-      className={`w-full text-left px-3 py-2 rounded-md ${
-        active ? "bg-white/10 font-medium" : "hover:bg-white/5"
-      }`}
-    >
-      {label}
-    </button>
-  );
-}
-
+/* ------------------ REUSABLES ------------------ */
 function DraftSection({ title, items }: { title: string; items?: string[] }) {
   return (
     <section className="space-y-4">
@@ -115,7 +71,7 @@ function DraftSection({ title, items }: { title: string; items?: string[] }) {
       {!items ? (
         <p className="text-sm opacity-80">Draft секція — заповнимо пізніше.</p>
       ) : (
-        <ul className="list-disc pl-5 text-sm opacity-80">
+        <ul className="list-disc pl-5 text-sm opacity-80 space-y-1">
           {items.map((x, i) => (
             <li key={i}>{x}</li>
           ))}
@@ -125,7 +81,7 @@ function DraftSection({ title, items }: { title: string; items?: string[] }) {
   );
 }
 
-/* ---------- Profile Tab ---------- */
+/* ------------------ PROFILE TAB ------------------ */
 type Profile = {
   contact_name: string;
   company_name: string;
@@ -162,9 +118,7 @@ function ProfileTab() {
         let j: any = {};
         try {
           j = await r.json();
-        } catch {
-          j = {};
-        }
+        } catch {}
         const p: Profile = { ...emptyProfile, ...(j?.profile || {}) };
         if (!cancelled) setForm(p);
       } catch (e: any) {
@@ -195,9 +149,7 @@ function ProfileTab() {
       let j: any = {};
       try {
         j = await r.json();
-      } catch {
-        j = {};
-      }
+      } catch {}
       if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
       setOk(true);
     } catch (e: any) {
@@ -301,7 +253,7 @@ function L({ label, children }: { label: string; children: React.ReactNode }) {
   );
 }
 
-/* ---------- Enrichment Tab ---------- */
+/* ------------------ ENRICHMENT TAB ------------------ */
 type EnrichConfig = {
   enrichBy: { website: boolean; email: boolean; phone: boolean };
   sources: {
@@ -319,15 +271,6 @@ type EnrichConfig = {
   };
 };
 
-type PartialEnrichConfig = Partial<EnrichConfig> & {
-  enrichBy?: Partial<EnrichConfig["enrichBy"]>;
-  sources?: Partial<EnrichConfig["sources"]> & {
-    platforms?: Partial<EnrichConfig["sources"]["platforms"]>;
-    socials?: Partial<EnrichConfig["sources"]["socials"]>;
-  };
-  perSourceTimeoutMs?: Partial<EnrichConfig["perSourceTimeoutMs"]>;
-};
-
 const DEFAULT_CFG: EnrichConfig = {
   enrichBy: { website: true, email: true, phone: false },
   sources: {
@@ -339,33 +282,6 @@ const DEFAULT_CFG: EnrichConfig = {
   timeBudgetMs: 12000,
   perSourceTimeoutMs: { site: 3000, web: 2000, linkedin: 2000, platforms: 3000 },
 };
-
-function deepMergeConfig(p: PartialEnrichConfig): EnrichConfig {
-  return {
-    enrichBy: { ...DEFAULT_CFG.enrichBy, ...(p.enrichBy || {}) },
-    sources: {
-      web: p.sources?.web ?? DEFAULT_CFG.sources.web,
-      platforms: {
-        ...DEFAULT_CFG.sources.platforms,
-        ...(p.sources?.platforms || {}),
-      },
-      socials: {
-        ...DEFAULT_CFG.sources.socials,
-        ...(p.sources?.socials || {}),
-      },
-    },
-    strictMatching:
-      p.strictMatching !== undefined
-        ? p.strictMatching
-        : DEFAULT_CFG.strictMatching,
-    timeBudgetMs:
-      p.timeBudgetMs !== undefined ? p.timeBudgetMs : DEFAULT_CFG.timeBudgetMs,
-    perSourceTimeoutMs: {
-      ...DEFAULT_CFG.perSourceTimeoutMs,
-      ...(p.perSourceTimeoutMs || {}),
-    },
-  };
-}
 
 function EnrichmentTab() {
   const [cfg, setCfg] = useState<EnrichConfig>(DEFAULT_CFG);
@@ -383,19 +299,31 @@ function EnrichmentTab() {
         let data: any = {};
         try {
           data = await res.json();
-        } catch {
-          data = {};
-        }
-        if (!ignore) {
-          if (data && typeof data === "object") {
-            setCfg(deepMergeConfig(data));
-          } else {
-            setCfg(DEFAULT_CFG);
-          }
+        } catch {}
+        if (!ignore && data && typeof data === "object") {
+          setCfg({
+            ...DEFAULT_CFG,
+            ...data,
+            enrichBy: { ...DEFAULT_CFG.enrichBy, ...(data.enrichBy || {}) },
+            sources: {
+              web: data?.sources?.web ?? DEFAULT_CFG.sources.web,
+              platforms: {
+                ...DEFAULT_CFG.sources.platforms,
+                ...(data?.sources?.platforms || {}),
+              },
+              socials: {
+                ...DEFAULT_CFG.sources.socials,
+                ...(data?.sources?.socials || {}),
+              },
+            },
+            perSourceTimeoutMs: {
+              ...DEFAULT_CFG.perSourceTimeoutMs,
+              ...(data.perSourceTimeoutMs || {}),
+            },
+          });
         }
       } catch (e: any) {
-        if (!ignore)
-          setError(e?.message || "Failed to load settings (enrichment)");
+        if (!ignore) setError(e?.message || "Failed to load settings");
       } finally {
         if (!ignore) setLoading(false);
       }
@@ -405,58 +333,19 @@ function EnrichmentTab() {
     };
   }, []);
 
-  type TogglePath =
-    | ["enrichBy", keyof EnrichConfig["enrichBy"]]
-    | ["sources", "web"]
-    | ["sources", "platforms", keyof EnrichConfig["sources"]["platforms"]]
-    | ["sources", "socials", keyof EnrichConfig["sources"]["socials"]];
-
-  const toggle = (path: TogglePath) => {
+  function toggle(path: string[]) {
     setCfg((prev) => {
-      if (path[0] === "enrichBy") {
-        return {
-          ...prev,
-          enrichBy: {
-            ...prev.enrichBy,
-            [path[1]]: !prev.enrichBy[path[1]],
-          },
-        };
+      const next = structuredClone(prev);
+      if (path.length === 2) {
+        // @ts-ignore
+        next[path[0]][path[1]] = !next[path[0]][path[1]];
+      } else if (path.length === 3) {
+        // @ts-ignore
+        next[path[0]][path[1]][path[2]] = !next[path[0]][path[1]][path[2]];
       }
-      if (path[0] === "sources" && path.length === 2) {
-        return {
-          ...prev,
-          sources: { ...prev.sources, web: !prev.sources.web },
-        };
-      }
-      if (path[0] === "sources" && path[1] === "platforms") {
-        const key = path[2];
-        return {
-          ...prev,
-            sources: {
-            ...prev.sources,
-            platforms: {
-              ...prev.sources.platforms,
-              [key]: !prev.sources.platforms[key],
-            },
-          },
-        };
-      }
-      if (path[0] === "sources" && path[1] === "socials") {
-        const key = path[2];
-        return {
-          ...prev,
-            sources: {
-            ...prev.sources,
-            socials: {
-              ...prev.sources.socials,
-              [key]: !prev.sources.socials[key],
-            },
-          },
-        };
-      }
-      return prev;
+      return next;
     });
-  };
+  }
 
   async function onSave() {
     try {
@@ -471,9 +360,7 @@ function EnrichmentTab() {
         let data: any = {};
         try {
           data = await res.json();
-        } catch {
-          data = {};
-        }
+        } catch {}
         throw new Error(data?.error || "Failed to save settings");
       }
       setSavedAt(Date.now());

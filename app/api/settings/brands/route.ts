@@ -1,118 +1,78 @@
-// app/api/settings/brands/route.ts
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
 
-/** Нормалізація та обмеження списку брендів */
-function sanitizeBrands(input: unknown): string[] {
+// один-до-одного м’яка санітизація
+function cleanBrands(input: unknown): string[] {
   const arr = Array.isArray(input) ? input : [];
-  // 1) трім + toString, 2) відкидаємо порожні, 3) максимум 10, 4) унікальні (case-insensitive)
-  const cleaned = arr
-    .map((s) => String(s ?? "").trim())
-    .filter(Boolean)
-    .slice(0, 10);
-
   const seen = new Set<string>();
-  const unique = cleaned.filter((name) => {
-    const key = name.toLowerCase();
-    if (seen.has(key)) return false;
+  const out: string[] = [];
+  for (const raw of arr) {
+    const s = String(raw ?? "").trim();
+    if (!s) continue;
+    const key = s.toLowerCase();
+    if (seen.has(key)) continue;   // дублікат у тілі запиту
     seen.add(key);
-    return true;
-  });
-
-  return unique;
+    out.push(s);
+    if (out.length >= 10) break;
+  }
+  return out;
 }
 
-/** GET /api/settings/brands — повертає масив назв брендів для поточного tenant */
+// GET: віддаємо простий масив назв
 export async function GET() {
   try {
     const sql = getSql();
     const tenantId = await getTenantIdFromSession();
+    if (!tenantId) return NextResponse.json({ brands: [] });
 
-    if (!tenantId) {
-      // Неавторизований/немає tenant — просто порожній список
-      return NextResponse.json({ brands: [] });
-    }
-
-    const rows = await sql/* sql */`
+    const rows = await sql/*sql*/`
       select name
       from public.brands
       where tenant_id = ${tenantId}
       order by lower(name)
       limit 100
     `;
-
     return NextResponse.json({ brands: rows.map((r: any) => r.name) });
   } catch (e: any) {
-    console.error("GET /api/settings/brands error:", e);
-    return NextResponse.json(
-      { error: "Failed to load brands" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: String(e?.message ?? e) }, { status: 500 });
   }
 }
 
-/** PUT /api/settings/brands — повна заміна списку брендів для поточного tenant */
+// PUT: “повна заміна” — як у простих формах
 export async function PUT(req: Request) {
   try {
     const sql = getSql();
     const tenantId = await getTenantIdFromSession();
-
-    if (!tenantId) {
-      return NextResponse.json({ error: "No tenant" }, { status: 401 });
-    }
+    if (!tenantId) return NextResponse.json({ error: "No tenant" }, { status: 401 });
 
     let body: any = {};
-    try {
-      body = await req.json();
-    } catch {
-      // якщо тіло порожнє/некоректне — вважаємо, що нема брендів
-      body = {};
-    }
+    try { body = await req.json(); } catch {}
+    const list = cleanBrands(body?.brands);
 
-    const list = sanitizeBrands(body?.brands);
+    // простий підхід як у Organization: спочатку видаляємо все під tenant
+    await sql/*sql*/`delete from public.brands where tenant_id = ${tenantId}`;
 
-    // Проста стратегія: видалити всі старі й вставити нові в транзакції
-    await sql.begin(async (trx: any) => {
-      await trx/* sql */`
-        delete from public.brands
-        where tenant_id = ${tenantId}
+    // потім вставляємо по одному
+    for (const name of list) {
+      await sql/*sql*/`
+        insert into public.brands (tenant_id, name)
+        values (${tenantId}, ${name})
+        on conflict do nothing
       `;
-      for (const name of list) {
-        await trx/* sql */`
-          insert into public.brands (tenant_id, name)
-          values (${tenantId}, ${name})
-        `;
-      }
-    });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    console.error("PUT /api/settings/brands error:", e);
-    const msg: string =
-      typeof e?.message === "string" ? e.message : "DB upsert failed";
-
-    // Трошки дружніші відповіді на популярні кейси
-    if (msg.toLowerCase().includes("unique")) {
-      return NextResponse.json(
-        { error: "Duplicate brand for this tenant" },
-        { status: 400 }
-      );
-    }
-
-    return NextResponse.json({ error: "DB upsert failed" }, { status: 500 });
+    // покажемо точну помилку, щоб не було «DB upsert failed» без деталей
+    const msg = String(e?.message ?? e);
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
-/** POST /api/settings/brands — приймаємо як синонім PUT (деякі форми шлють POST) */
+// опційно, якщо клік “Save” десь стріляє POST — просто прокинемо на PUT
 export async function POST(req: Request) {
   return PUT(req);
-}
-
-/** OPTIONS — на випадок preflight (повертаємо 204) */
-export async function OPTIONS() {
-  return new Response(null, { status: 204 });
 }

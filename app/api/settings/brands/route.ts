@@ -4,7 +4,10 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
 
-/** Повертаємо масив рядків-брадів (до 10) */
+/**
+ * GET  /api/settings/brands
+ * Повертає масив рядків брендів для поточного tenant.
+ */
 export async function GET() {
   const sql = getSql();
   const tenantId = await getTenantIdFromSession();
@@ -15,62 +18,78 @@ export async function GET() {
       from brands
       where tenant_id = ${tenantId}
       order by lower(name) asc
-      limit 50
     `;
-    const brands = rows.map((r: any) => String(r.name));
+    const brands: string[] = rows.map((r: any) => r.name);
     return NextResponse.json({ brands });
-  } catch (e: any) {
+  } catch (e) {
     console.error("GET /api/settings/brands error", e);
-    return NextResponse.json({ brands: [], error: "Failed to load brands" }, { status: 500 });
+    // Не ламаємо UI — повертаємо порожній список
+    return NextResponse.json({ brands: [] });
   }
 }
 
 /**
- * Очікуємо { brands: string[] }.
- * Проста стратегія: replace-all — видаляємо старі і вставляємо нові в одній транзакції.
- * Ліміт: максимум 10 брендів.
+ * PUT  /api/settings/brands
+ * Body: { brands: string[] } (до 10)
+ * Стратегія: повністю замінюємо список — в транзакції:
+ *   DELETE ... WHERE tenant_id = ?
+ *   INSERT ... (по одному рядку)
  */
 export async function PUT(req: Request) {
   const sql = getSql();
   const tenantId = await getTenantIdFromSession();
 
-  let body: any = null;
+  let body: any = {};
   try {
     body = await req.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  let brands: string[] = Array.isArray(body?.brands) ? body.brands : [];
-  // нормалізація + дедуп case-insensitive
-  brands = brands
+  const raw: string[] = Array.isArray(body?.brands) ? body.brands : [];
+  // нормалізація
+  let brands = raw
     .map((s) => String(s || "").trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .slice(0, 10);
 
+  // дедуп по нижньому регістру, але зберігаємо першу “красиву” форму
   const seen = new Set<string>();
-  const uniq: string[] = [];
-  for (const b of brands) {
+  brands = brands.filter((b) => {
     const key = b.toLowerCase();
-    if (!seen.has(key)) { seen.add(key); uniq.push(b); }
-  }
-  brands = uniq.slice(0, 10); // максимум 10
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 
   try {
     await sql.begin(async (trx: any) => {
-      await trx/*sql*/`delete from brands where tenant_id = ${tenantId}`;
-      if (brands.length) {
-        const values = brands.map((b) => ({ tenant_id: tenantId, name: b }));
-        // пакетна вставка:
-        await trx`insert into brands ${trx(values)}`;
+      await trx/*sql*/`
+        delete from brands
+        where tenant_id = ${tenantId}
+      `;
+
+      for (const name of brands) {
+        await trx/*sql*/`
+          insert into brands (tenant_id, name)
+          values (${tenantId}, ${name})
+        `;
       }
     });
 
-    return NextResponse.json({ ok: true, count: brands.length });
+    return NextResponse.json({ ok: true, brands });
   } catch (e: any) {
-    console.error("PUT /api/settings/brands error", e);
-    return NextResponse.json({ error: "Failed to save brands" }, { status: 500 });
+    console.error("PUT /api/settings/brands error", e?.message || e);
+    // Якщо знову зловили унікальність — скажемо користувачу по-людськи
+    const msg =
+      (typeof e?.message === "string" && e.message.includes("duplicate")) ?
+      "Duplicate brand for this tenant" :
+      "DB upsert failed";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
 
-// POST як синонім PUT (зручно з форм)
-export async function POST(req: Request) { return PUT(req); }
+/** POST як синонім PUT */
+export async function POST(req: Request) {
+  return PUT(req);
+}

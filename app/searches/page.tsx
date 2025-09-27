@@ -8,44 +8,70 @@ import { usePrompts } from "@/hooks/use-prompts";
 import { canonicalHomepage, getDomain } from "@/lib/domain";
 import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
-
-type SearchItem = { title: string; link: string; displayLink: string; snippet?: string; homepage?: string; };
-// NEW: кнопка інференсу брендів та бейджі
 import { FindClientButton } from "@/components/search/FindClientButton";
 import { BrandBadge } from "@/components/search/BrandBadge";
+import { CountryPill } from "@/components/search/CountryPill";
+import { TypePill } from "@/components/search/TypePill";
 
 type SearchItem = { title: string; link: string; displayLink: string; snippet?: string; homepage?: string };
 type SearchResponse = {
   q: string; num: number; start: number; nextStart: number | null; prevStart: number | null;
   totalResults: number; items: SearchItem[];
-@@ -26,20 +30,23 @@
+};
+
+// Updated Score type with new fields for LLM analysis
+type Score = {
+  label: "good" | "maybe" | "bad";
+  confidence: number;
+  reasons: string[];
+  tags: string[];
+  companyType: "manufacturer" | "distributor" | "dealer" | "other";
+  countryISO2: string | null;
+  countryName: string | null;
+  detectedBrands: string[];
+};
+
+type ScoresByDomain = Record<string, Score>;
+
+export default function SearchesPage() {
+  const [q, setQ] = useState("");
+  const [num, setNum] = useState(10);
+  const [start, setStart] = useState(1);
+  const [data, setData] = useState<SearchResponse | null>(null);
+  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const { add: addCRM, existsDomain } = useCRM();
   const { sessions, add: addSession } = useSessions();
-  const { add: addSession } = useSessions();
   const { settings, setLastSearch, setLLM, setAutoRun } = useSettings();
   const { prompts, add: addPrompt, remove: removePrompt, lastUsedId, setLastUsedId } = usePrompts();
 
   // LLM UI
   const [provider, setProvider] = useState<"openai" | "anthropic" | "gemini">("openai");
   const [model, setModel] = useState<string>("");
-  const [model, setModel] = useState<string>(""); // опційно, можна лишати порожнім
   const [prompt, setPrompt] = useState<string>(
     "Target: B2B distributors/manufacturers of X-ray film and related medical imaging consumables. Exclude blogs, news, generic marketplaces."
   );
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
-  // NEW: tags input for Add-to-CRM modal
-  // NEW: результати інференсу брендів (url -> brands[])
+  // Brand matches from inference
   const [brandMatches, setBrandMatches] = useState<Record<string, string[]>>({});
 
-  // NEW: tags input для Add-to-CRM модалки
+  // Tags input for Add-to-CRM modal
   const [tagsText, setTagsText] = useState("");
 
   // restore last search + last LLM prompt/provider/model
-@@ -56,43 +63,62 @@
+  useEffect(() => {
+    if (!settings) return;
+    if (settings.lastQuery) setQ(settings.lastQuery);
+    if (settings.lastStart) setStart(settings.lastStart);
+    if (settings.lastNum) setNum(settings.lastNum);
+    if (settings.lastProvider) setProvider(settings.lastProvider);
+    if (settings.lastModel) setModel(settings.lastModel);
+    if (settings.lastPrompt) setPrompt(settings.lastPrompt);
+  }, [settings]);
+
   useEffect(() => {
     if (!settings?.autoRunLastSearch) return;
     if (settings?.lastQuery) {
@@ -57,14 +83,11 @@ type SearchResponse = {
 
   // history chips
   const [history, setHistory] = useState<string[]>([]);
-  useEffect(() => { if (data?.q) setHistory(p => (p[0] === data.q ? p : [data.q, ...p].slice(0,10))); }, [data?.q]);
   useEffect(() => {
     if (data?.q) setHistory((p) => (p[0] === data.q ? p : [data.q, ...p].slice(0, 10)));
   }, [data?.q]);
 
   async function runSearch(nextStart?: number) {
-    const query = q.trim(); if (!query) return;
-    setLoading(true); setErr(null);
     const query = q.trim();
     if (!query) return;
     setLoading(true);
@@ -76,7 +99,7 @@ type SearchResponse = {
       if (!r.ok) throw new Error(j?.error || "Search failed");
       setData(j as SearchResponse);
 
-      // скидаємо попередні оцінки й інференс брендів для нової видачі
+      // Reset previous scores and brand inference for new results
       setScores({});
       setBrandMatches({});
 
@@ -86,7 +109,6 @@ type SearchResponse = {
       // save session snapshot
       const savedItems: SavedItem[] = (j.items ?? []).map((it: any) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
-        return { title: it.title, link: it.link, displayLink: it.displayLink, snippet: it.snippet, homepage, domain: getDomain(homepage) };
         return {
           title: it.title,
           link: it.link,
@@ -99,7 +121,6 @@ type SearchResponse = {
       addSession({ q: j.q, num: j.num, start: j.start, totalResults: j.totalResults || 0, items: savedItems });
 
       if (nextStart !== undefined) setStart(nextStart);
-    } catch(e:any){ setErr(e.message || "Search failed"); } finally { setLoading(false); }
     } catch (e: any) {
       setErr(e.message || "Search failed");
     } finally {
@@ -109,17 +130,23 @@ type SearchResponse = {
 
   async function analyze() {
     if (!data?.items?.length) return;
-    setScoring(true); setErr(null);
     setScoring(true);
     setErr(null);
     try {
       const items = data.items.map((it) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
-@@ -109,11 +135,15 @@
+        return { title: it.title, snippet: it.snippet, homepage, domain: getDomain(homepage) };
+      });
+
+      // Remove hints parameter - LLM should infer everything
+      const r = await fetch("/api/score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, model: model || undefined, prompt, items }),
+      });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Scoring failed");
-      setScores(j.scores || {});
-    } catch (e: any) { setErr(e.message || "Scoring failed"); } finally { setScoring(false); }
+      setScores(j.scoresByDomain || {});
     } catch (e: any) {
       setErr(e.message || "Scoring failed");
     } finally {
@@ -127,22 +154,18 @@ type SearchResponse = {
     }
   }
 
-  const canPrev = useMemo(()=>!!data?.prevStart,[data?.prevStart]);
-  const canNext = useMemo(()=>!!data?.nextStart,[data?.nextStart]);
   const canPrev = useMemo(() => !!data?.prevStart, [data?.prevStart]);
   const canNext = useMemo(() => !!data?.nextStart, [data?.nextStart]);
 
   // Add-to-CRM modal
   const [open, setOpen] = useState(false);
-@@ -122,21 +152,27 @@
+  const [draft, setDraft] = useState<any>({});
+  const [newName, setNewName] = useState("");
+
+  function openAddModal(it: SearchItem) {
     const homepage = canonicalHomepage(it.homepage ?? it.link);
     const domain = getDomain(homepage);
     setDraft({
-      companyName: it.title?.slice(0,80) || domain,
-      domain, status: "New", source: "google",
-      brand: "", product: "", quantity: "", dealValueUSD: undefined,
-      country: "", industry: "", note: "",
-      // NEW
       companyName: it.title?.slice(0, 80) || domain,
       domain,
       status: "New",
@@ -155,32 +178,32 @@ type SearchResponse = {
       industry: "",
       note: "",
       sizeTag: "",
-      tags: []
       tags: [],
     });
     setTagsText("");
     setOpen(true);
   }
+
   function submitAdd() {
-    if (!draft.companyName || !draft.domain ) return;
     if (!draft.companyName || !draft.domain) return;
     const dealValue = draft.dealValueUSD ? Number(draft.dealValueUSD) : undefined;
-    const tags = tagsText.split(",").map((s)=>s.trim()).filter(Boolean);
     const tags = tagsText.split(",").map((s) => s.trim()).filter(Boolean);
     const payload = { ...draft, dealValueUSD: dealValue, sizeTag: draft.sizeTag || undefined, tags };
     addCRM(payload);
     setOpen(false);
-@@ -151,13 +187,25 @@
+  }
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex items-center gap-3">
+        <h1 className="text-xl font-semibold">Find Client</h1>
+        <a href="/settings?tab=search" className="text-sm underline opacity-80">Settings →</a>
+      </div>
+
+      {err && <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-red-400">{err}</div>}
 
       {/* Search form + autorun toggle */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
-        <form onSubmit={(e)=>{e.preventDefault(); setStart(1); runSearch(1);}}
-              className="flex flex-col gap-3 sm:flex-row sm:items-center">
-          <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none"
-                 placeholder="Enter keywords (e.g., x-ray film distributor India)"
-                 value={q} onChange={e=>setQ(e.target.value)} />
-          <button type="submit" disabled={loading || !q.trim()}
-                  className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50">
         <form
           onSubmit={(e) => {
             e.preventDefault();
@@ -203,31 +226,27 @@ type SearchResponse = {
             {loading ? "Searching…" : "Search"}
           </button>
         </form>
-@@ -166,59 +214,94 @@
+
+        <div className="mt-3 flex items-center justify-between text-sm text-[var(--muted)]">
+          <label className="flex items-center gap-2">
             <input
               type="checkbox"
               checked={Boolean(settings?.autoRunLastSearch)}
-              onChange={(e)=>setAutoRun(e.target.checked)}
               onChange={(e) => setAutoRun(e.target.checked)}
             />
             Auto-run last search on load
           </label>
           {settings?.lastQuery && (
-            <span>Last: <b>{settings.lastQuery}</b></span>
             <span>
               Last: <b>{settings.lastQuery}</b>
             </span>
           )}
         </div>
 
-        {history.length>0 && (
         {history.length > 0 && (
           <div className="mt-3 text-sm text-[var(--muted)]">
             <div className="mb-1">Recent queries:</div>
             <div className="flex flex-wrap gap-2">
-              {history.map(h=>(
-                <button key={h} onClick={()=>{setQ(h); setStart(1); runSearch(1);}}
-                        className="rounded-full border border-white/10 px-2.5 py-1 hover:bg-white/10">{h}</button>
               {history.map((h) => (
                 <button
                   key={h}
@@ -246,14 +265,11 @@ type SearchResponse = {
         )}
       </div>
 
-      {/* AI panel + prompt library */}
       {/* AI panel + prompt library + Find client */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="text-sm">
             <span className="mb-1 inline-block">Provider</span>
-            <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                    value={provider} onChange={(e)=>setProvider(e.target.value as any)}>
             <select
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               value={provider}
@@ -266,9 +282,6 @@ type SearchResponse = {
           </label>
           <label className="text-sm">
             <span className="mb-1 inline-block">Model (optional)</span>
-            <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                   placeholder="auto (e.g., gpt-4o-mini, claude-3-haiku, gemini-1.5-flash)"
-                   value={model} onChange={(e)=>setModel(e.target.value)} />
             <input
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               placeholder="auto (e.g., gpt-4o-mini, claude-3-haiku, gemini-1.5-flash)"
@@ -276,9 +289,6 @@ type SearchResponse = {
               onChange={(e) => setModel(e.target.value)}
             />
           </label>
-          <div className="flex items-end">
-            <button onClick={analyze} disabled={!data?.items?.length || scoring}
-              className="w-full rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50">
           <div className="flex items-end gap-2">
             <button
               onClick={analyze}
@@ -288,7 +298,7 @@ type SearchResponse = {
               {scoring ? "Analyzing…" : "Analyze current results"}
             </button>
 
-            {/* NEW: Find client (brand inference) */}
+            {/* Find client (brand inference) */}
             <FindClientButton
               provider={provider}
               model={model || undefined}
@@ -304,9 +314,6 @@ type SearchResponse = {
 
         <label className="text-sm block">
           <span className="mb-1 inline-block">Prompt</span>
-          <textarea className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-28"
-                    value={prompt} onChange={(e)=>setPrompt(e.target.value)}
-                    placeholder="Describe ideal prospect criteria…" />
           <textarea
             className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-28"
             value={prompt}
@@ -316,15 +323,15 @@ type SearchResponse = {
         </label>
 
         {/* Prompt library */}
-@@ -228,17 +311,21 @@
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+          <label className="text-sm">
+            <span className="mb-1 inline-block">Load saved prompt</span>
             <select
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               value={lastUsedId ?? ""}
-              onChange={e=>setLastUsedId(e.target.value || null)}
               onChange={(e) => setLastUsedId(e.target.value || null)}
             >
               <option value="">— Select —</option>
-              {prompts.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
               {prompts.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
@@ -335,50 +342,56 @@ type SearchResponse = {
           <div className="flex items-end gap-2">
             <button
               className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
-              onClick={()=>{
-                const p = prompts.find(x => x.id === lastUsedId);
               onClick={() => {
                 const p = prompts.find((x) => x.id === lastUsedId);
                 if (!p) return;
                 setProvider(p.provider);
                 setModel(p.model || "");
-@@ -250,7 +337,7 @@
+                setPrompt(p.text);
+                setLLM(p.provider, p.model, p.text);
+              }}
+              disabled={!lastUsedId}
+            >
+              Load
             </button>
             <button
               className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
-              onClick={()=> lastUsedId && removePrompt(lastUsedId)}
               onClick={() => lastUsedId && removePrompt(lastUsedId)}
               disabled={!lastUsedId}
             >
               Delete
-@@ -260,11 +347,12 @@
+            </button>
+          </div>
+          <div className="flex gap-2">
             <input
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               placeholder="Name to save current prompt…"
-              value={newName} onChange={e=>setNewName(e.target.value)}
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
             />
             <button
               className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
-              onClick={()=>{
               onClick={() => {
                 if (!newName.trim()) return;
                 addPrompt({ name: newName.trim(), text: prompt, provider, model: model || undefined });
                 setNewName("");
-@@ -282,12 +370,24 @@
+                setLLM(provider, model || undefined, prompt);
+              }}
+            >
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Results */}
       {data && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <div className="text-sm text-[var(--muted)]">Query: <b>{data.q}</b> • Total: {data.totalResults.toLocaleString()}</div>
             <div className="text-sm text-[var(--muted)]">
               Query: <b>{data.q}</b> • Total: {data.totalResults.toLocaleString()}
             </div>
             <div className="flex gap-2">
-              <button disabled={!canPrev || loading} onClick={()=>canPrev && runSearch(data.prevStart!)}
-                      className="rounded-md px-3 py-1.5 border border-white/10 bg-white/5 disabled:opacity-40">← Previous</button>
-              <button disabled={!canNext || loading} onClick={()=>canNext && runSearch(data.nextStart!)}
-                      className="rounded-md px-3 py-1.5 border border-white/10 bg-white/5 disabled:opacity-40">Next →</button>
               <button
                 disabled={!canPrev || loading}
                 onClick={() => canPrev && runSearch(data.prevStart!)}
@@ -396,32 +409,42 @@ type SearchResponse = {
             </div>
           </div>
 
-@@ -297,6 +397,8 @@
+          <ul className="space-y-3">
+            {data.items.map((it) => {
+              const homepage = canonicalHomepage(it.homepage ?? it.link);
               const domain = getDomain(homepage);
               const score = scores[domain];
               const inCRM = existsDomain(domain);
-              const brands = brandMatches[it.link] || []; // інференс повертає ключем саме вихідний URL
+              const brands = brandMatches[it.link] || [];
 
               return (
                 <li key={it.link} className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
                   <div className="flex items-start justify-between gap-4">
-@@ -306,7 +408,9 @@
+                    <div className="flex-1">
+                      <a href={it.link} target="_blank" rel="noreferrer" className="text-blue-400 hover:underline">
+                        {it.title}
                       </a>
                       <div className="text-xs text-[var(--muted)] mt-1">
                         {it.displayLink} •{" "}
-                        <a href={homepage} target="_blank" rel="noreferrer" className="hover:underline">{domain}</a>
                         <a href={homepage} target="_blank" rel="noreferrer" className="hover:underline">
                           {domain}
                         </a>
                       </div>
                     </div>
 
-@@ -315,12 +419,27 @@
+                    <div className="flex items-center gap-2">
+                      {/* Score badges */}
+                      {score && (
+                        <div className="flex gap-2">
+                          <Badge tone={score.label}>{score.label.toUpperCase()}</Badge>
+                          <TypePill companyType={score.companyType} />
+                          <CountryPill countryISO2={score.countryISO2} countryName={score.countryName} />
+                        </div>
+                      )}
+                      
                       {inCRM ? (
                         <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">In CRM</span>
                       ) : (
-                        <button onClick={()=>openAddModal(it)}
-                                className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10">+ Add</button>
                         <button
                           onClick={() => openAddModal(it)}
                           className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10"
@@ -435,8 +458,17 @@ type SearchResponse = {
                   {/* snippet */}
                   {it.snippet && <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>}
 
-                  {/* NEW: інференсовані бренди як бейджі */}
-                  {!!brands.length && (
+                  {/* Detected brands */}
+                  {score?.detectedBrands?.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {score.detectedBrands.map((b) => (
+                        <BrandBadge key={b} label={b} tone="maybe" />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Inference brands (fallback if no score brands) */}
+                  {!score?.detectedBrands?.length && brands.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {brands.map((b) => (
                         <BrandBadge key={b} label={b} tone="maybe" />
@@ -446,23 +478,17 @@ type SearchResponse = {
                 </li>
               );
             })}
-@@ -329,27 +448,35 @@
+          </ul>
+        </div>
       )}
 
       {/* Add-to-CRM modal */}
-      <Modal open={open} onClose={()=>setOpen(false)}>
       <Modal open={open} onClose={() => setOpen(false)}>
         <h3 className="text-lg font-semibold mb-3">Add to CRM</h3>
 
         <div className="space-y-4">
           <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Company</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Company" value={draft.companyName||""} onChange={v=>setDraft((d:any)=>({...d, companyName:v}))} />
-            <Field label="Country" value={draft.country||""} onChange={v=>setDraft((d:any)=>({...d, country:v}))} />
-            <Field label="Industry" value={draft.industry||""} onChange={v=>setDraft((d:any)=>({...d, industry:v}))} />
-            <Field label="Domain" value={draft.domain||""} onChange={v=>setDraft((d:any)=>({...d, domain:v}))} />
-            <Select label="Status" value={draft.status || "New"} onChange={v=>setDraft((d:any)=>({...d, status:v}))}
-                    options={["New","Contacted","Qualified","Bad Fit"]} />
             <Field label="Company" value={draft.companyName || ""} onChange={(v) => setDraft((d: any) => ({ ...d, companyName: v }))} />
             <Field label="Country" value={draft.country || ""} onChange={(v) => setDraft((d: any) => ({ ...d, country: v }))} />
             <Field label="Industry" value={draft.industry || ""} onChange={(v) => setDraft((d: any) => ({ ...d, industry: v }))} />
@@ -473,65 +499,36 @@ type SearchResponse = {
               onChange={(v) => setDraft((d: any) => ({ ...d, status: v }))}
               options={["New", "Contacted", "Qualified", "Bad Fit"]}
             />
+            <Field label="Size" value={draft.sizeTag || ""} onChange={(v) => setDraft((d: any) => ({ ...d, sizeTag: v }))} />
           </div>
 
-          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Opportunity</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Brand" value={draft.brand||""} onChange={v=>setDraft((d:any)=>({...d, brand:v}))} />
-            <Field label="Product" value={draft.product||""} onChange={v=>setDraft((d:any)=>({...d, product:v}))} />
-            <Field label="Quantity" value={draft.quantity||""} onChange={v=>setDraft((d:any)=>({...d, quantity:v}))} />
-            <Field label="Deal value (USD)" type="number" value={String(draft.dealValueUSD ?? "")}
-                   onChange={v=>setDraft((d:any)=>({...d, dealValueUSD: v ? Number(v) : undefined}))} />
-            <Field label="Brand" value={draft.brand || ""} onChange={(v) => setDraft((d: any) => ({ ...d, brand: v }))} />
+          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Deal</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Field label="Product/Brand" value={draft.brand || ""} onChange={(v) => setDraft((d: any) => ({ ...d, brand: v }))} />
             <Field label="Product" value={draft.product || ""} onChange={(v) => setDraft((d: any) => ({ ...d, product: v }))} />
             <Field label="Quantity" value={draft.quantity || ""} onChange={(v) => setDraft((d: any) => ({ ...d, quantity: v }))} />
-            <Field
-              label="Deal value (USD)"
-              type="number"
-              value={String(draft.dealValueUSD ?? "")}
-              onChange={(v) => setDraft((d: any) => ({ ...d, dealValueUSD: v ? Number(v) : undefined }))}
-            />
           </div>
+          <Field
+            label="Deal value (USD)"
+            type="number"
+            value={String(draft.dealValueUSD ?? "")}
+            onChange={(v) => setDraft((d: any) => ({ ...d, dealValueUSD: v ? Number(v) : undefined }))}
+          />
 
-          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Sizing & Tags</div>
-@@ -359,7 +486,7 @@
-              <select
-                className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                value={draft.sizeTag || ""}
-                onChange={(e)=>setDraft((d:any)=>({...d, sizeTag: e.target.value || ""}))}
-                onChange={(e) => setDraft((d: any) => ({ ...d, sizeTag: e.target.value || "" }))}
-              >
-                <option value="">—</option>
-                <option value="BIG">BIG</option>
-@@ -373,47 +500,74 @@
-                className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                placeholder="priority,repeat-buyer,EMEA"
-                value={tagsText}
-                onChange={(e)=>setTagsText(e.target.value)}
-                onChange={(e) => setTagsText(e.target.value)}
-              />
-            </label>
-          </div>
+          <Field label="Note" value={draft.note || ""} onChange={(v) => setDraft((d: any) => ({ ...d, note: v }))} />
+          <Field
+            label="Tags (comma-separated)"
+            value={tagsText}
+            onChange={(v) => setTagsText(v)}
+            placeholder="tag1, tag2, tag3"
+          />
 
-          <div>
-            <label className="block text-sm mb-1">Note</label>
-            <textarea className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-24"
-                      value={draft.note||""} onChange={e=>setDraft((d:any)=>({...d, note:e.target.value}))}/>
-            <textarea
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-24"
-              value={draft.note || ""}
-              onChange={(e) => setDraft((d: any) => ({ ...d, note: e.target.value }))}
-            />
-          </div>
-
-          <div className="mt-2 flex justify-end gap-2">
-            <button onClick={()=>setOpen(false)} className="rounded-md px-3 py-1.5 border border-white/10">Cancel</button>
-            <button onClick={submitAdd} className="rounded-md px-3 py-1.5 border border-white/10 bg-white/10 hover:bg-white/20">Add</button>
-            <button onClick={() => setOpen(false)} className="rounded-md px-3 py-1.5 border border-white/10">
+          <div className="flex justify-end gap-3 pt-3">
+            <button onClick={() => setOpen(false)} className="px-4 py-2 border border-white/10 rounded-lg hover:bg-white/10">
               Cancel
             </button>
-            <button onClick={submitAdd} className="rounded-md px-3 py-1.5 border border-white/10 bg-white/10 hover:bg-white/20">
-              Add
+            <button onClick={submitAdd} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg">
+              Add to CRM
             </button>
           </div>
         </div>
@@ -540,31 +537,32 @@ type SearchResponse = {
   );
 }
 
-function Field({ label, value, onChange, type="text" }:{
-  label:string; value:string; onChange:(v:string)=>void; type?:string;
-/* ---------- small form helpers ---------- */
 function Field({
   label,
   value,
   onChange,
   type = "text",
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   type?: string;
+  placeholder?: string;
 }) {
   return (
-    <label className="block text-sm">
+    <label className="text-sm block">
       <span className="mb-1 inline-block">{label}</span>
-      <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-             value={value} onChange={e=>onChange(e.target.value)} type={type}/>
-      <input className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" value={value} onChange={(e) => onChange(e.target.value)} type={type} />
+      <input
+        className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        type={type}
+        placeholder={placeholder}
+      />
     </label>
   );
 }
-function Select({ label, value, onChange, options }:{
-  label:string; value:string; onChange:(v:string)=>void; options:string[];
 
 function Select({
   label,
@@ -578,17 +576,19 @@ function Select({
   options: string[];
 }) {
   return (
-    <label className="block text-sm">
+    <label className="text-sm block">
       <span className="mb-1 inline-block">{label}</span>
-      <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-              value={value} onChange={e=>onChange(e.target.value)}>
-        {options.map(o=><option key={o} value={o}>{o}</option>)}
-      <select className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2" value={value} onChange={(e) => onChange(e.target.value)}>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o}
+      <select
+        className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
           </option>
         ))}
       </select>
     </label>
   );
+}

@@ -10,36 +10,128 @@ type Body = {
   items: Item[];
 };
 
-function buildUserText(prompt: string, items: Item[]) {
-  const list = items.map(i => `- ${i.domain} (${i.homepage})`).join("\n");
+// Helper function to fetch homepage content with timeout
+async function fetchHomepageContent(url: string, timeoutMs = 5000): Promise<string> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+      }
+    });
+    
+    if (!response.ok) {
+      return '';
+    }
+    
+    const html = await response.text();
+    // Extract text from HTML (simple approach)
+    const textContent = html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 2000); // Limit to 2k characters
+    
+    return textContent;
+  } catch (error) {
+    // Return empty string on timeout or error
+    return '';
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function buildUserText(prompt: string, items: Item[]) {
+  const enrichedItems = [];
+  
+  // Fetch homepage content for each item
+  for (const item of items) {
+    const content = await fetchHomepageContent(item.homepage);
+    enrichedItems.push({
+      ...item,
+      content: content || 'No content available'
+    });
+  }
+  
+  const list = enrichedItems.map(i => 
+    `- ${i.domain} (${i.homepage})
+  Title: ${i.title || 'N/A'}
+  Snippet: ${i.snippet || 'N/A'}
+  Homepage content: ${i.content.slice(0, 1500)}...`
+  ).join("\n\n");
+  
   const jsonShape = `Return JSON only in the shape:
 {
-  "<domain>": {
-    "label": "good|maybe|bad",
-    "confidence": 0-1,
-    "reasons": ["short evidence bullets"],
-    "tags": ["distributor","manufacturer","xray-film","chemicals","cassettes","screens","b2b","retail","hospital","blog"]
+  "scoresByDomain": {
+    "<domain>": {
+      "label": "good" | "maybe" | "bad",
+      "confidence": 0.0,
+      "reasons": ["short evidence bullets"],
+      "tags": ["relevant tags"],
+      "companyType": "manufacturer" | "distributor" | "dealer" | "other",
+      "countryISO2": "XX" | null,
+      "countryName": "Country name" | null,
+      "detectedBrands": ["Brand1","Brand2"]
+    }
   }
 }`;
-  return `${prompt.trim()}
+  
+  return `You are an expert B2B prospecting assistant for medical imaging consumables (X-ray film, plates, chemistry, cassettes, viewers). Do not use any hints. Infer everything only from provided data (title, snippet, homepage, extracted text). Return STRICT JSON with fields described below.
 
-Sites:
+${prompt.trim()}
+
+For each site, analyze:
+1. Label: "good" for ideal prospects, "maybe" for potential matches, "bad" for unsuitable
+2. Company Type: Infer if they are manufacturer, distributor, dealer, or other
+3. Country: Extract ISO-2 code and full country name if mentioned in content
+4. Detected Brands: Only brands explicitly mentioned in the content
+
+Sites to analyze:
 ${list}
 
 ${jsonShape}
-Use only evidence from the site (home/product/about pages). If uncertain, choose "maybe" and explain briefly. Output JSON only.`;
+
+Important: Only detect brands that are explicitly mentioned in the content. Do not hallucinate or assume brands. If no country is mentioned, set countryISO2 and countryName to null. Output JSON only.`;
 }
 
 function extractJson(s: string) {
-  try { return JSON.parse(s); } catch {}
-  // спробуємо вирізати найбільший JSON-блок
+  try { 
+    const parsed = JSON.parse(s);
+    // Validate the expected structure
+    if (parsed.scoresByDomain && typeof parsed.scoresByDomain === 'object') {
+      return parsed;
+    }
+    // Try to wrap older format
+    if (typeof parsed === 'object' && !parsed.scoresByDomain) {
+      return { scoresByDomain: parsed };
+    }
+    return parsed;
+  } catch {}
+  
+  // Try to extract JSON block
   const start = s.indexOf("{");
   const end = s.lastIndexOf("}");
   if (start >= 0 && end > start) {
     const cut = s.slice(start, end + 1);
-    try { return JSON.parse(cut); } catch {}
+    try { 
+      const parsed = JSON.parse(cut);
+      if (parsed.scoresByDomain && typeof parsed.scoresByDomain === 'object') {
+        return parsed;
+      }
+      if (typeof parsed === 'object' && !parsed.scoresByDomain) {
+        return { scoresByDomain: parsed };
+      }
+      return parsed;
+    } catch {}
   }
-  throw new Error("LLM did not return valid JSON");
+  
+  // Fallback with empty scoresByDomain
+  return { scoresByDomain: {} };
 }
 
 export async function POST(req: NextRequest) {
@@ -52,7 +144,7 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: "Missing prompt" }, { status: 400 });
   }
 
-  const text = buildUserText(prompt, items);
+  const text = await buildUserText(prompt, items);
 
   let raw = "";
   try {
@@ -71,7 +163,7 @@ export async function POST(req: NextRequest) {
           model: mdl,
           temperature: 0,
           messages: [
-            { role: "system", content: "You are a precise B2B prospect classifier. Answer with JSON only." },
+            { role: "system", content: "You are an expert B2B prospecting assistant for medical imaging consumables. Analyze companies and return precise JSON with all required fields." },
             { role: "user", content: text }
           ],
         }),
@@ -93,7 +185,7 @@ export async function POST(req: NextRequest) {
         },
         body: JSON.stringify({
           model: mdl,
-          max_tokens: 2000,
+          max_tokens: 3000,
           temperature: 0,
           messages: [
             { role: "user", content: text }
@@ -127,9 +219,14 @@ export async function POST(req: NextRequest) {
 
     const parsed = extractJson(raw);
 
-    // нормалізуємо у вигляд { [domain]: {label, confidence, reasons, tags} }
-    return Response.json({ scores: parsed });
+    // Return the new format with scoresByDomain
+    return Response.json(parsed);
   } catch (e: any) {
-    return Response.json({ error: e.message || "Scoring failed", raw }, { status: 500 });
+    // Fallback response on error
+    return Response.json({ 
+      scoresByDomain: {},
+      error: e.message || "Scoring failed", 
+      raw 
+    }, { status: 500 });
   }
 }

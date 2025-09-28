@@ -135,15 +135,12 @@ export async function POST(req: NextRequest) {
     const prompt = buildPrompt(self);
 
     // 4) Викликаємо LLM-витяг
-    const llm = await extractInquiry(
-      // Передаємо промпт і URL зображення. Твоя реалізація extractInquiry вже вміє з цим працювати.
-      [
-        { type: "text", text: prompt },
-        { type: "image_url", image_url: dataUrl },
-      ],
+    const llm = await extractInquiry({
       provider,
-      model
-    );
+      model,
+      prompt,
+      imageDataUrl: dataUrl,
+    });
 
     // Очікуємо JSON у форматі IntakeResult або близький до нього.
     const result: IntakeResult = normalizeResult(llm);

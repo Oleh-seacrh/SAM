@@ -30,8 +30,19 @@ type SearchResponse = {
   items: SearchItem[];
 };
 
-type Score = "GOOD" | "MAYBE" | "BAD";
-type ScoresByDomain = Record<string, Score | undefined>;
+type Verdict = "GOOD" | "MAYBE" | "BAD";
+
+/** Підтримуємо старий і новий формати від /api/score */
+type ScoreInfo =
+  | Verdict
+  | {
+      verdict: Verdict;
+      confidence?: number;
+      reasons?: string[];
+      tags?: string[];
+    };
+
+type ScoresByDomain = Record<string, ScoreInfo | undefined>;
 
 type DraftOrg = {
   companyName: string;
@@ -48,6 +59,16 @@ type DraftOrg = {
   sizeTag?: "" | "BIG";
   tags: string[];
 };
+
+/* Допоміжний витяг вердикту з будь-якого формату */
+function asVerdict(s: ScoreInfo | undefined): Verdict | null {
+  if (!s) return null;
+  if (typeof s === "string") return s as Verdict;
+  if (typeof (s as any)?.verdict === "string") return (s as any).verdict as Verdict;
+  if (typeof (s as any)?.label === "string") return (s as any).label as Verdict; // на випадок іншої назви
+  if (typeof (s as any)?.score === "string") return (s as any).score as Verdict;
+  return null;
+}
 
 /* ---------- page component ---------- */
 export default function SearchesPage() {
@@ -173,7 +194,7 @@ export default function SearchesPage() {
     setScoring(true);
     setErr(null);
     try {
-      // ✅ ВАЖЛИВО: додаємо domain у кожен item, щоб бекенд /api/score міг його читати
+      // Надсилаємо domain у кожному item — бекенд його використовує
       const items = data.items.map((it) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         const domain = getDomain(homepage);
@@ -182,7 +203,7 @@ export default function SearchesPage() {
           title: it.title,
           snippet: it.snippet || "",
           homepage,
-          domain, // <— ключове поле для buildUserText()/бекенду
+          domain,
         };
       });
 
@@ -193,6 +214,7 @@ export default function SearchesPage() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Scoring failed");
+      // новий бекенд може повертати об’єкти — залишаємо як є
       setScores(j.scores || {});
     } catch (e: any) {
       setErr(e.message || "Scoring failed");
@@ -475,7 +497,8 @@ export default function SearchesPage() {
             {data.items.map((it) => {
               const homepage = canonicalHomepage(it.homepage ?? it.link);
               const domain = getDomain(homepage);
-              const score = scores[domain];
+              const scoreInfo = scores[domain];
+              const verdict = asVerdict(scoreInfo); // ✅ тільки рядок у Badge
               const inCRM = existsDomain(domain);
               const brands = brandMatches[it.link] || [];
 
@@ -495,9 +518,15 @@ export default function SearchesPage() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {score && <Badge tone={score === "GOOD" ? "good" : score === "MAYBE" ? "maybe" : "bad"}>{score}</Badge>}
+                      {verdict && (
+                        <Badge tone={verdict === "GOOD" ? "good" : verdict === "MAYBE" ? "maybe" : "bad"}>
+                          {verdict}
+                        </Badge>
+                      )}
                       {inCRM ? (
-                        <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">In CRM</span>
+                        <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">
+                          In CRM
+                        </span>
                       ) : (
                         <button
                           onClick={() => openAddModal(it)}

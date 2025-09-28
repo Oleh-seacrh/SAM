@@ -117,13 +117,31 @@ export async function POST(req: NextRequest) {
     const provider = (form.get("provider") as LLMProvider) || "openai";
     const model = (form.get("model") as string) || undefined;
 
-    // self дані (щоб LLM знав кого фільтрувати як "я")
-    const self = {
+    // --- NEW: self_json primary + fallback to individual fields ---
+    let self: { name?: string; company?: string; email?: string; phone?: string } = {
       name: (form.get("self_name") as string) || undefined,
       company: (form.get("self_company") as string) || undefined,
       email: (form.get("self_email") as string) || undefined,
       phone: (form.get("self_phone") as string) || undefined,
     };
+
+    const selfJson = form.get("self_json") as string | null;
+    if (selfJson) {
+      try {
+        const parsed = JSON.parse(selfJson);
+        self = {
+          name: parsed?.name || self.name,
+            // preserving fallback if field missing
+          company: parsed?.company || self.company,
+          email: parsed?.email || self.email,
+          phone: parsed?.phone || self.phone,
+        };
+      } catch (e) {
+        console.warn("[intake/image] Failed to parse self_json:", e);
+        // silently keep fallback self
+      }
+    }
+    // -------------------------------------------------------------
 
     // 2) Конвертуємо файл у base64 data URL для vision-моделі (звичний патерн)
     const arrayBuffer = await file.arrayBuffer();
@@ -136,10 +154,10 @@ export async function POST(req: NextRequest) {
 
     // 4) Викликаємо LLM-витяг
     const llm = await extractInquiry({
-     provider,
-     model,
-     prompt,
-     imageDataUrl: dataUrl,
+      provider,
+      model,
+      prompt,
+      imageDataUrl: dataUrl,
     });
 
     // Очікуємо JSON у форматі IntakeResult або близький до нього.

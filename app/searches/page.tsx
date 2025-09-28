@@ -18,7 +18,6 @@ type SearchItem = { title: string; link: string; displayLink: string; snippet?: 
 type SearchResponse = {
   q: string; num: number; start: number; nextStart: number | null; prevStart: number | null;
   totalResults: number; items: SearchItem[];
-@@ -26,20 +30,23 @@
   const [err, setErr] = useState<string | null>(null);
 
   const { add: addCRM, existsDomain } = useCRM();
@@ -45,7 +44,6 @@ type SearchResponse = {
   const [tagsText, setTagsText] = useState("");
 
   // restore last search + last LLM prompt/provider/model
-@@ -56,43 +63,62 @@
   useEffect(() => {
     if (!settings?.autoRunLastSearch) return;
     if (settings?.lastQuery) {
@@ -115,7 +113,6 @@ type SearchResponse = {
     try {
       const items = data.items.map((it) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
-@@ -109,11 +135,15 @@
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Scoring failed");
       setScores(j.scores || {});
@@ -134,7 +131,6 @@ type SearchResponse = {
 
   // Add-to-CRM modal
   const [open, setOpen] = useState(false);
-@@ -122,21 +152,27 @@
     const homepage = canonicalHomepage(it.homepage ?? it.link);
     const domain = getDomain(homepage);
     setDraft({
@@ -170,7 +166,6 @@ type SearchResponse = {
     const payload = { ...draft, dealValueUSD: dealValue, sizeTag: draft.sizeTag || undefined, tags };
     addCRM(payload);
     setOpen(false);
-@@ -151,13 +187,25 @@
 
       {/* Search form + autorun toggle */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
@@ -203,7 +198,6 @@ type SearchResponse = {
             {loading ? "Searching…" : "Search"}
           </button>
         </form>
-@@ -166,59 +214,94 @@
             <input
               type="checkbox"
               checked={Boolean(settings?.autoRunLastSearch)}
@@ -316,7 +310,6 @@ type SearchResponse = {
         </label>
 
         {/* Prompt library */}
-@@ -228,17 +311,21 @@
             <select
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               value={lastUsedId ?? ""}
@@ -342,7 +335,6 @@ type SearchResponse = {
                 if (!p) return;
                 setProvider(p.provider);
                 setModel(p.model || "");
-@@ -250,7 +337,7 @@
             </button>
             <button
               className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
@@ -351,7 +343,6 @@ type SearchResponse = {
               disabled={!lastUsedId}
             >
               Delete
-@@ -260,11 +347,12 @@
             <input
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               placeholder="Name to save current prompt…"
@@ -366,7 +357,6 @@ type SearchResponse = {
                 if (!newName.trim()) return;
                 addPrompt({ name: newName.trim(), text: prompt, provider, model: model || undefined });
                 setNewName("");
-@@ -282,12 +370,24 @@
       {data && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
@@ -395,8 +385,6 @@ type SearchResponse = {
               </button>
             </div>
           </div>
-
-@@ -297,6 +397,8 @@
               const domain = getDomain(homepage);
               const score = scores[domain];
               const inCRM = existsDomain(domain);
@@ -405,7 +393,6 @@ type SearchResponse = {
               return (
                 <li key={it.link} className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
                   <div className="flex items-start justify-between gap-4">
-@@ -306,7 +408,9 @@
                       </a>
                       <div className="text-xs text-[var(--muted)] mt-1">
                         {it.displayLink} •{" "}
@@ -416,7 +403,6 @@ type SearchResponse = {
                       </div>
                     </div>
 
-@@ -315,12 +419,27 @@
                       {inCRM ? (
                         <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">In CRM</span>
                       ) : (
@@ -446,7 +432,6 @@ type SearchResponse = {
                 </li>
               );
             })}
-@@ -329,27 +448,35 @@
       )}
 
       {/* Add-to-CRM modal */}
@@ -494,7 +479,6 @@ type SearchResponse = {
           </div>
 
           <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Sizing & Tags</div>
-@@ -359,7 +486,7 @@
               <select
                 className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
                 value={draft.sizeTag || ""}
@@ -503,7 +487,6 @@ type SearchResponse = {
               >
                 <option value="">—</option>
                 <option value="BIG">BIG</option>
-@@ -373,47 +500,74 @@
                 className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
                 placeholder="priority,repeat-buyer,EMEA"
                 value={tagsText}

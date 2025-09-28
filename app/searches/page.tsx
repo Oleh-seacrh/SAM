@@ -10,8 +10,8 @@ import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
 
 // NEW: кнопка інференсу брендів та бейджі
-import FindClientButton from "@/components/search/FindClientButton";
-import BrandBadge from "@/components/search/BrandBadge";
+import { FindClientButton } from "@/components/search/FindClientButton"
+import { BrandBadge } from "@/components/search/BrandBadge"
 
 /* ---------- types ---------- */
 type SearchItem = {

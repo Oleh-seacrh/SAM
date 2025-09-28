@@ -8,10 +8,8 @@ import { usePrompts } from "@/hooks/use-prompts";
 import { canonicalHomepage, getDomain } from "@/lib/domain";
 import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
-
-// NEW: кнопка інференсу брендів та бейджі
-import { FindClientButton } from "@/components/search/FindClientButton"
-import { BrandBadge } from "@/components/search/BrandBadge"
+import { FindClientButton } from "@/components/search/FindClientButton";
+import { BrandBadge } from "@/components/search/BrandBadge";
 
 /* ---------- types ---------- */
 type SearchItem = {
@@ -68,17 +66,17 @@ export default function SearchesPage() {
 
   // LLM UI
   const [provider, setProvider] = useState<"openai" | "anthropic" | "gemini">("openai");
-  const [model, setModel] = useState<string>(""); // опційно, можна лишати порожнім
+  const [model, setModel] = useState<string>(""); // optional
   const [prompt, setPrompt] = useState<string>(
     "Target: B2B distributors/manufacturers of X-ray film and related medical imaging consumables. Exclude blogs, news, generic marketplaces."
   );
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
-  // NEW: результати інференсу брендів (url -> brands[])
+  // Brand inference (by original result URL)
   const [brandMatches, setBrandMatches] = useState<Record<string, string[]>>({});
 
-  // NEW: prompt library save name
+  // Prompt library save name
   const [newName, setNewName] = useState("");
 
   // history chips
@@ -113,8 +111,7 @@ export default function SearchesPage() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Search failed");
 
-      // нормалізуємо items: заповнюємо homepage та домен
-      const items = (j.items ?? []).map((it: any) => {
+      const items: SearchItem[] = (j.items ?? []).map((it: any) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         return {
           title: it.title,
@@ -122,7 +119,7 @@ export default function SearchesPage() {
           displayLink: it.displayLink,
           snippet: it.snippet,
           homepage,
-        } as SearchItem;
+        };
       });
 
       const merged: SearchResponse = {
@@ -136,7 +133,7 @@ export default function SearchesPage() {
       };
       setData(merged);
 
-      // скидаємо попередні оцінки й інференс брендів для нової видачі
+      // reset previous analysis state for a new result set
       setScores({});
       setBrandMatches({});
 
@@ -176,13 +173,16 @@ export default function SearchesPage() {
     setScoring(true);
     setErr(null);
     try {
+      // ✅ ВАЖЛИВО: додаємо domain у кожен item, щоб бекенд /api/score міг його читати
       const items = data.items.map((it) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
+        const domain = getDomain(homepage);
         return {
           link: it.link,
           title: it.title,
           snippet: it.snippet || "",
           homepage,
+          domain, // <— ключове поле для buildUserText()/бекенду
         };
       });
 
@@ -358,7 +358,6 @@ export default function SearchesPage() {
               {scoring ? "Analyzing…" : "Analyze current results"}
             </button>
 
-            {/* NEW: Find client (brand inference) */}
             <FindClientButton
               provider={provider}
               model={model || undefined}
@@ -446,17 +445,13 @@ export default function SearchesPage() {
       </div>
 
       {/* results */}
-      {err && (
-        <div className="text-sm text-red-400">
-          {err}
-        </div>
-      )}
+      {err && <div className="text-sm text-red-400">{err}</div>}
 
       {data && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="text-sm text-[var(--muted)]">
-              Query: <b>{data.q}</b> • Total: {data.totalResults.toLocaleString()}
+              Query: <b>{data.q}</b> • Total: {Number(data.totalResults || 0).toLocaleString()}
             </div>
             <div className="flex gap-2">
               <button
@@ -482,7 +477,7 @@ export default function SearchesPage() {
               const domain = getDomain(homepage);
               const score = scores[domain];
               const inCRM = existsDomain(domain);
-              const brands = brandMatches[it.link] || []; // інференс повертає ключем саме вихідний URL
+              const brands = brandMatches[it.link] || [];
 
               return (
                 <li key={it.link} className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
@@ -514,10 +509,8 @@ export default function SearchesPage() {
                     </div>
                   </div>
 
-                  {/* snippet */}
                   {it.snippet && <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>}
 
-                  {/* NEW: інференсовані бренди як бейджі */}
                   {!!brands.length && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {brands.map((b) => (

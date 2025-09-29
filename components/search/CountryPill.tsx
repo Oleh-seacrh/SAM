@@ -12,29 +12,28 @@ export function CountryPill({
   countryName: string | null;
 }) {
   if (!countryISO2 && !countryName) return null;
-
-  const iso = countryISO2 || "";
-  const displayText = countryName || iso;
-  const [imgError, setImgError] = useState(false);
-  const flagUrl = iso ? flagImgSrc(iso) : "";
+  const iso = (countryISO2 || "").toUpperCase();
+  const display = countryName || iso;
+  const [error, setError] = useState(false);
+  const img = iso ? flagImgSrc(iso) : "";
   const fallback = iso ? flagEmoji(iso) : "";
 
   return (
     <Badge tone="maybe" className="inline-flex items-center gap-1">
-      {flagUrl && !imgError && (
+      {img && !error && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={flagUrl}
-          alt={`${iso} flag`}
+          src={img}
+          alt={iso}
           className="w-4 h-3"
           loading="lazy"
-          onError={() => setImgError(true)}
+          onError={() => setError(true)}
         />
       )}
-      {(imgError || !flagUrl) && fallback && (
+      {(error || !img) && fallback && (
         <span className="text-xs leading-none">{fallback}</span>
       )}
-      <span>{displayText}</span>
+      <span>{display}</span>
     </Badge>
   );
 }

@@ -79,6 +79,14 @@ function buildPrompt(self: SelfShape | null) {
   return `
 ${meLine}
 
+SELF_PROFILE (this is our own organization – NEVER use these values as the external contact):
+Name: {{self.name}}
+Company: {{self.company}}
+Email: {{self.email}}
+Domain: {{self.domain}}
+Country: {{self.country}}
+SELF_DOMAINS: [{{self.domain}}, www.{{self.domain}}]
+
 Контекст: на вхід подається СКРІН/ФОТО, часто це скрін WhatsApp або іншого месенджера.
 Твоє завдання:
 1) ІГНОРУЙ елементи інтерфейсу (кнопки, іконки, статуси, UI WhatsApp/Android/iOS).

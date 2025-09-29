@@ -70,6 +70,9 @@ export default function SearchesPage() {
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
+  // Повертаємо brandMatches: url -> brands[] (на основі локального списку брендів із Settings)
+  const [brandMatches, setBrandMatches] = useState<Record<string, string[]>>({});
+
   // History
   const [history, setHistory] = useState<string[]>([]);
 
@@ -81,7 +84,6 @@ export default function SearchesPage() {
 
   /* -------------- Effects -------------- */
 
-  // Restore settings on load
   useEffect(() => {
     if (!settings) return;
     if (settings.lastQuery) setQ(settings.lastQuery);
@@ -92,7 +94,6 @@ export default function SearchesPage() {
     if (settings.lastPrompt) setPrompt(settings.lastPrompt);
   }, [settings]);
 
-  // Auto-run last search if enabled
   useEffect(() => {
     if (!settings?.autoRunLastSearch) return;
     if (settings?.lastQuery) {
@@ -101,7 +102,6 @@ export default function SearchesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.autoRunLastSearch]);
 
-  // Maintain small history
   useEffect(() => {
     if (data?.q) {
       setHistory((prev) => (prev[0] === data.q ? prev : [data.q, ...prev].slice(0, 10)));
@@ -122,14 +122,18 @@ export default function SearchesPage() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Search failed");
       setData(j as SearchResponse);
+
+      // Скидаємо попередні аналізи
       setScores({});
+      setBrandMatches({});
       setLastSearch(query, num, j.start);
-      // save session snapshot
+
+      // Зберегти у sessions
       const savedItems: SavedItem[] = (j.items ?? []).map((it: any) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         return {
           title: it.title,
-            link: it.link,
+          link: it.link,
           displayLink: it.displayLink,
           snippet: it.snippet,
           homepage,
@@ -173,7 +177,9 @@ export default function SearchesPage() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Scoring failed");
-      setScores(j.scoresByDomain || {});
+
+      // Фолбек на випадок старого формату
+      setScores(j.scoresByDomain || j.scores || {});
     } catch (e: any) {
       setErr(e.message || "Scoring failed");
     } finally {
@@ -328,7 +334,7 @@ export default function SearchesPage() {
             </select>
           </label>
 
-            <label className="text-sm">
+          <label className="text-sm">
             <span className="mb-1 inline-block">Model (optional)</span>
             <input
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
@@ -346,10 +352,18 @@ export default function SearchesPage() {
             >
               {scoring ? "Analyzing…" : "Analyze current results"}
             </button>
+            {/* Повернули FindClientButton із brandMatches */}
             <FindClientButton
               provider={provider}
               model={model || undefined}
-              prompt={prompt}
+              items={(data?.items || []).map((it) => ({
+                link: it.link,
+                title: it.title,
+                snippet: it.snippet || "",
+              }))}
+              onResult={(byUrl) => {
+                setBrandMatches(byUrl);
+              }}
               disabled={!data?.items?.length}
             />
           </div>
@@ -466,6 +480,14 @@ export default function SearchesPage() {
               const score = scores[domain];
               const inCRM = existsDomain(domain);
 
+              const llmBrands = score?.detectedBrands || [];
+              const matchedBrands = brandMatches[it.link] || [];
+
+              // Бренди з brandMatches, яких немає серед LLM detected
+              const extraMatched = matchedBrands.filter(
+                (mb) => !llmBrands.some((lb) => lb.toLowerCase() === mb.toLowerCase())
+              );
+
               return (
                 <li key={it.link} className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
                   <div className="flex items-start justify-between gap-4">
@@ -492,7 +514,6 @@ export default function SearchesPage() {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {/* Score pills */}
                       {score && (
                         <div className="flex gap-2 flex-wrap">
                           <Badge tone={score.label}>{score.label.toUpperCase()}</Badge>
@@ -503,7 +524,6 @@ export default function SearchesPage() {
                           />
                         </div>
                       )}
-
                       {inCRM ? (
                         <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">
                           In CRM
@@ -523,25 +543,39 @@ export default function SearchesPage() {
                     <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>
                   )}
 
-                  {/* Detected brands */}
-                  {score?.detectedBrands?.length > 0 && (
+                  {/* LLM Detected Brands */}
+                  {llmBrands.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {score.detectedBrands.map((b) => (
+                      {llmBrands.map((b) => (
                         <BrandBadge key={b} label={b} tone="maybe" />
                       ))}
                     </div>
                   )}
 
-                  {/* LLM Analysis Details */}
+                  {/* Additional Matched Brands (Configured) */}
+                  {extraMatched.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {extraMatched.map((b) => (
+                        <BrandBadge key={b} label={b} tone="good" />
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Якщо LLM нічого не знайшов, але є matchedBrands */}
+                  {llmBrands.length === 0 && extraMatched.length === 0 && matchedBrands.length > 0 && (
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {matchedBrands.map((b) => (
+                        <BrandBadge key={b} label={b} tone="maybe" />
+                      ))}
+                    </div>
+                  )}
+
                   {score && (
                     <div className="mt-3 p-3 bg-black/20 rounded-lg">
-                      <div className="text-xs text-[var(--muted)] mb-2">
-                        LLM Analysis Details:
-                      </div>
+                      <div className="text-xs text-[var(--muted)] mb-2">LLM Analysis Details:</div>
                       <div className="text-xs space-y-1">
                         <div>
-                          <strong>Confidence:</strong>{" "}
-                          {(score.confidence * 100).toFixed(0)}%
+                          <strong>Confidence:</strong> {(score.confidence * 100).toFixed(0)}%
                         </div>
                         {score.reasons?.length > 0 && (
                           <div>
@@ -639,7 +673,7 @@ export default function SearchesPage() {
             }
           />
 
-          <Field
+            <Field
             label="Note"
             value={draft.note || ""}
             onChange={(v) => setDraft((d: any) => ({ ...d, note: v }))}

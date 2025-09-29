@@ -80,12 +80,12 @@ function buildPrompt(self: SelfShape | null) {
 ${meLine}
 
 SELF_PROFILE (this is our own organization – NEVER use these values as the external contact):
-Name: {{self.name}}
-Company: {{self.company}}
-Email: {{self.email}}
-Domain: {{self.domain}}
-Country: {{self.country}}
-SELF_DOMAINS: [{{self.domain}}, www.{{self.domain}}]
+Name: ${self?.name || 'N/A'}
+Company: ${self?.company || 'N/A'}
+Email: ${self?.email || 'N/A'}
+Domain: ${self?.domain || 'N/A'}
+Country: ${self?.country || 'N/A'}
+SELF_DOMAINS: [${self?.domain || 'N/A'}, www.${self?.domain || 'N/A'}]
 
 Контекст: на вхід подається СКРІН/ФОТО, часто це скрін WhatsApp або іншого месенджера.
 Твоє завдання:

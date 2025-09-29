@@ -13,8 +13,14 @@ import { BrandBadge } from "@/components/search/BrandBadge";
 import { CountryPill } from "@/components/search/CountryPill";
 import { TypePill } from "@/components/search/TypePill";
 
-/* ---------------- Types ---------------- */
+/* ==================================================
+ * Config / Debug
+ * ================================================== */
+const ENABLE_SCORE_DEBUG = false;
 
+/* ==================================================
+ * Types
+ * ================================================== */
 type SearchItem = {
   title: string;
   link: string;
@@ -46,8 +52,66 @@ type Score = {
 
 type ScoresByDomain = Record<string, Score>;
 
-/* ---------------- Component ---------------- */
+/* ==================================================
+ * Utility (frontend normalization safety net)
+ * ================================================== */
+function normalizeScores(raw: any): ScoresByDomain {
+  const src = raw?.scoresByDomain || raw?.scores || {};
+  const out: ScoresByDomain = {};
+  for (const [k, v] of Object.entries<any>(src)) {
+    if (!v || typeof v !== "object") continue;
+    const domain = k.replace(/^www\./i, "").toLowerCase();
+    const companyType =
+      v.companyType || v.company_type || v.type || "other";
+    const countryISO2 =
+      v.countryISO2 && /^[A-Z]{2}$/i.test(v.countryISO2)
+        ? v.countryISO2.toUpperCase()
+        : null;
+    const countryName = v.countryName || v.country_name || null;
+    const detectedBrands = Array.isArray(v.detectedBrands)
+      ? Array.from(
+          new Set(
+            v.detectedBrands
+              .map((b: any) => String(b).trim())
+              .filter((b: string) => b.length > 0 && b.length <= 80)
+          )
+        )
+      : [];
+    out[domain] = {
+      label: ["good", "maybe", "bad"].includes(v.label) ? v.label : "maybe",
+      confidence:
+        typeof v.confidence === "number" &&
+        v.confidence >= 0 &&
+        v.confidence <= 1
+          ? v.confidence
+          : 0.5,
+      reasons: Array.isArray(v.reasons) ? v.reasons.slice(0, 10) : [],
+      tags: Array.isArray(v.tags) ? v.tags.slice(0, 25) : [],
+      companyType:
+        ["manufacturer", "distributor", "dealer", "other"].includes(companyType)
+          ? companyType
+          : "other",
+      countryISO2,
+      countryName: countryISO2 ? countryName : countryName && countryName.length >= 3 ? countryName : null,
+      detectedBrands,
+    };
+  }
+  return out;
+}
 
+function pickScore(scores: ScoresByDomain, rawDomain: string): Score | undefined {
+  const base = rawDomain.replace(/^www\./i, "").toLowerCase();
+  return (
+    scores[base] ||
+    scores["www." + base] ||
+    scores[base.replace(/^www\./, "")] ||
+    undefined
+  );
+}
+
+/* ==================================================
+ * Component
+ * ================================================== */
 export default function SearchesPage() {
   const [q, setQ] = useState("");
   const [num, setNum] = useState(10);
@@ -59,10 +123,12 @@ export default function SearchesPage() {
   const { add: addCRM, existsDomain } = useCRM();
   const { add: addSession } = useSessions();
   const { settings, setLastSearch, setLLM, setAutoRun } = useSettings();
-  const { prompts, add: addPrompt, remove: removePrompt, lastUsedId, setLastUsedId } = usePrompts();
+  const { prompts, add: addPrompt, remove: removePrompt, lastUsedId, setLastUsedId } =
+    usePrompts();
 
   // LLM controls
-  const [provider, setProvider] = useState<"openai" | "anthropic" | "gemini">("openai");
+  const [provider, setProvider] =
+    useState<"openai" | "anthropic" | "gemini">("openai");
   const [model, setModel] = useState<string>("");
   const [prompt, setPrompt] = useState<string>(
     "Target: B2B distributors/manufacturers of X-ray film and related medical imaging consumables. Exclude blogs, news, generic marketplaces."
@@ -70,33 +136,32 @@ export default function SearchesPage() {
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
-  // Повертаємо brandMatches: url -> brands[] (на основі локального списку брендів із Settings)
+  // brandMatches (configured inference)
   const [brandMatches, setBrandMatches] = useState<Record<string, string[]>>({});
 
   // History
   const [history, setHistory] = useState<string[]>([]);
 
-  // Add-to-CRM modal state
+  // Add-to-CRM modal
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<any>({});
   const [newName, setNewName] = useState("");
   const [tagsText, setTagsText] = useState("");
 
-  /* -------------- Effects -------------- */
-
+  /* ---------------- Effects ---------------- */
   useEffect(() => {
     if (!settings) return;
-    if (settings.lastQuery) setQ(settings.lastQuery);
-    if (settings.lastStart) setStart(settings.lastStart);
-    if (settings.lastNum) setNum(settings.lastNum);
-    if (settings.lastProvider) setProvider(settings.lastProvider);
-    if (settings.lastModel) setModel(settings.lastModel);
-    if (settings.lastPrompt) setPrompt(settings.lastPrompt);
+    settings.lastQuery && setQ(settings.lastQuery);
+    settings.lastStart && setStart(settings.lastStart);
+    settings.lastNum && setNum(settings.lastNum);
+    settings.lastProvider && setProvider(settings.lastProvider);
+    settings.lastModel && setModel(settings.lastModel);
+    settings.lastPrompt && setPrompt(settings.lastPrompt);
   }, [settings]);
 
   useEffect(() => {
     if (!settings?.autoRunLastSearch) return;
-    if (settings?.lastQuery) {
+    if (settings.lastQuery) {
       runSearch(settings.lastStart || 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -104,12 +169,11 @@ export default function SearchesPage() {
 
   useEffect(() => {
     if (data?.q) {
-      setHistory((prev) => (prev[0] === data.q ? prev : [data.q, ...prev].slice(0, 10)));
+      setHistory(p => (p[0] === data.q ? p : [data.q, ...p].slice(0, 10)));
     }
   }, [data?.q]);
 
-  /* -------------- Actions -------------- */
-
+  /* ---------------- Actions ---------------- */
   async function runSearch(nextStart?: number) {
     const query = q.trim();
     if (!query) return;
@@ -122,13 +186,11 @@ export default function SearchesPage() {
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Search failed");
       setData(j as SearchResponse);
-
-      // Скидаємо попередні аналізи
       setScores({});
       setBrandMatches({});
       setLastSearch(query, num, j.start);
 
-      // Зберегти у sessions
+      // session snapshot
       const savedItems: SavedItem[] = (j.items ?? []).map((it: any) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         return {
@@ -160,7 +222,7 @@ export default function SearchesPage() {
     setScoring(true);
     setErr(null);
     try {
-      const items = data.items.map((it) => {
+      const items = data.items.map(it => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         return {
           title: it.title,
@@ -177,9 +239,9 @@ export default function SearchesPage() {
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Scoring failed");
-
-      // Фолбек на випадок старого формату
-      setScores(j.scoresByDomain || j.scores || {});
+      const normalized = normalizeScores(j);
+      if (ENABLE_SCORE_DEBUG) console.log("LLM RAW SCORE RESP", j, "NORMALIZED", normalized);
+      setScores(normalized);
     } catch (e: any) {
       setErr(e.message || "Scoring failed");
     } finally {
@@ -214,24 +276,24 @@ export default function SearchesPage() {
     const dealValue = draft.dealValueUSD ? Number(draft.dealValueUSD) : undefined;
     const tags = tagsText
       .split(",")
-      .map((s) => s.trim())
+      .map(s => s.trim())
       .filter(Boolean);
-    const payload = {
+    addCRM({
       ...draft,
       dealValueUSD: dealValue,
       sizeTag: draft.sizeTag || undefined,
       tags,
-    };
-    addCRM(payload);
+    });
     setOpen(false);
   }
 
-  /* -------------- Memos -------------- */
+  /* ---------------- Memo ---------------- */
   const canPrev = useMemo(() => !!data?.prevStart, [data?.prevStart]);
   const canNext = useMemo(() => !!data?.nextStart, [data?.nextStart]);
 
-  /* -------------- Render -------------- */
-
+  /* ==================================================
+   * Render
+   * ================================================== */
   return (
     <div className="p-6 space-y-6">
       <div className="flex items-center gap-3">
@@ -247,10 +309,10 @@ export default function SearchesPage() {
         </div>
       )}
 
-      {/* Search form */}
+      {/* Search Form */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
         <form
-          onSubmit={(e) => {
+          onSubmit={e => {
             e.preventDefault();
             setStart(1);
             runSearch(1);
@@ -261,15 +323,15 @@ export default function SearchesPage() {
             className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none"
             placeholder="Enter keywords (e.g., x-ray film distributor germany)"
             value={q}
-            onChange={(e) => setQ(e.target.value)}
+            onChange={e => setQ(e.target.value)}
           />
-          <input
+            <input
             type="number"
             min={1}
             max={50}
             className="w-32 rounded-lg bg-black/20 border border-white/10 px-3 py-2"
             value={num}
-            onChange={(e) => setNum(Number(e.target.value) || 10)}
+            onChange={e => setNum(Number(e.target.value) || 10)}
           />
           <button
             type="submit"
@@ -285,7 +347,7 @@ export default function SearchesPage() {
             <input
               type="checkbox"
               checked={Boolean(settings?.autoRunLastSearch)}
-              onChange={(e) => setAutoRun(e.target.checked)}
+              onChange={e => setAutoRun(e.target.checked)}
             />
             Auto-run last search on load
           </label>
@@ -300,7 +362,7 @@ export default function SearchesPage() {
           <div className="mt-3 text-sm text-[var(--muted)]">
             <div className="mb-1">Recent queries:</div>
             <div className="flex flex-wrap gap-2">
-              {history.map((h) => (
+              {history.map(h => (
                 <button
                   key={h}
                   onClick={() => {
@@ -318,7 +380,7 @@ export default function SearchesPage() {
         )}
       </div>
 
-      {/* AI panel */}
+      {/* AI Panel */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="text-sm">
@@ -326,7 +388,7 @@ export default function SearchesPage() {
             <select
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               value={provider}
-              onChange={(e) => setProvider(e.target.value as any)}
+              onChange={e => setProvider(e.target.value as any)}
             >
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
@@ -340,7 +402,7 @@ export default function SearchesPage() {
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               placeholder="auto (e.g., gpt-4o-mini, claude-3-haiku, gemini-1.5-flash)"
               value={model}
-              onChange={(e) => setModel(e.target.value)}
+              onChange={e => setModel(e.target.value)}
             />
           </label>
 
@@ -352,18 +414,15 @@ export default function SearchesPage() {
             >
               {scoring ? "Analyzing…" : "Analyze current results"}
             </button>
-            {/* Повернули FindClientButton із brandMatches */}
             <FindClientButton
               provider={provider}
               model={model || undefined}
-              items={(data?.items || []).map((it) => ({
+              items={(data?.items || []).map(it => ({
                 link: it.link,
                 title: it.title,
                 snippet: it.snippet || "",
               }))}
-              onResult={(byUrl) => {
-                setBrandMatches(byUrl);
-              }}
+              onResult={byUrl => setBrandMatches(byUrl)}
               disabled={!data?.items?.length}
             />
           </div>
@@ -374,22 +433,22 @@ export default function SearchesPage() {
           <textarea
             className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-28"
             value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
+            onChange={e => setPrompt(e.target.value)}
             placeholder="Describe ideal prospect criteria…"
           />
         </label>
 
-        {/* Prompt library */}
+        {/* Prompt Library */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <label className="text-sm">
             <span className="mb-1 inline-block">Load saved prompt</span>
             <select
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               value={lastUsedId ?? ""}
-              onChange={(e) => setLastUsedId(e.target.value || null)}
+              onChange={e => setLastUsedId(e.target.value || null)}
             >
               <option value="">— Select —</option>
-              {prompts.map((p) => (
+              {prompts.map(p => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>
@@ -401,7 +460,7 @@ export default function SearchesPage() {
             <button
               className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
               onClick={() => {
-                const p = prompts.find((x) => x.id === lastUsedId);
+                const p = prompts.find(x => x.id === lastUsedId);
                 if (!p) return;
                 setProvider(p.provider);
                 setModel(p.model || "");
@@ -426,7 +485,7 @@ export default function SearchesPage() {
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               placeholder="Name to save current prompt…"
               value={newName}
-              onChange={(e) => setNewName(e.target.value)}
+              onChange={e => setNewName(e.target.value)}
             />
             <button
               className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
@@ -474,22 +533,32 @@ export default function SearchesPage() {
           </div>
 
           <ul className="space-y-3">
-            {data.items.map((it) => {
+            {data.items.map(it => {
               const homepage = canonicalHomepage(it.homepage ?? it.link);
-              const domain = getDomain(homepage);
-              const score = scores[domain];
+              const domain = getDomain(homepage).replace(/^www\./i, "");
+              const score = pickScore(scores, domain);
               const inCRM = existsDomain(domain);
 
               const llmBrands = score?.detectedBrands || [];
-              const matchedBrands = brandMatches[it.link] || [];
+              const matched = brandMatches[it.link] || [];
 
-              // Бренди з brandMatches, яких немає серед LLM detected
-              const extraMatched = matchedBrands.filter(
-                (mb) => !llmBrands.some((lb) => lb.toLowerCase() === mb.toLowerCase())
+              // Об’єднаний набір (уникаємо різнокольорових дублів між джерелами)
+              const matchedLower = new Set(matched.map(b => b.toLowerCase()));
+              const llmLower = new Set(llmBrands.map(b => b.toLowerCase()));
+
+              const extraMatched = matched.filter(b => !llmLower.has(b.toLowerCase()));
+
+              const unifiedBrands = Array.from(
+                new Map(
+                  [...llmBrands, ...extraMatched].map(b => [b.toLowerCase(), b])
+                ).values()
               );
 
               return (
-                <li key={it.link} className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
+                <li
+                  key={it.link}
+                  className="rounded-xl bg-[var(--card)] p-4 border border-white/10"
+                >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
                       <a
@@ -516,7 +585,9 @@ export default function SearchesPage() {
                     <div className="flex items-center gap-2">
                       {score && (
                         <div className="flex gap-2 flex-wrap">
-                          <Badge tone={score.label}>{score.label.toUpperCase()}</Badge>
+                          <Badge tone={score.label}>
+                            {score.label.toUpperCase()}
+                          </Badge>
                           <TypePill companyType={score.companyType} />
                           <CountryPill
                             countryISO2={score.countryISO2}
@@ -540,46 +611,39 @@ export default function SearchesPage() {
                   </div>
 
                   {it.snippet && (
-                    <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>
+                    <p className="mt-2 text-sm text-[var(--muted)]">
+                      {it.snippet}
+                    </p>
                   )}
 
-                  {/* LLM Detected Brands */}
-                  {llmBrands.length > 0 && (
+                  {/* Unified Brands */}
+                  {unifiedBrands.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {llmBrands.map((b) => (
+                      {unifiedBrands.map(b => (
                         <BrandBadge key={b} label={b} tone="maybe" />
                       ))}
-                    </div>
-                  )}
-
-                  {/* Additional Matched Brands (Configured) */}
-                  {extraMatched.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {extraMatched.map((b) => (
-                        <BrandBadge key={b} label={b} tone="good" />
-                      ))}
-                    </div>
-                  )}
-
-                  {/* Якщо LLM нічого не знайшов, але є matchedBrands */}
-                  {llmBrands.length === 0 && extraMatched.length === 0 && matchedBrands.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {matchedBrands.map((b) => (
-                        <BrandBadge key={b} label={b} tone="maybe" />
-                      ))}
+                      {extraMatched.length > 0 && llmBrands.length > 0 && (
+                        <span className="text-[10px] uppercase tracking-wide text-[var(--muted)] self-center">
+                          (+ {extraMatched.length} matched)
+                        </span>
+                      )}
                     </div>
                   )}
 
                   {score && (
                     <div className="mt-3 p-3 bg-black/20 rounded-lg">
-                      <div className="text-xs text-[var(--muted)] mb-2">LLM Analysis Details:</div>
+                      <div className="text-xs text-[var(--muted)] mb-2">
+                        LLM Analysis Details:
+                      </div>
                       <div className="text-xs space-y-1">
                         <div>
-                          <strong>Confidence:</strong> {(score.confidence * 100).toFixed(0)}%
+                          <strong>Confidence:</strong>{" "}
+                          {(score.confidence * 100).toFixed(0)}%
                         </div>
                         {score.reasons?.length > 0 && (
                           <div>
-                            <strong>Reasons:</strong> {score.reasons.join(", ")}
+                            <strong>Reasons:</strong>{" "}
+                            {score.reasons.join(", ")}
                           </div>
                         )}
                         {score.tags?.length > 0 && (
@@ -603,61 +667,65 @@ export default function SearchesPage() {
         </div>
       )}
 
-      {/* Add-to-CRM modal */}
+      {/* Add-to-CRM Modal */}
       <Modal open={open} onClose={() => setOpen(false)}>
         <h3 className="text-lg font-semibold mb-3">Add to CRM</h3>
         <div className="space-y-4">
-          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Company</div>
+          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">
+            Company
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field
               label="Company"
               value={draft.companyName || ""}
-              onChange={(v) => setDraft((d: any) => ({ ...d, companyName: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, companyName: v }))}
             />
             <Field
               label="Country"
               value={draft.country || ""}
-              onChange={(v) => setDraft((d: any) => ({ ...d, country: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, country: v }))}
             />
             <Field
               label="Industry"
               value={draft.industry || ""}
-              onChange={(v) => setDraft((d: any) => ({ ...d, industry: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, industry: v }))}
             />
             <Field
               label="Domain"
               value={draft.domain || ""}
-              onChange={(v) => setDraft((d: any) => ({ ...d, domain: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, domain: v }))}
             />
             <Select
               label="Status"
               value={draft.status || "New"}
-              onChange={(v) => setDraft((d: any) => ({ ...d, status: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, status: v }))}
               options={["New", "Contacted", "Qualified", "Bad Fit"]}
             />
             <Field
               label="Size"
               value={draft.sizeTag || ""}
-              onChange={(v) => setDraft((d: any) => ({ ...d, sizeTag: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, sizeTag: v }))}
             />
           </div>
 
-          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Deal</div>
+          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">
+            Deal
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <Field
               label="Product/Brand"
               value={draft.brand || ""}
-              onChange={(v) => setDraft((d: any) => ({ ...d, brand: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, brand: v }))}
             />
             <Field
               label="Product"
               value={draft.product || ""}
-              onChange={(v) => setDraft((d: any) => ({ ...d, product: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, product: v }))}
             />
             <Field
               label="Quantity"
               value={draft.quantity || ""}
-              onChange={(v) => setDraft((d: any) => ({ ...d, quantity: v }))}
+              onChange={v => setDraft((d: any) => ({ ...d, quantity: v }))}
             />
           </div>
 
@@ -665,7 +733,7 @@ export default function SearchesPage() {
             label="Deal value (USD)"
             type="number"
             value={String(draft.dealValueUSD ?? "")}
-            onChange={(v) =>
+            onChange={v =>
               setDraft((d: any) => ({
                 ...d,
                 dealValueUSD: v ? Number(v) : undefined,
@@ -673,15 +741,15 @@ export default function SearchesPage() {
             }
           />
 
-            <Field
+          <Field
             label="Note"
             value={draft.note || ""}
-            onChange={(v) => setDraft((d: any) => ({ ...d, note: v }))}
+            onChange={v => setDraft((d: any) => ({ ...d, note: v }))}
           />
           <Field
             label="Tags (comma-separated)"
             value={tagsText}
-            onChange={(v) => setTagsText(v)}
+            onChange={v => setTagsText(v)}
             placeholder="priority, repeat-buyer, EMEA"
           />
 
@@ -705,8 +773,9 @@ export default function SearchesPage() {
   );
 }
 
-/* ---------- small form helpers ---------- */
-
+/* ==================================================
+ * Small Form Helpers
+ * ================================================== */
 function Field({
   label,
   value,
@@ -726,7 +795,7 @@ function Field({
       <input
         className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={e => onChange(e.target.value)}
         type={type}
         placeholder={placeholder}
       />
@@ -751,9 +820,9 @@ function Select({
       <select
         className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={e => onChange(e.target.value)}
       >
-        {options.map((opt) => (
+        {options.map(opt => (
           <option key={opt} value={opt}>
             {opt}
           </option>

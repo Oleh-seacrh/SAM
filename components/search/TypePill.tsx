@@ -2,25 +2,25 @@
 
 import { Badge } from "@/components/ui/Badge";
 
-type CompanyType = "manufacturer" | "distributor" | "dealer" | "other";
+export type CompanyType = "manufacturer" | "distributor" | "dealer" | "other";
 
-const typeLabels: Record<CompanyType, string> = {
+const LABEL: Record<CompanyType, string> = {
   manufacturer: "Manufacturer",
   distributor: "Distributor",
   dealer: "Dealer",
   other: "Other",
 };
 
-const typeColors: Record<CompanyType, "good" | "maybe" | "bad"> = {
+const TONE: Record<CompanyType, "good" | "maybe" | "bad"> = {
   manufacturer: "good",
   distributor: "maybe",
   dealer: "maybe",
   other: "bad",
 };
 
-export function TypePill({ companyType }: { companyType: CompanyType | null | undefined }) {
+export function TypePill({ companyType }: { companyType?: CompanyType | null }) {
   if (!companyType) return null;
-  const tone = typeColors[companyType] || "maybe";
-  const label = typeLabels[companyType] || companyType;
-  return <Badge tone={tone}>{label}</Badge>;
+  const tone = TONE[companyType] || "maybe";
+  const text = LABEL[companyType] || companyType;
+  return <Badge tone={tone}>{text}</Badge>;
 }

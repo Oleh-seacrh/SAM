@@ -325,7 +325,7 @@ export default function SearchesPage() {
             value={q}
             onChange={e => setQ(e.target.value)}
           />
-            <input
+          <input
             type="number"
             min={1}
             max={50}
@@ -539,20 +539,19 @@ export default function SearchesPage() {
               const score = pickScore(scores, domain);
               const inCRM = existsDomain(domain);
 
+              // --- brands logic ---
               const llmBrands = score?.detectedBrands || [];
               const matched = brandMatches[it.link] || [];
 
-              // Об’єднаний набір (уникаємо різнокольорових дублів між джерелами)
-              const matchedLower = new Set(matched.map(b => b.toLowerCase()));
               const llmLower = new Set(llmBrands.map(b => b.toLowerCase()));
+              const matchedFiltered = matched.filter(b => !llmLower.has(b.toLowerCase()));
 
-              const extraMatched = matched.filter(b => !llmLower.has(b.toLowerCase()));
+              // Full ordered list (LLM priority first)
+              const orderedBrands = [...llmBrands, ...matchedFiltered];
 
-              const unifiedBrands = Array.from(
-                new Map(
-                  [...llmBrands, ...extraMatched].map(b => [b.toLowerCase(), b])
-                ).values()
-              );
+              // Visible first 3
+              const visibleBrands = orderedBrands.slice(0, 3);
+              const hiddenCount = orderedBrands.length - visibleBrands.length;
 
               return (
                 <li
@@ -616,15 +615,15 @@ export default function SearchesPage() {
                     </p>
                   )}
 
-                  {/* Unified Brands */}
-                  {unifiedBrands.length > 0 && (
+                  {/* Brands (max 3 visible) */}
+                  {orderedBrands.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {unifiedBrands.map(b => (
+                      {visibleBrands.map(b => (
                         <BrandBadge key={b} label={b} tone="maybe" />
                       ))}
-                      {extraMatched.length > 0 && llmBrands.length > 0 && (
+                      {hiddenCount > 0 && (
                         <span className="text-[10px] uppercase tracking-wide text-[var(--muted)] self-center">
-                          (+ {extraMatched.length} matched)
+                          +{hiddenCount} more
                         </span>
                       )}
                     </div>

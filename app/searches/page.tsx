@@ -10,8 +10,11 @@ import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
 import { FindClientButton } from "@/components/search/FindClientButton";
 import { BrandBadge } from "@/components/search/BrandBadge";
+import { CountryPill } from "@/components/search/CountryPill";
+import { TypePill } from "@/components/search/TypePill";
 
-/* ---------- types ---------- */
+/* ---------------- Types ---------------- */
+
 type SearchItem = {
   title: string;
   link: string;
@@ -30,49 +33,22 @@ type SearchResponse = {
   items: SearchItem[];
 };
 
-type Verdict = "GOOD" | "MAYBE" | "BAD";
-
-/** Підтримуємо старий і новий формати від /api/score */
-type ScoreInfo =
-  | Verdict
-  | {
-      verdict: Verdict;
-      confidence?: number;
-      reasons?: string[];
-      tags?: string[];
-    };
-
-type ScoresByDomain = Record<string, ScoreInfo | undefined>;
-
-type DraftOrg = {
-  companyName: string;
-  domain: string;
-  status: "New" | "Contacted" | "Qualified" | "Bad Fit";
-  source: string; // e.g. "google"
-  brand: string;
-  product: string;
-  quantity: string;
-  dealValueUSD?: number;
-  country: string;
-  industry: string;
-  note: string;
-  sizeTag?: "" | "BIG";
+type Score = {
+  label: "good" | "maybe" | "bad";
+  confidence: number;
+  reasons: string[];
   tags: string[];
+  companyType: "manufacturer" | "distributor" | "dealer" | "other";
+  countryISO2: string | null;
+  countryName: string | null;
+  detectedBrands: string[];
 };
 
-/* Допоміжний витяг вердикту з будь-якого формату */
-function asVerdict(s: ScoreInfo | undefined): Verdict | null {
-  if (!s) return null;
-  if (typeof s === "string") return s as Verdict;
-  if (typeof (s as any)?.verdict === "string") return (s as any).verdict as Verdict;
-  if (typeof (s as any)?.label === "string") return (s as any).label as Verdict; // на випадок іншої назви
-  if (typeof (s as any)?.score === "string") return (s as any).score as Verdict;
-  return null;
-}
+type ScoresByDomain = Record<string, Score>;
 
-/* ---------- page component ---------- */
+/* ---------------- Component ---------------- */
+
 export default function SearchesPage() {
-  // core state
   const [q, setQ] = useState("");
   const [num, setNum] = useState(10);
   const [start, setStart] = useState(1);
@@ -82,91 +58,78 @@ export default function SearchesPage() {
 
   const { add: addCRM, existsDomain } = useCRM();
   const { add: addSession } = useSessions();
-  const { settings, setLastSearch, setAutoRun } = useSettings();
+  const { settings, setLastSearch, setLLM, setAutoRun } = useSettings();
   const { prompts, add: addPrompt, remove: removePrompt, lastUsedId, setLastUsedId } = usePrompts();
 
-  // LLM UI
+  // LLM controls
   const [provider, setProvider] = useState<"openai" | "anthropic" | "gemini">("openai");
-  const [model, setModel] = useState<string>(""); // optional
+  const [model, setModel] = useState<string>("");
   const [prompt, setPrompt] = useState<string>(
     "Target: B2B distributors/manufacturers of X-ray film and related medical imaging consumables. Exclude blogs, news, generic marketplaces."
   );
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
-  // Brand inference (by original result URL)
-  const [brandMatches, setBrandMatches] = useState<Record<string, string[]>>({});
-
-  // Prompt library save name
-  const [newName, setNewName] = useState("");
-
-  // history chips
+  // History
   const [history, setHistory] = useState<string[]>([]);
 
-  // restore last search + auto-run
+  // Add-to-CRM modal state
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<any>({});
+  const [newName, setNewName] = useState("");
+  const [tagsText, setTagsText] = useState("");
+
+  /* -------------- Effects -------------- */
+
+  // Restore settings on load
+  useEffect(() => {
+    if (!settings) return;
+    if (settings.lastQuery) setQ(settings.lastQuery);
+    if (settings.lastStart) setStart(settings.lastStart);
+    if (settings.lastNum) setNum(settings.lastNum);
+    if (settings.lastProvider) setProvider(settings.lastProvider);
+    if (settings.lastModel) setModel(settings.lastModel);
+    if (settings.lastPrompt) setPrompt(settings.lastPrompt);
+  }, [settings]);
+
+  // Auto-run last search if enabled
   useEffect(() => {
     if (!settings?.autoRunLastSearch) return;
     if (settings?.lastQuery) {
-      setQ(settings.lastQuery);
-      setStart(settings.lastStart || 1);
-      runSearch(settings.lastStart || 1, settings.lastQuery);
+      runSearch(settings.lastStart || 1);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [settings?.autoRunLastSearch]);
 
+  // Maintain small history
   useEffect(() => {
     if (data?.q) {
-      setHistory((p) => (p[0] === data.q ? p : [data.q, ...p].slice(0, 10)));
+      setHistory((prev) => (prev[0] === data.q ? prev : [data.q, ...prev].slice(0, 10)));
     }
   }, [data?.q]);
 
-  /* ---------- actions ---------- */
-  async function runSearch(nextStart?: number, explicitQ?: string) {
-    const query = (explicitQ ?? q).trim();
+  /* -------------- Actions -------------- */
+
+  async function runSearch(nextStart?: number) {
+    const query = q.trim();
     if (!query) return;
     setLoading(true);
     setErr(null);
     try {
-      const s = nextStart ?? start;
-      const r = await fetch(`/api/search?q=${encodeURIComponent(query)}&num=${num}&start=${s}`);
+      const r = await fetch(
+        `/api/search?q=${encodeURIComponent(query)}&num=${num}&start=${nextStart || 1}`
+      );
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Search failed");
-
-      const items: SearchItem[] = (j.items ?? []).map((it: any) => {
-        const homepage = canonicalHomepage(it.homepage ?? it.link);
-        return {
-          title: it.title,
-          link: it.link,
-          displayLink: it.displayLink,
-          snippet: it.snippet,
-          homepage,
-        };
-      });
-
-      const merged: SearchResponse = {
-        q: j.q,
-        num: j.num,
-        start: j.start,
-        nextStart: j.nextStart ?? null,
-        prevStart: j.prevStart ?? null,
-        totalResults: j.totalResults || 0,
-        items,
-      };
-      setData(merged);
-
-      // reset previous analysis state for a new result set
+      setData(j as SearchResponse);
       setScores({});
-      setBrandMatches({});
-
-      // persist last search
-      setLastSearch(query, merged.start, merged.num);
-
+      setLastSearch(query, num, j.start);
       // save session snapshot
-      const savedItems: SavedItem[] = items.map((it) => {
+      const savedItems: SavedItem[] = (j.items ?? []).map((it: any) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
         return {
           title: it.title,
-          link: it.link,
+            link: it.link,
           displayLink: it.displayLink,
           snippet: it.snippet,
           homepage,
@@ -174,13 +137,12 @@ export default function SearchesPage() {
         };
       });
       addSession({
-        q: merged.q,
-        num: merged.num,
-        start: merged.start,
-        totalResults: merged.totalResults,
+        q: j.q,
+        num: j.num,
+        start: j.start,
+        totalResults: j.totalResults || 0,
         items: savedItems,
       });
-
       if (nextStart !== undefined) setStart(nextStart);
     } catch (e: any) {
       setErr(e.message || "Search failed");
@@ -194,28 +156,24 @@ export default function SearchesPage() {
     setScoring(true);
     setErr(null);
     try {
-      // Надсилаємо domain у кожному item — бекенд його використовує
       const items = data.items.map((it) => {
         const homepage = canonicalHomepage(it.homepage ?? it.link);
-        const domain = getDomain(homepage);
         return {
-          link: it.link,
           title: it.title,
-          snippet: it.snippet || "",
+          snippet: it.snippet,
           homepage,
-          domain,
+          domain: getDomain(homepage),
         };
       });
 
       const r = await fetch("/api/score", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ provider, model: model || undefined, prompt, items }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Scoring failed");
-      // новий бекенд може повертати об’єкти — залишаємо як є
-      setScores(j.scores || {});
+      setScores(j.scoresByDomain || {});
     } catch (e: any) {
       setErr(e.message || "Scoring failed");
     } finally {
@@ -223,33 +181,10 @@ export default function SearchesPage() {
     }
   }
 
-  const canPrev = useMemo(() => !!data?.prevStart, [data?.prevStart]);
-  const canNext = useMemo(() => !!data?.nextStart, [data?.nextStart]);
-
-  /* ---------- Add-to-CRM modal ---------- */
-  const [open, setOpen] = useState(false);
-  const [draft, setDraft] = useState<DraftOrg>({
-    companyName: "",
-    domain: "",
-    status: "New",
-    source: "google",
-    brand: "",
-    product: "",
-    quantity: "",
-    dealValueUSD: undefined,
-    country: "",
-    industry: "",
-    note: "",
-    sizeTag: "",
-    tags: [],
-  });
-  const [tagsText, setTagsText] = useState("");
-
   function openAddModal(it: SearchItem) {
     const homepage = canonicalHomepage(it.homepage ?? it.link);
     const domain = getDomain(homepage);
-    setDraft((d) => ({
-      ...d,
+    setDraft({
       companyName: it.title?.slice(0, 80) || domain,
       domain,
       status: "New",
@@ -263,7 +198,7 @@ export default function SearchesPage() {
       note: "",
       sizeTag: "",
       tags: [],
-    }));
+    });
     setTagsText("");
     setOpen(true);
   }
@@ -275,15 +210,38 @@ export default function SearchesPage() {
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    const payload = { ...draft, dealValueUSD: dealValue, sizeTag: draft.sizeTag || undefined, tags };
+    const payload = {
+      ...draft,
+      dealValueUSD: dealValue,
+      sizeTag: draft.sizeTag || undefined,
+      tags,
+    };
     addCRM(payload);
     setOpen(false);
   }
 
-  /* ---------- render ---------- */
+  /* -------------- Memos -------------- */
+  const canPrev = useMemo(() => !!data?.prevStart, [data?.prevStart]);
+  const canNext = useMemo(() => !!data?.nextStart, [data?.nextStart]);
+
+  /* -------------- Render -------------- */
+
   return (
-    <div className="p-4 space-y-4">
-      {/* Search form + autorun toggle */}
+    <div className="p-6 space-y-6">
+      <div className="flex items-center gap-3">
+        <h1 className="text-xl font-semibold">Find Client</h1>
+        <a href="/settings?tab=search" className="text-sm underline opacity-80">
+          Settings →
+        </a>
+      </div>
+
+      {err && (
+        <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-red-400">
+          {err}
+        </div>
+      )}
+
+      {/* Search form */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
         <form
           onSubmit={(e) => {
@@ -295,9 +253,17 @@ export default function SearchesPage() {
         >
           <input
             className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 outline-none"
-            placeholder="Enter keywords (e.g., x-ray film distributor India)"
+            placeholder="Enter keywords (e.g., x-ray film distributor germany)"
             value={q}
             onChange={(e) => setQ(e.target.value)}
+          />
+          <input
+            type="number"
+            min={1}
+            max={50}
+            className="w-32 rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+            value={num}
+            onChange={(e) => setNum(Number(e.target.value) || 10)}
           />
           <button
             type="submit"
@@ -308,44 +274,45 @@ export default function SearchesPage() {
           </button>
         </form>
 
-        <label className="mt-3 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={Boolean(settings?.autoRunLastSearch)}
-            onChange={(e) => setAutoRun(e.target.checked)}
-          />
-          Auto-run last search on load
-        </label>
+        <div className="mt-3 flex items-center justify-between text-sm text-[var(--muted)]">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={Boolean(settings?.autoRunLastSearch)}
+              onChange={(e) => setAutoRun(e.target.checked)}
+            />
+            Auto-run last search on load
+          </label>
+          {settings?.lastQuery && (
+            <span>
+              Last: <b>{settings.lastQuery}</b>
+            </span>
+          )}
+        </div>
 
-        {settings?.lastQuery && (
-          <div className="mt-1 text-sm text-[var(--muted)]">
-            Last: <b>{settings.lastQuery}</b>
+        {history.length > 0 && (
+          <div className="mt-3 text-sm text-[var(--muted)]">
+            <div className="mb-1">Recent queries:</div>
+            <div className="flex flex-wrap gap-2">
+              {history.map((h) => (
+                <button
+                  key={h}
+                  onClick={() => {
+                    setQ(h);
+                    setStart(1);
+                    runSearch(1);
+                  }}
+                  className="rounded-full border border-white/10 px-2.5 py-1 hover:bg-white/10"
+                >
+                  {h}
+                </button>
+              ))}
+            </div>
           </div>
         )}
       </div>
 
-      {history.length > 0 && (
-        <div className="mt-1 text-sm text-[var(--muted)]">
-          <div className="mb-1">Recent queries:</div>
-          <div className="flex flex-wrap gap-2">
-            {history.map((h) => (
-              <button
-                key={h}
-                onClick={() => {
-                  setQ(h);
-                  setStart(1);
-                  runSearch(1, h);
-                }}
-                className="rounded-full border border-white/10 px-2.5 py-1 hover:bg-white/10"
-              >
-                {h}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* AI panel + prompt library + Find client */}
+      {/* AI panel */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="text-sm">
@@ -361,7 +328,7 @@ export default function SearchesPage() {
             </select>
           </label>
 
-          <label className="text-sm">
+            <label className="text-sm">
             <span className="mb-1 inline-block">Model (optional)</span>
             <input
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
@@ -379,16 +346,11 @@ export default function SearchesPage() {
             >
               {scoring ? "Analyzing…" : "Analyze current results"}
             </button>
-
             <FindClientButton
               provider={provider}
               model={model || undefined}
-              items={(data?.items || []).map((it) => ({
-                link: it.link,
-                title: it.title,
-                snippet: it.snippet || "",
-              }))}
-              onResult={(byUrl) => setBrandMatches(byUrl)}
+              prompt={prompt}
+              disabled={!data?.items?.length}
             />
           </div>
         </div>
@@ -404,9 +366,9 @@ export default function SearchesPage() {
         </label>
 
         {/* Prompt library */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
           <label className="text-sm">
-            <span className="mb-1 inline-block">Saved prompts</span>
+            <span className="mb-1 inline-block">Load saved prompt</span>
             <select
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               value={lastUsedId ?? ""}
@@ -430,6 +392,7 @@ export default function SearchesPage() {
                 setProvider(p.provider);
                 setModel(p.model || "");
                 setPrompt(p.text);
+                setLLM(p.provider, p.model, p.text);
               }}
               disabled={!lastUsedId}
             >
@@ -444,8 +407,7 @@ export default function SearchesPage() {
             </button>
           </div>
 
-          <label className="text-sm">
-            <span className="mb-1 inline-block">Save current as…</span>
+          <div className="flex gap-2">
             <input
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               placeholder="Name to save current prompt…"
@@ -453,27 +415,31 @@ export default function SearchesPage() {
               onChange={(e) => setNewName(e.target.value)}
             />
             <button
-              className="mt-2 rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
+              className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
               onClick={() => {
                 if (!newName.trim()) return;
-                addPrompt({ name: newName.trim(), text: prompt, provider, model: model || undefined });
+                addPrompt({
+                  name: newName.trim(),
+                  text: prompt,
+                  provider,
+                  model: model || undefined,
+                });
+                setLLM(provider, model || undefined, prompt);
                 setNewName("");
               }}
             >
               Save
             </button>
-          </label>
+          </div>
         </div>
       </div>
 
-      {/* results */}
-      {err && <div className="text-sm text-red-400">{err}</div>}
-
+      {/* Results */}
       {data && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <div className="text-sm text-[var(--muted)]">
-              Query: <b>{data.q}</b> • Total: {Number(data.totalResults || 0).toLocaleString()}
+              Query: <b>{data.q}</b> • Total: {data.totalResults.toLocaleString()}
             </div>
             <div className="flex gap-2">
               <button
@@ -497,32 +463,47 @@ export default function SearchesPage() {
             {data.items.map((it) => {
               const homepage = canonicalHomepage(it.homepage ?? it.link);
               const domain = getDomain(homepage);
-              const scoreInfo = scores[domain];
-              const verdict = asVerdict(scoreInfo); // ✅ тільки рядок у Badge
+              const score = scores[domain];
               const inCRM = existsDomain(domain);
-              const brands = brandMatches[it.link] || [];
 
               return (
                 <li key={it.link} className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
                   <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <a href={it.link} target="_blank" rel="noreferrer" className="text-lg font-medium hover:underline">
+                    <div className="flex-1">
+                      <a
+                        href={it.link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-400 hover:underline"
+                      >
                         {it.title}
                       </a>
                       <div className="text-xs text-[var(--muted)] mt-1">
                         {it.displayLink} •{" "}
-                        <a href={homepage} target="_blank" rel="noreferrer" className="hover:underline">
+                        <a
+                          href={homepage}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="hover:underline"
+                        >
                           {domain}
                         </a>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {verdict && (
-                        <Badge tone={verdict === "GOOD" ? "good" : verdict === "MAYBE" ? "maybe" : "bad"}>
-                          {verdict}
-                        </Badge>
+                      {/* Score pills */}
+                      {score && (
+                        <div className="flex gap-2 flex-wrap">
+                          <Badge tone={score.label}>{score.label.toUpperCase()}</Badge>
+                          <TypePill companyType={score.companyType} />
+                          <CountryPill
+                            countryISO2={score.countryISO2}
+                            countryName={score.countryName}
+                          />
+                        </div>
                       )}
+
                       {inCRM ? (
                         <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">
                           In CRM
@@ -538,91 +519,150 @@ export default function SearchesPage() {
                     </div>
                   </div>
 
-                  {it.snippet && <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>}
+                  {it.snippet && (
+                    <p className="mt-2 text-sm text-[var(--muted)]">{it.snippet}</p>
+                  )}
 
-                  {!!brands.length && (
+                  {/* Detected brands */}
+                  {score?.detectedBrands?.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
-                      {brands.map((b) => (
+                      {score.detectedBrands.map((b) => (
                         <BrandBadge key={b} label={b} tone="maybe" />
                       ))}
+                    </div>
+                  )}
+
+                  {/* LLM Analysis Details */}
+                  {score && (
+                    <div className="mt-3 p-3 bg-black/20 rounded-lg">
+                      <div className="text-xs text-[var(--muted)] mb-2">
+                        LLM Analysis Details:
+                      </div>
+                      <div className="text-xs space-y-1">
+                        <div>
+                          <strong>Confidence:</strong>{" "}
+                          {(score.confidence * 100).toFixed(0)}%
+                        </div>
+                        {score.reasons?.length > 0 && (
+                          <div>
+                            <strong>Reasons:</strong> {score.reasons.join(", ")}
+                          </div>
+                        )}
+                        {score.tags?.length > 0 && (
+                          <div>
+                            <strong>Tags:</strong> {score.tags.join(", ")}
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </li>
               );
             })}
           </ul>
+
+          {!scoring && Object.keys(scores).length === 0 && data.items.length > 0 && (
+            <div className="text-xs text-yellow-400">
+              No LLM analysis yet (run Analyze).
+            </div>
+          )}
         </div>
       )}
 
       {/* Add-to-CRM modal */}
       <Modal open={open} onClose={() => setOpen(false)}>
         <h3 className="text-lg font-semibold mb-3">Add to CRM</h3>
-
         <div className="space-y-4">
           <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Company</div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Company" value={draft.companyName || ""} onChange={(v) => setDraft((d) => ({ ...d, companyName: v }))} />
-            <Field label="Country" value={draft.country || ""} onChange={(v) => setDraft((d) => ({ ...d, country: v }))} />
-            <Field label="Industry" value={draft.industry || ""} onChange={(v) => setDraft((d) => ({ ...d, industry: v }))} />
-            <Field label="Domain" value={draft.domain || ""} onChange={(v) => setDraft((d) => ({ ...d, domain: v }))} />
+            <Field
+              label="Company"
+              value={draft.companyName || ""}
+              onChange={(v) => setDraft((d: any) => ({ ...d, companyName: v }))}
+            />
+            <Field
+              label="Country"
+              value={draft.country || ""}
+              onChange={(v) => setDraft((d: any) => ({ ...d, country: v }))}
+            />
+            <Field
+              label="Industry"
+              value={draft.industry || ""}
+              onChange={(v) => setDraft((d: any) => ({ ...d, industry: v }))}
+            />
+            <Field
+              label="Domain"
+              value={draft.domain || ""}
+              onChange={(v) => setDraft((d: any) => ({ ...d, domain: v }))}
+            />
             <Select
               label="Status"
               value={draft.status || "New"}
-              onChange={(v) => setDraft((d) => ({ ...d, status: v as DraftOrg["status"] }))}
+              onChange={(v) => setDraft((d: any) => ({ ...d, status: v }))}
               options={["New", "Contacted", "Qualified", "Bad Fit"]}
             />
-          </div>
-
-          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Opportunity</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Field label="Brand" value={draft.brand || ""} onChange={(v) => setDraft((d) => ({ ...d, brand: v }))} />
-            <Field label="Product" value={draft.product || ""} onChange={(v) => setDraft((d) => ({ ...d, product: v }))} />
-            <Field label="Quantity" value={draft.quantity || ""} onChange={(v) => setDraft((d) => ({ ...d, quantity: v }))} />
             <Field
-              label="Deal value (USD)"
-              type="number"
-              value={String(draft.dealValueUSD ?? "")}
-              onChange={(v) => setDraft((d) => ({ ...d, dealValueUSD: v ? Number(v) : undefined }))}
-            />
-          </div>
-
-          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Sizing & Tags</div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <Select
-              label="Size tag"
+              label="Size"
               value={draft.sizeTag || ""}
-              onChange={(v) => setDraft((d) => ({ ...d, sizeTag: (v as DraftOrg["sizeTag"]) || "" }))}
-              options={["", "BIG"]}
-            />
-            <label className="block text-sm">
-              <span className="mb-1 inline-block">Tags (comma-separated)</span>
-              <input
-                className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-                placeholder="priority,repeat-buyer,EMEA"
-                value={tagsText}
-                onChange={(e) => setTagsText(e.target.value)}
-              />
-            </label>
-          </div>
-
-          <div>
-            <label className="block text-sm mb-1">Note</label>
-            <textarea
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-24"
-              value={draft.note || ""}
-              onChange={(e) => setDraft((d) => ({ ...d, note: e.target.value }))}
+              onChange={(v) => setDraft((d: any) => ({ ...d, sizeTag: v }))}
             />
           </div>
 
-          <div className="mt-2 flex justify-end gap-2">
-            <button onClick={() => setOpen(false)} className="rounded-md px-3 py-1.5 border border-white/10">
+          <div className="text-sm uppercase tracking-wide text-[var(--muted)]">Deal</div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <Field
+              label="Product/Brand"
+              value={draft.brand || ""}
+              onChange={(v) => setDraft((d: any) => ({ ...d, brand: v }))}
+            />
+            <Field
+              label="Product"
+              value={draft.product || ""}
+              onChange={(v) => setDraft((d: any) => ({ ...d, product: v }))}
+            />
+            <Field
+              label="Quantity"
+              value={draft.quantity || ""}
+              onChange={(v) => setDraft((d: any) => ({ ...d, quantity: v }))}
+            />
+          </div>
+
+          <Field
+            label="Deal value (USD)"
+            type="number"
+            value={String(draft.dealValueUSD ?? "")}
+            onChange={(v) =>
+              setDraft((d: any) => ({
+                ...d,
+                dealValueUSD: v ? Number(v) : undefined,
+              }))
+            }
+          />
+
+          <Field
+            label="Note"
+            value={draft.note || ""}
+            onChange={(v) => setDraft((d: any) => ({ ...d, note: v }))}
+          />
+          <Field
+            label="Tags (comma-separated)"
+            value={tagsText}
+            onChange={(v) => setTagsText(v)}
+            placeholder="priority, repeat-buyer, EMEA"
+          />
+
+          <div className="flex justify-end gap-3 pt-3">
+            <button
+              onClick={() => setOpen(false)}
+              className="px-4 py-2 border border-white/10 rounded-lg hover:bg-white/10"
+            >
               Cancel
             </button>
             <button
               onClick={submitAdd}
-              className="rounded-md px-3 py-1.5 border border-white/10 bg-white/10 hover:bg-white/20"
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg"
             >
-              Add
+              Add to CRM
             </button>
           </div>
         </div>
@@ -632,25 +672,29 @@ export default function SearchesPage() {
 }
 
 /* ---------- small form helpers ---------- */
+
 function Field({
   label,
   value,
   onChange,
   type = "text",
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   type?: string;
+  placeholder?: string;
 }) {
   return (
-    <label className="block text-sm">
+    <label className="text-sm block">
       <span className="mb-1 inline-block">{label}</span>
       <input
         className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         type={type}
+        placeholder={placeholder}
       />
     </label>
   );
@@ -668,16 +712,16 @@ function Select({
   options: string[];
 }) {
   return (
-    <label className="block text-sm">
+    <label className="text-sm block">
       <span className="mb-1 inline-block">{label}</span>
       <select
         className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
         value={value}
         onChange={(e) => onChange(e.target.value)}
       >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o || "—"}
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
           </option>
         ))}
       </select>

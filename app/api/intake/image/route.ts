@@ -1,11 +1,10 @@
 // app/api/intake/image/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { extractInquiry, LLMProvider } from "@/lib/llm";
-import { getSql } from "@/lib/db";
 
 export const runtime = "nodejs";
 
-// -------- types (узгоджені з нашим каноном для intake) ----------
+/* ================== TYPES (канон для intake) ================== */
 type Who = {
   name: string | null;
   email: string | null;
@@ -17,22 +16,22 @@ type Company = {
   legalName: string | null;
   displayName: string | null;
   domain: string | null;
-  country_iso2?: string | null;
+  country_iso2: string | null;
 };
 
 type Intent = {
   brand: string | null;
   product: string | null;
   quantity: number | null;
-  unit: string | null; // e.g., "pcs", "sets"
+  unit: string | null;
   notes: string | null;
 };
 
 type Meta = {
-  languages?: string[]; // ["ar","en","uk",...]
-  detected_text?: string[]; // сирий витяг тексту (рядки)
-  confidence?: number | null;
-  raw?: any; // оригінальна відповідь моделі
+  languages: string[];
+  detected_text: string[];
+  confidence: number | null;
+  raw?: any;
 };
 
 type IntakeResult = {
@@ -42,46 +41,55 @@ type IntakeResult = {
   meta: Meta;
 };
 
-// ---------------- helpers ----------------
+/* ================== HELPERS ================== */
 
 /**
- * Простий витяг телефону з масиву рядків (fallback).
+ * Витягає потенційний номер телефону з масиву рядків (fallback на випадок, якщо LLM не дав phone).
  */
 function extractPhoneFallback(lines: string[]): string | null {
   const text = lines.join(" ");
-  // Лібійський код +218 теж покриємо. Шукаємо +, пробіли, дефіси.
+  // Патерн: або міжнародний +XXXXXXXX, або кілька груп цифр з пробілами/дефісами.
   const m = text.match(/(\+\d{7,15}|\b\d{3,4}[-\s]?\d{2,3}[-\s]?\d{2,3}[-\s]?\d{2,3}\b)/);
   return m ? m[1] : null;
 }
 
+type SelfShape = {
+  name?: string;
+  company?: string;
+  email?: string;
+  phone?: string;
+  domain?: string;
+  country?: string;
+};
+
 /**
- * Будуємо промпт для мультимовних скрінів (в т.ч. WhatsApp).
- * Ключове: ігнорувати елементи UI та витягати текст незалежно від мови.
+ * Формує промпт для LLM (мультимовний, WhatsApp-friendly).
  */
-function buildPrompt(self: { name?: string; company?: string; email?: string; phone?: string } | null) {
-  const me = [
-    self?.name ? `Я — ${self.name}` : null,
-    self?.company ? `компанія ${self.company}` : null,
-    self?.email ? `email: ${self.email}` : null,
-    self?.phone ? `телефон: ${self.phone}` : null,
-  ]
-    .filter(Boolean)
-    .join(", ");
+function buildPrompt(self: SelfShape | null) {
+  const parts: string[] = [];
+  if (self?.name) parts.push(`Я — ${self.name}`);
+  if (self?.company) parts.push(`компанія ${self.company}`);
+  if (self?.email) parts.push(`email: ${self.email}`);
+  if (self?.phone) parts.push(`телефон: ${self.phone}`);
+  if (self?.domain) parts.push(`domain: ${self.domain}`);
+  if (self?.country) parts.push(`country: ${self.country}`);
 
-  // Строгий контракт + багатомовний витяг:
+  const meLine = parts.length ? parts.join(", ") : "Я — користувач SAM.";
+
   return `
-${me || "Я — користувач SAM."}
+${meLine}
 
-Контекст: на вхід подається СКРІН/ФОТО, часто це скрін WhatsApp або месенджера.
+Контекст: на вхід подається СКРІН/ФОТО, часто це скрін WhatsApp або іншого месенджера.
 Твоє завдання:
-1) ІГНОРУЙ елементи інтерфейсу (кнопки, іконки, хедери, статуси, UI WhatsApp/Android/iOS).
-2) ВИТЯГАЙ ТЕКСТ НЕЗАЛЕЖНО ВІД МОВИ (арабська, англійська, українська, російська і т.ін.). 
-3) Якщо є дані профілю/контакту — спробуй знайти ім'я, email, телефон, можливу компанію.
-4) Якщо є зміст діалогу — визнач, що саме просять/хочуть (бренд, продукт, кількість, одиниці).
-5) Якщо чітких даних про компанію немає — не вигадуй: став null.
-6) Обовʼязково додай метадані: масив виявлених мов та масив рядків сирого тексту (detected_text).
+1) ІГНОРУЙ елементи інтерфейсу (кнопки, іконки, статуси, UI WhatsApp/Android/iOS).
+2) ВИТЯГАЙ ТЕКСТ НЕЗАЛЕЖНО ВІД МОВИ (арабська, англійська, українська, російська тощо).
+3) Якщо є дані профілю/контакту — знайди ім'я, email, телефон, можливу компанію.
+4) Якщо у змісті діалогу є запит/інтерес — витягни brand, product, quantity, unit, notes (якщо можна).
+5) Не вигадуй: якщо даних немає — став null.
+6) Обовʼязково meta.languages (масив ISO/кодових позначень мов, якщо можна), meta.detected_text (масив рядків з сирим текстом у природному порядку).
+7) Джерело (who.source): якщо виглядає як месенджер (особливо WhatsApp) — "whatsapp", інакше "other" (або "email" якщо очевидно лист).
 
-ПОВЕРНИ СТРОГИЙ JSON рівно у цій формі без пояснень:
+ПОВЕРНИ СТРОГИЙ JSON БЕЗ ПОЯСНЕНЬ:
 {
   "who": {"name": null|string, "email": null|string, "phone": null|string, "source": "email"|"whatsapp"|"other"},
   "company": {"legalName": null|string, "displayName": null|string, "domain": null|string, "country_iso2": null|string},
@@ -90,121 +98,16 @@ ${me || "Я — користувач SAM."}
 }
 
 Правила:
-- Якщо це типово виглядає як скрін месенджера (WhatsApp) — поверни "who.source": "whatsapp".
-- Телефон слід надавати у міжнародному вигляді, якщо видно код (наприклад, +218...).
-- Не додавай полів, яких нема в схемі. Не пиши пояснень, лише JSON.
+- Телефон бажано в міжнародному форматі, якщо видно код (наприклад +218...).
+- Не додавай інших полів. Без коментарів. Лише JSON.
 `;
 }
 
-// ---------------- core route ----------------
-
-export async function POST(req: NextRequest) {
-  try {
-    // 1) Отримуємо multipart form-data
-    const contentType = req.headers.get("content-type") || "";
-    if (!contentType.includes("multipart/form-data")) {
-      return NextResponse.json({ error: "Expected multipart/form-data" }, { status: 400 });
-    }
-
-    const form = await req.formData();
-    const file = form.get("file") as File | null;
-
-    if (!file) {
-      return NextResponse.json({ error: "No file provided" }, { status: 400 });
-    }
-
-    // (Не міняємо твою модельний провайдер/логіку вибору — можна брати з env/headers)
-    const provider = (form.get("provider") as LLMProvider) || "openai";
-    const model = (form.get("model") as string) || undefined;
-
-    // --- NEW: self_json primary + fallback to individual fields ---
-    let self: { name?: string; company?: string; email?: string; phone?: string } = {
-      name: (form.get("self_name") as string) || undefined,
-      company: (form.get("self_company") as string) || undefined,
-      email: (form.get("self_email") as string) || undefined,
-      phone: (form.get("self_phone") as string) || undefined,
-    };
-
-    const selfJson = form.get("self_json") as string | null;
-    if (selfJson) {
-      try {
-        const parsed = JSON.parse(selfJson);
-        self = {
-          name: parsed?.name || self.name,
-            // preserving fallback if field missing
-          company: parsed?.company || self.company,
-          email: parsed?.email || self.email,
-          phone: parsed?.phone || self.phone,
-        };
-      } catch (e) {
-        console.warn("[intake/image] Failed to parse self_json:", e);
-        // silently keep fallback self
-      }
-    }
-    // -------------------------------------------------------------
-
-    // 2) Конвертуємо файл у base64 data URL для vision-моделі (звичний патерн)
-    const arrayBuffer = await file.arrayBuffer();
-    const bytes = Buffer.from(arrayBuffer);
-    const mime = file.type || "image/jpeg";
-    const dataUrl = `data:${mime};base64,${bytes.toString("base64")}`;
-
-    // 3) Готуємо промпт (мультимовний, WhatsApp-friendly)
-    const prompt = buildPrompt(self);
-
-    // 4) Викликаємо LLM-витяг
-    const llm = await extractInquiry({
-      provider,
-      model,
-      prompt,
-      imageDataUrl: dataUrl,
-    });
-
-    // Очікуємо JSON у форматі IntakeResult або близький до нього.
-    const result: IntakeResult = normalizeResult(llm);
-
-    // 5) Fallback-логіка:
-    // 5.1 Джерело: якщо не виставили — ймовірно це WhatsApp-скрін
-    if (!result.who?.source) {
-      result.who = { ...(result.who || { name: null, email: null, phone: null, source: "other" }), source: "whatsapp" };
-    }
-
-    // 5.2 Якщо немає телефону, але є detected_text — пробуємо знайти телефон
-    if (!result.who?.phone && result.meta?.detected_text && result.meta.detected_text.length) {
-      const phone = extractPhoneFallback(result.meta.detected_text);
-      if (phone) {
-        result.who = { ...(result.who || { name: null, email: null, phone: null, source: "whatsapp" }), phone };
-      }
-    }
-
-    // 5.3 Якщо company.legalName відсутній — не фейлимо, повертаємо мінімум (ми потім збережемо через /intake/confirm)
-    if (!result.company) {
-      result.company = { legalName: null, displayName: null, domain: null, country_iso2: null };
-    } else {
-      result.company.legalName = result.company.legalName ?? null;
-      result.company.displayName = result.company.displayName ?? null;
-      result.company.domain = result.company.domain ?? null;
-      result.company.country_iso2 = result.company.country_iso2 ?? null;
-    }
-
-    // 6) Перестраховуємося по intent
-    if (!result.intent) {
-      result.intent = { brand: null, product: null, quantity: null, unit: null, notes: null };
-    }
-
-    // 7) Повертаємо у стандартизованому вигляді
-    return NextResponse.json({ ok: true, data: result }, { status: 200 });
-  } catch (err: any) {
-    console.error("[intake/image] error:", err);
-    return NextResponse.json({ ok: false, error: err?.message || "Unknown error" }, { status: 500 });
-  }
-}
-
-// ---------------- util: normalize LLM output ----------------
-
+/**
+ * Жорстко нормалізує сирий вивід моделі (щоб не ламати фронт).
+ */
 function normalizeResult(raw: any): IntakeResult {
-  // Не довіряємо моделі на 100% — жорстко зводимо до потрібної форми.
-  const safe = (v: any, fallback: any) => (v === undefined ? fallback : v);
+  const safe = (v: any, fb: any) => (v === undefined ? fb : v);
 
   const who: Who = {
     name: null,
@@ -229,37 +132,33 @@ function normalizeResult(raw: any): IntakeResult {
     languages: [],
     detected_text: [],
     confidence: null,
-    raw: raw,
+    raw,
   };
 
   try {
     const r = typeof raw === "string" ? JSON.parse(raw) : raw;
 
-    // who
     who.name = safe(r?.who?.name, null);
     who.email = safe(r?.who?.email, null);
     who.phone = safe(r?.who?.phone, null);
     who.source = safe(r?.who?.source, "other");
 
-    // company
     company.legalName = safe(r?.company?.legalName, null);
     company.displayName = safe(r?.company?.displayName, null);
     company.domain = safe(r?.company?.domain, null);
     company.country_iso2 = safe(r?.company?.country_iso2, null);
 
-    // intent
     intent.brand = safe(r?.intent?.brand, null);
     intent.product = safe(r?.intent?.product, null);
     intent.quantity = safeNumber(r?.intent?.quantity);
     intent.unit = safe(r?.intent?.unit, null);
     intent.notes = safe(r?.intent?.notes, null);
 
-    // meta
     meta.languages = Array.isArray(r?.meta?.languages) ? r.meta.languages : [];
-    meta.detected_text = Array.isArray(r?.meta?.detected_text) ? r.meta.detected_text : [];
+    meta.detected_text = Array.isArray(r?.meta?.detected_text) ? r.meta?.detected_text : [];
     meta.confidence = safeNumber(r?.meta?.confidence);
   } catch {
-    // Якщо взагалі не JSON — залишаємо заготовки й кладемо raw у meta.raw
+    // Якщо не вдалось розпарсити — залишаємо заготовки, raw вже збережений.
   }
 
   return { who, company, intent, meta };
@@ -269,4 +168,139 @@ function safeNumber(v: any): number | null {
   if (v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+
+/* ================== MAIN ROUTE ================== */
+
+export async function POST(req: NextRequest) {
+  const timeStarted = Date.now();
+  try {
+    const contentType = req.headers.get("content-type") || "";
+    if (!contentType.includes("multipart/form-data")) {
+      return NextResponse.json({ ok: false, error: "Expected multipart/form-data" }, { status: 400 });
+    }
+
+    const form = await req.formData();
+    const file = form.get("file") as File | null;
+    if (!file) {
+      return NextResponse.json({ ok: false, error: "No file provided" }, { status: 400 });
+    }
+
+    // Провайдер / модель
+    const provider = (form.get("provider") as LLMProvider) || "openai";
+    const model = (form.get("model") as string) || undefined;
+
+    // -------- self_json + fallback --------
+    let self: SelfShape = {
+      name: (form.get("self_name") as string) || undefined,
+      company: (form.get("self_company") as string) || undefined,
+      email: (form.get("self_email") as string) || undefined,
+      phone: (form.get("self_phone") as string) || undefined,
+    };
+    const selfJson = form.get("self_json") as string | null;
+    if (selfJson) {
+      try {
+        const parsed = JSON.parse(selfJson);
+        self = {
+          name: parsed?.name || self.name,
+          company: parsed?.company || self.company,
+          email: parsed?.email || self.email,
+          phone: parsed?.phone || self.phone,
+          domain: parsed?.domain || parsed?.company_domain || self.domain,
+          country: parsed?.country || parsed?.company_country || self.country,
+        };
+      } catch (e) {
+        console.warn("[intake/image] Failed to parse self_json:", e);
+      }
+    }
+
+    // -------- Convert image to data URL --------
+    const arrayBuffer = await file.arrayBuffer();
+    const bytes = Buffer.from(arrayBuffer);
+    const mime = file.type || "image/jpeg";
+    const dataUrl = `data:${mime};base64,${bytes.toString("base64")}`;
+
+    // -------- Prompt --------
+    const prompt = buildPrompt(self);
+
+    // -------- Call LLM --------
+    let llmRaw: any;
+    try {
+      llmRaw = await extractInquiry({
+        provider,
+        model,
+        prompt,
+        imageDataUrl: dataUrl,
+      });
+    } catch (e: any) {
+      console.error("[intake/image] LLM call failed:", e);
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "LLM extraction failed",
+          detail: e?.message || String(e),
+        },
+        { status: 500 }
+      );
+    }
+
+    // -------- Normalize --------
+    const normalized = normalizeResult(llmRaw);
+
+    // -------- Fallback adjustments --------
+
+    // If source missing -> assume whatsapp
+    if (!normalized.who?.source) {
+      normalized.who.source = "whatsapp";
+    }
+
+    // Phone fallback from detected_text
+    if (!normalized.who.phone && normalized.meta.detected_text.length) {
+      const fallbackPhone = extractPhoneFallback(normalized.meta.detected_text);
+      if (fallbackPhone) normalized.who.phone = fallbackPhone;
+    }
+
+    // Company guard (already not null by design, але лишаємо безпечність)
+    normalized.company.legalName = normalized.company.legalName ?? null;
+    normalized.company.displayName = normalized.company.displayName ?? null;
+    normalized.company.domain = normalized.company.domain ?? null;
+    normalized.company.country_iso2 = normalized.company.country_iso2 ?? null;
+
+    // Intent guard
+    normalized.intent.brand = normalized.intent.brand ?? null;
+    normalized.intent.product = normalized.intent.product ?? null;
+    normalized.intent.quantity = normalized.intent.quantity ?? null;
+    normalized.intent.unit = normalized.intent.unit ?? null;
+    normalized.intent.notes = normalized.intent.notes ?? null;
+
+    const durationMs = Date.now() - timeStarted;
+
+    // -------- Response (BACKWARD COMPAT) --------
+    // IMPORTANT: фронт зараз очікує payload.normalized.*
+    return NextResponse.json(
+      {
+        ok: true,
+        normalized, // фронт бере це
+        data: normalized, // залишаємо синонім (може бути корисно у нових частинах)
+        self, // для дебагу (можна видалити пізніше)
+        meta: {
+          provider,
+          model: model || null,
+          mime,
+          size_bytes: bytes.length,
+          duration_ms: durationMs,
+        },
+      },
+      { status: 200 }
+    );
+  } catch (err: any) {
+    console.error("[intake/image] fatal error:", err);
+    return NextResponse.json(
+      {
+        ok: false,
+        error: err?.message || "Unknown error",
+      },
+      { status: 500 }
+    );
+  }
 }

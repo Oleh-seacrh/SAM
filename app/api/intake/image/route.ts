@@ -80,12 +80,12 @@ function buildPrompt(self: SelfShape | null) {
 ${meLine}
 
 SELF_PROFILE (this is our own organization – NEVER use these values as the external contact):
-Name: {{self.name}}
-Company: {{self.company}}
-Email: {{self.email}}
-Domain: {{self.domain}}
-Country: {{self.country}}
-SELF_DOMAINS: [{{self.domain}}, www.{{self.domain}}]
+Name: ${self?.name || 'N/A'}
+Company: ${self?.company || 'N/A'}
+Email: ${self?.email || 'N/A'}
+Domain: ${self?.domain || 'N/A'}
+Country: ${self?.country || 'N/A'}
+SELF_DOMAINS: [${self?.domain || 'N/A'}, www.${self?.domain || 'N/A'}]
 
 Контекст: на вхід подається СКРІН/ФОТО, часто це скрін WhatsApp або іншого месенджера.
 Твоє завдання:
@@ -94,10 +94,10 @@ SELF_DOMAINS: [{{self.domain}}, www.{{self.domain}}]
 3) Якщо є дані профілю/контакту — знайди ім'я, email, телефон, можливу компанію.
 4) Якщо у змісті діалогу є запит/інтерес — витягни brand, product, quantity, unit, notes (якщо можна).
 5) Не вигадуй: якщо даних немає — став null.
-6) Обовʼязково meta.languages (масив ISO/кодових позначень мов, якщо можна), meta.detected_text (масив рядків з сирим текстом у природному порядку).
-7) Джерело (who.source): якщо виглядає як месенджер (особливо WhatsApp) — "whatsapp", інакше "other" (або "email" якщо очевидно лист).
+6) Обовʼязково meta.languages (масив ISO/кодових позначень мов, якщо можна), meta.detected_text (масив рядків з сирим текстом у[...] 
+7) Джерело (who.source): якщо виглядає як месенджер (особливо WhatsApp) — "whatsapp", інакше "other" (або "email" якщо очевидно лис[...] 
 
-ПОВЕРНИ СТРОГИЙ JSON БЕЗ ПОЯСНЕНЬ:
+ПОВЕРНИ СТРОГИЙ JSON БЕЗ ПОЯСНень:
 {
   "who": {"name": null|string, "email": null|string, "phone": null|string, "source": "email"|"whatsapp"|"other"},
   "company": {"legalName": null|string, "displayName": null|string, "domain": null|string, "country_iso2": null|string},

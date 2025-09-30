@@ -66,6 +66,17 @@ type SelfShape = {
  * Формує промпт для LLM (мультимовний, WhatsApp-friendly).
  */
 function buildPrompt(self: SelfShape | null) {
+  const safe = (v?: string) => (v && v.trim().length ? v.trim() : "N/A");
+
+  const selfProfile = {
+    name: safe(self?.name),
+    company: safe(self?.company),
+    email: safe(self?.email),
+    domain: safe(self?.domain),
+    country: safe(self?.country),
+  };
+  
+function buildPrompt(self: SelfShape | null) {
   const parts: string[] = [];
   if (self?.name) parts.push(`Я — ${self.name}`);
   if (self?.company) parts.push(`компанія ${self.company}`);

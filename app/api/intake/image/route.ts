@@ -79,36 +79,74 @@ function buildPrompt(self: SelfShape | null) {
   return `
 ${meLine}
 
-SELF_PROFILE (this is our own organization – NEVER use these values as the external contact):
-Name: ${self?.name || 'N/A'}
-Company: ${self?.company || 'N/A'}
-Email: ${self?.email || 'N/A'}
-Domain: ${self?.domain || 'N/A'}
-Country: ${self?.country || 'N/A'}
-SELF_DOMAINS: [${self?.domain || 'N/A'}, www.${self?.domain || 'N/A'}]
+You are an information extraction assistant. Identify ONE external (not internal) contact from an image (often a WhatsApp / messenger screenshot) and possible purchasing intent.
 
-Контекст: на вхід подається СКРІН/ФОТО, часто це скрін WhatsApp або іншого месенджера.
-Твоє завдання:
-1) ІГНОРУЙ елементи інтерфейсу (кнопки, іконки, статуси, UI WhatsApp/Android/iOS).
-2) ВИТЯГАЙ ТЕКСТ НЕЗАЛЕЖНО ВІД МОВИ (арабська, англійська, українська, російська тощо).
-3) Якщо є дані профілю/контакту — знайди ім'я, email, телефон, можливу компанію.
-4) Якщо у змісті діалогу є запит/інтерес — витягни brand, product, quantity, unit, notes (якщо можна).
-5) Не вигадуй: якщо даних немає — став null.
-6) Обовʼязково meta.languages (масив ISO/кодових позначень мов, якщо можна), meta.detected_text (масив рядків з сирим текстом у[...] 
-7) Джерело (who.source): якщо виглядає як месенджер (особливо WhatsApp) — "whatsapp", інакше "other" (або "email" якщо очевидно лис[...] 
+CRITICAL DEFINITIONS:
+- SELF_PROFILE: our own organization/user. MUST NEVER be returned as the extracted (external) contact.
+- EXTERNAL CONTACT: a person/company in the image distinct from SELF_PROFILE.
 
-ПОВЕРНИ СТРОГИЙ JSON БЕЗ ПОЯСНень:
+<SELF_PROFILE>
+Name: ${selfProfile.name}
+Company: ${selfProfile.company}
+Email: ${selfProfile.email}
+Domain: ${selfProfile.domain}
+Country: ${selfProfile.country}
+SELF_DOMAINS: [${selfDomains.length ? selfDomains.join(", ") : "N/A"}]
+</SELF_PROFILE>
+
+You will receive ONLY an image (no separate OCR text). You must read text from the image.
+
+TASK STEPS:
+1. Read all textual content in the image (any language).
+2. Collect candidate contacts (names, emails, phones, company strings).
+3. Discard any candidate whose email domain matches ANY in SELF_DOMAINS or whose (name + company) exactly matches SELF_PROFILE.
+4. If multiple external candidates: prefer one having (name + company) or (name + email). If tie, pick the one with an email.
+5. Extract possible intent:
+   - brand (e.g. Konica Minolta),
+   - product (e.g. SD-S film),
+   - quantity (number),
+   - unit (e.g. pcs, ct, kg, packs),
+   - notes (free short text if there is extra relevant context).
+6. Do NOT invent data. Use null if absent.
+7. Detect languages (meta.languages) if possible (list of codes or short labels).
+8. meta.detected_text: array of short lines (raw snippets you actually saw).
+9. meta.confidence: number 0..1 (approximate confidence) or null.
+
+NEGATIVE EXAMPLE (must reject self):
+If the only visible email equals ${selfProfile.email} or matches SELF_DOMAINS -> who must be null in fields except maybe phone if clearly external (but if it is ours, keep null). Do not re-output self.
+
+OUTPUT FORMAT (STRICT JSON, NO COMMENTS, NO EXTRA TEXT):
 {
-  "who": {"name": null|string, "email": null|string, "phone": null|string, "source": "email"|"whatsapp"|"other"},
-  "company": {"legalName": null|string, "displayName": null|string, "domain": null|string, "country_iso2": null|string},
-  "intent": {"brand": null|string, "product": null|string, "quantity": null|number, "unit": null|string, "notes": null|string},
-  "meta": {"languages": string[]|null, "detected_text": string[]|null, "confidence": null|number}
+  "who": {
+    "name": null|string,
+    "email": null|string,
+    "phone": null|string,
+    "source": "email"|"whatsapp"|"other"
+  },
+  "company": {
+    "legalName": null|string,
+    "displayName": null|string,
+    "domain": null|string,
+    "country_iso2": null|string
+  },
+  "intent": {
+    "brand": null|string,
+    "product": null|string,
+    "quantity": null|number,
+    "unit": null|string,
+    "notes": null|string
+  },
+  "meta": {
+    "languages": string[]|null,
+    "detected_text": string[]|null,
+    "confidence": null|number
+  }
 }
 
-Правила:
-- Телефон бажано в міжнародному форматі, якщо видно код (наприклад +218...).
-- Не додавай інших полів. Без коментарів. Лише JSON.
-`;
+FINAL RULES (READ LAST – HIGHEST PRIORITY):
+- NEVER output SELF_PROFILE as external.
+- If NO valid external contact after filtering -> set who.name, who.email, who.phone = null (still supply source guess).
+- Only the JSON. No explanations.`;
 }
 
 /**

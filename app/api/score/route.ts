@@ -1,6 +1,7 @@
 export const runtime = "nodejs";
 
 import { NextRequest } from "next/server";
+import { detectCountry } from "@/lib/country";
 
 /* ==================================================
  * Types
@@ -26,6 +27,7 @@ interface LLMScore {
   companyType: "manufacturer" | "distributor" | "dealer" | "other";
   countryISO2: string | null;
   countryName: string | null;
+  countryConfidence?: "HIGH" | "WEAK" | "LLM";
   detectedBrands: string[];
 }
 interface LLMResponse {
@@ -159,7 +161,7 @@ function parseLLMJson(raw: string): any {
   return { scoresByDomain: {} };
 }
 
-function normalizeScores(resp: any): LLMResponse {
+function normalizeScores(resp: any, items: Item[]): LLMResponse {
   // Accept legacy: { domain: {...} } OR { scoresByDomain: {...} }
   const core =
     resp?.scoresByDomain && typeof resp.scoresByDomain === "object"
@@ -169,6 +171,13 @@ function normalizeScores(resp: any): LLMResponse {
       : {};
 
   const out: LLMResponse = { scoresByDomain: {} };
+  
+  // Create a map of domains to items for country detection
+  const itemsByDomain = new Map<string, Item>();
+  for (const item of items) {
+    const domain = stripWWW(item.domain.toLowerCase());
+    itemsByDomain.set(domain, item);
+  }
 
   for (const [rawDomain, rawScore] of Object.entries<any>(core)) {
     if (!rawScore || typeof rawScore !== "object") continue;
@@ -194,6 +203,15 @@ function normalizeScores(resp: any): LLMResponse {
 
     let countryName: string | null = rawScore.countryName || rawScore.country_name || null;
     if (!countryISO2 && countryName && countryName.length < 3) countryName = null;
+
+    // Apply country detection logic
+    const item = itemsByDomain.get(domain);
+    const countryResult = detectCountry({
+      text: `${item?.title || ""} ${item?.snippet || ""}`,
+      domain: item?.domain,
+      llmCountryISO2: countryISO2,
+      llmCountryName: countryName,
+    });
 
     const confidence =
       typeof rawScore.confidence === "number" &&
@@ -228,8 +246,9 @@ function normalizeScores(resp: any): LLMResponse {
       reasons,
       tags,
       companyType,
-      countryISO2,
-      countryName,
+      countryISO2: countryResult.countryISO2,
+      countryName: countryResult.countryName,
+      countryConfidence: countryResult.confidence,
       detectedBrands,
     };
   }
@@ -344,7 +363,7 @@ export async function POST(req: NextRequest) {
     }
 
     const parsed = parseLLMJson(raw);
-    const processed = normalizeScores(parsed);
+    const processed = normalizeScores(parsed, items);
     return Response.json(processed);
   } catch (e: any) {
     console.error("/api/score error", e?.message);

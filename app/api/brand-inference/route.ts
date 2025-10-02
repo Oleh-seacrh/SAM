@@ -12,13 +12,25 @@ type Body = {
 function ruleBasedInfer(items: Item[], brands: string[]) {
   const out: { url: string; brands: string[] }[] = [];
   for (const it of items) {
+    // Normalize text: lowercase
     const hay = `${it.title}\n${it.snippet}`.toLowerCase();
-    const hit: string[] = [];
+    const hit = new Set<string>(); // Use Set to avoid duplicates
+    
     for (const b of brands) {
-      const needle = b.toLowerCase();
-      if (needle && hay.includes(needle)) hit.push(b);
+      const needle = b.toLowerCase().trim();
+      if (!needle) continue;
+      
+      // Use word boundary regex to match whole words/phrases
+      // Escape special regex characters in the brand name
+      const escaped = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const regex = new RegExp(`\\b${escaped}\\b`, 'i');
+      
+      if (regex.test(hay)) {
+        hit.add(b); // Add original brand name (not lowercased)
+      }
     }
-    out.push({ url: it.url, brands: Array.from(new Set(hit)) });
+    
+    out.push({ url: it.url, brands: Array.from(hit) });
   }
   return out;
 }

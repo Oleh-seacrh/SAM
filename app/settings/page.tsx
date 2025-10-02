@@ -9,8 +9,11 @@ export const dynamic = "force-dynamic";
 // export const revalidate = 0;
 
 import React, { useEffect, useState } from "react";
+import dynamicImport from "next/dynamic";
 
-type Tab = "profile" | "products" | "users" | "billing" | "enrichment";
+const AIModelTab = dynamicImport(() => import("./ai-model/page"), { ssr: false });
+
+type Tab = "profile" | "products" | "users" | "billing" | "enrichment" | "aimodel";
 
 /* ------------------ PAGE ------------------ */
 export default function SettingsPage() {
@@ -24,9 +27,9 @@ export default function SettingsPage() {
           Settings
         </div>
         <nav className="px-2 pb-4 space-y-1">
-          {(["profile","products","users","billing","enrichment"] as Tab[]).map((t) => {
+          {(["profile","products","aimodel","users","billing","enrichment"] as Tab[]).map((t) => {
             const active = activeTab === t;
-            const label = t.charAt(0).toUpperCase() + t.slice(1);
+            const label = t === "aimodel" ? "AI Model" : t.charAt(0).toUpperCase() + t.slice(1);
             return (
               <button
                 key={t}
@@ -46,6 +49,7 @@ export default function SettingsPage() {
       <main className="flex-1 p-6 overflow-y-auto">
         {activeTab === "profile" && <ProfileTab />}
         {activeTab === "products" && <ProductsTab />}
+        {activeTab === "aimodel" && <AIModelTab />}
         {activeTab === "users" && <DraftSection title="Users & Roles" />}
         {activeTab === "billing" && (
           <DraftSection

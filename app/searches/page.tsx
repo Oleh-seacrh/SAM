@@ -47,6 +47,7 @@ type Score = {
   companyType: "manufacturer" | "distributor" | "dealer" | "other";
   countryISO2: string | null;
   countryName: string | null;
+  countryConfidence?: "HIGH" | "WEAK" | "LLM";
   detectedBrands: string[];
 };
 
@@ -68,6 +69,9 @@ function normalizeScores(raw: any): ScoresByDomain {
         ? v.countryISO2.toUpperCase()
         : null;
     const countryName = v.countryName || v.country_name || null;
+    const countryConfidence = v.countryConfidence && ["HIGH", "WEAK", "LLM"].includes(v.countryConfidence) 
+      ? v.countryConfidence 
+      : undefined;
     const detectedBrands = Array.isArray(v.detectedBrands)
       ? Array.from(
           new Set(
@@ -93,6 +97,7 @@ function normalizeScores(raw: any): ScoresByDomain {
           : "other",
       countryISO2,
       countryName: countryISO2 ? countryName : countryName && countryName.length >= 3 ? countryName : null,
+      countryConfidence,
       detectedBrands,
     };
   }
@@ -136,8 +141,15 @@ export default function SearchesPage() {
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
 
+  // AI Model settings from backend
+  const [aiModelSettings, setAiModelSettings] = useState<{ provider: string; defaultModel: string } | null>(null);
+
   // brandMatches (configured inference)
   const [brandMatches, setBrandMatches] = useState<Record<string, string[]>>({});
+  
+  // Deep analysis state
+  const [deepAnalyzing, setDeepAnalyzing] = useState(false);
+  const [deepResults, setDeepResults] = useState<Record<string, any>>({});
 
   // History
   const [history, setHistory] = useState<string[]>([]);
@@ -150,11 +162,31 @@ export default function SearchesPage() {
 
   /* ---------------- Effects ---------------- */
   useEffect(() => {
+    // Load AI Model settings
+    (async () => {
+      try {
+        const r = await fetch("/api/settings/ai-model", { cache: "no-store" });
+        const j = await r.json();
+        if (r.ok && j?.settings) {
+          setAiModelSettings(j.settings);
+          setProvider(j.settings.provider);
+          if (j.settings.defaultModel) {
+            setModel(j.settings.defaultModel);
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to load AI model settings:", e);
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
     if (!settings) return;
     settings.lastQuery && setQ(settings.lastQuery);
     settings.lastStart && setStart(settings.lastStart);
     // Видалено: settings.lastNum && setNum(settings.lastNum);
-    settings.lastProvider && setProvider(settings.lastProvider);
+    // Don't override provider from AI settings
+    // settings.lastProvider && setProvider(settings.lastProvider);
     settings.lastModel && setModel(settings.lastModel);
     settings.lastPrompt && setPrompt(settings.lastPrompt);
   }, [settings]);
@@ -248,6 +280,76 @@ export default function SearchesPage() {
       setErr(e.message || "Scoring failed");
     } finally {
       setScoring(false);
+    }
+  }
+
+  async function deepAnalyze() {
+    if (!data?.items?.length) return;
+    setDeepAnalyzing(true);
+    setErr(null);
+    try {
+      const items = data.items.map(it => {
+        const homepage = canonicalHomepage(it.homepage ?? it.link);
+        return {
+          homepage,
+          domain: getDomain(homepage),
+        };
+      });
+
+      // Step 1: Crawl to find contacts
+      const crawlRes = await fetch("/api/crawl", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items, maxPagesPerSite: 7 }),
+      });
+      const crawlData = await crawlRes.json();
+      if (!crawlRes.ok) throw new Error(crawlData?.error || "Crawl failed");
+      
+      setDeepResults(crawlData.results || {});
+
+      // Step 2: Re-score with enriched data
+      // Filter items that need re-scoring (missing country or companyType)
+      const itemsToRescore = data.items.filter(it => {
+        const domain = getDomain(canonicalHomepage(it.homepage ?? it.link)).replace(/^www\./i, "").toLowerCase();
+        const score = scores[domain];
+        return !score || !score.countryISO2 || score.companyType === "other";
+      });
+
+      if (itemsToRescore.length > 0) {
+        const enrichedItems = itemsToRescore.map(it => {
+          const homepage = canonicalHomepage(it.homepage ?? it.link);
+          const domain = getDomain(homepage).replace(/^www\./i, "").toLowerCase();
+          const crawlResult = crawlData.results?.[domain];
+          
+          return {
+            title: it.title,
+            snippet: it.snippet + (crawlResult ? ` [Contacts: ${crawlResult.emails.join(", ")} ${crawlResult.phones.join(", ")}]` : ""),
+            homepage,
+            domain,
+          };
+        });
+
+        const rescoreRes = await fetch("/api/score", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ 
+            provider, 
+            model: model || undefined, 
+            prompt, 
+            items: enrichedItems 
+          }),
+        });
+        const rescoreData = await rescoreRes.json();
+        if (rescoreRes.ok) {
+          const normalized = normalizeScores(rescoreData);
+          // Merge with existing scores
+          setScores(prev => ({ ...prev, ...normalized }));
+        }
+      }
+    } catch (e: any) {
+      setErr(e.message || "Deep analysis failed");
+    } finally {
+      setDeepAnalyzing(false);
     }
   }
 
@@ -379,11 +481,11 @@ export default function SearchesPage() {
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10 space-y-3">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
           <label className="text-sm">
-            <span className="mb-1 inline-block">Provider</span>
+            <span className="mb-1 inline-block">Provider (from Settings)</span>
             <select
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 opacity-60 cursor-not-allowed"
               value={provider}
-              onChange={e => setProvider(e.target.value as any)}
+              disabled
             >
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
@@ -404,10 +506,17 @@ export default function SearchesPage() {
           <div className="flex items-end gap-2">
             <button
               onClick={analyze}
-              disabled={!data?.items?.length || scoring}
-              className="w-full rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50"
+              disabled={!data?.items?.length || scoring || deepAnalyzing}
+              className="flex-1 rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50"
             >
-              {scoring ? "Analyzing…" : "Analyze current results"}
+              {scoring ? "Analyzing…" : "Quick Analysis"}
+            </button>
+            <button
+              onClick={deepAnalyze}
+              disabled={!data?.items?.length || scoring || deepAnalyzing}
+              className="flex-1 rounded-lg px-4 py-2 bg-blue-500/10 hover:bg-blue-500/20 border border-blue-500/20 disabled:opacity-50"
+            >
+              {deepAnalyzing ? "Deep Analyzing…" : "Deep Analysis"}
             </button>
             <FindClientButton
               provider={provider}
@@ -560,14 +669,13 @@ export default function SearchesPage() {
                         {it.title}
                       </a>
                       <div className="text-xs text-[var(--muted)] mt-1">
-                        {it.displayLink} •{" "}
                         <a
                           href={homepage}
                           target="_blank"
                           rel="noreferrer"
                           className="hover:underline"
                         >
-                          {domain}
+                          {homepage}
                         </a>
                       </div>
                     </div>
@@ -582,6 +690,7 @@ export default function SearchesPage() {
                           <CountryPill
                             countryISO2={score.countryISO2}
                             countryName={score.countryName}
+                            countryConfidence={score.countryConfidence}
                           />
                         </div>
                       )}
@@ -638,6 +747,60 @@ export default function SearchesPage() {
                         {score.tags?.length > 0 && (
                           <div>
                             <strong>Tags:</strong> {score.tags.join(", ")}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {deepResults[domain] && (
+                    <div className="mt-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                      <div className="text-xs font-semibold mb-2">
+                        Deep Analysis Results:
+                      </div>
+                      <div className="text-xs space-y-1">
+                        <div>
+                          <strong>Pages analyzed:</strong> {deepResults[domain].pagesAnalyzed}
+                        </div>
+                        {deepResults[domain].contactFound && (
+                          <div className="text-emerald-400">
+                            ✓ Contact/About page found
+                          </div>
+                        )}
+                        {deepResults[domain].emails?.length > 0 ? (
+                          <div>
+                            <strong>Emails:</strong>{" "}
+                            {deepResults[domain].emails.map((e: string, i: number) => (
+                              <a 
+                                key={i} 
+                                href={`mailto:${e}`}
+                                className="text-blue-400 hover:underline"
+                              >
+                                {e}
+                              </a>
+                            )).reduce((prev: any, curr: any) => [prev, ", ", curr])}
+                          </div>
+                        ) : (
+                          <div className="text-yellow-400">
+                            No emails found after {deepResults[domain].pagesAnalyzed} pages
+                          </div>
+                        )}
+                        {deepResults[domain].phones?.length > 0 ? (
+                          <div>
+                            <strong>Phones:</strong>{" "}
+                            {deepResults[domain].phones.map((p: string, i: number) => (
+                              <a 
+                                key={i} 
+                                href={`tel:${p}`}
+                                className="text-blue-400 hover:underline"
+                              >
+                                {p}
+                              </a>
+                            )).reduce((prev: any, curr: any) => [prev, ", ", curr])}
+                          </div>
+                        ) : (
+                          <div className="text-yellow-400">
+                            No phones found after {deepResults[domain].pagesAnalyzed} pages
                           </div>
                         )}
                       </div>

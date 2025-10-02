@@ -68,7 +68,7 @@ function normalizeScores(raw: any): ScoresByDomain {
         ? v.countryISO2.toUpperCase()
         : null;
     const countryName = v.countryName || v.country_name || null;
-    const detectedBrands = Array.isArray(v.detectedBrands)
+    const detectedBrands: string[] = Array.isArray(v.detectedBrands)
       ? Array.from(
           new Set(
             v.detectedBrands
@@ -135,6 +135,8 @@ export default function SearchesPage() {
   );
   const [scoring, setScoring] = useState(false);
   const [scores, setScores] = useState<ScoresByDomain>({});
+  const [deepAnalyzing, setDeepAnalyzing] = useState(false);
+  const [deepScores, setDeepScores] = useState<Record<string, any>>({});
 
   // brandMatches (configured inference)
   const [brandMatches, setBrandMatches] = useState<Record<string, string[]>>({});
@@ -189,8 +191,8 @@ export default function SearchesPage() {
       setData(j as SearchResponse);
       setScores({});
       setBrandMatches({});
-      // Оновлено виклик setLastSearch без num
-      setLastSearch(query, j.start);
+      // Call with num parameter (using default or from response)
+      setLastSearch(query, j.start, j.num || 10);
 
       // session snapshot
       const savedItems: SavedItem[] = (j.items ?? []).map((it: any) => {
@@ -248,6 +250,79 @@ export default function SearchesPage() {
       setErr(e.message || "Scoring failed");
     } finally {
       setScoring(false);
+    }
+  }
+
+  async function deepAnalyze() {
+    if (!data?.items?.length) return;
+    setDeepAnalyzing(true);
+    setErr(null);
+    
+    try {
+      // Fetch brand dictionary
+      let brandDict: string[] = [];
+      try {
+        const brandRes = await fetch("/api/settings/brands");
+        const brandData = await brandRes.json();
+        brandDict = brandData.brands || [];
+      } catch {
+        // Continue without brands
+      }
+
+      const results: Record<string, any> = {};
+      
+      // Process each URL with crawl -> score
+      for (const item of data.items) {
+        const homepage = canonicalHomepage(item.homepage ?? item.link);
+        const domain = getDomain(homepage);
+        
+        try {
+          // Step 1: Crawl
+          const crawlRes = await fetch("/api/crawl", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              url: homepage, 
+              brandDict,
+              limits: { maxPages: 8, timeoutMs: 20000 }
+            }),
+          });
+          
+          const crawlData = await crawlRes.json();
+          if (!crawlRes.ok) throw new Error(crawlData.error || "Crawl failed");
+          
+          // Step 2: Score from factPool
+          const scoreRes = await fetch("/api/score", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ 
+              provider, 
+              model: model || undefined, 
+              prompt,
+              factPool: crawlData.factPool
+            }),
+          });
+          
+          const scoreData = await scoreRes.json();
+          if (!scoreRes.ok) throw new Error(scoreData.error || "Scoring failed");
+          
+          results[domain] = {
+            ...scoreData,
+            factPool: crawlData.factPool,
+            pages: crawlData.pages,
+          };
+        } catch (itemErr: any) {
+          console.error(`Deep analyze failed for ${domain}:`, itemErr);
+          results[domain] = { error: itemErr.message };
+        }
+      }
+      
+      setDeepScores(results);
+      if (ENABLE_SCORE_DEBUG) console.log("DEEP ANALYZE RESULTS", results);
+    } catch (e: any) {
+      setErr(e.message || "Deep analysis failed");
+    } finally {
+      setDeepAnalyzing(false);
     }
   }
 
@@ -404,10 +479,18 @@ export default function SearchesPage() {
           <div className="flex items-end gap-2">
             <button
               onClick={analyze}
-              disabled={!data?.items?.length || scoring}
+              disabled={!data?.items?.length || scoring || deepAnalyzing}
               className="w-full rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50"
             >
-              {scoring ? "Analyzing…" : "Analyze current results"}
+              {scoring ? "Analyzing…" : "Quick Analyze"}
+            </button>
+            <button
+              onClick={deepAnalyze}
+              disabled={!data?.items?.length || scoring || deepAnalyzing}
+              className="w-full rounded-lg px-4 py-2 bg-blue-600 hover:bg-blue-700 border border-blue-500 disabled:opacity-50"
+              title="Deep analysis with web crawling (slower but more accurate)"
+            >
+              {deepAnalyzing ? "Crawling…" : "Deep Analyze"}
             </button>
             <FindClientButton
               provider={provider}
@@ -532,12 +615,21 @@ export default function SearchesPage() {
               const homepage = canonicalHomepage(it.homepage ?? it.link);
               const domain = getDomain(homepage).replace(/^www\./i, "");
               const score = pickScore(scores, domain);
+              const deepResult = deepScores[domain];
               const inCRM = existsDomain(domain);
 
-              const llmBrands = score?.detectedBrands || [];
+              // Use deep analysis result if available, otherwise use quick score
+              const displayScore = deepResult?.score || score?.label;
+              const displayType = deepResult?.companyType || score?.companyType;
+              const displayCountryISO2 = deepResult?.countryISO2 || score?.countryISO2;
+              const displayCountryName = score?.countryName || null;
+              const displayBrands = deepResult?.detectedBrands || score?.detectedBrands || [];
+              const lowInfo = deepResult?.factPool?.lowInfo || false;
+
+              const llmBrands = displayBrands;
               const matched = brandMatches[it.link] || [];
 
-              const llmLower = new Set(llmBrands.map(b => b.toLowerCase()));
+              const llmLower = new Set(llmBrands.map((b: string) => b.toLowerCase()));
               const matchedFiltered = matched.filter(b => !llmLower.has(b.toLowerCase()));
 
               const orderedBrands = [...llmBrands, ...matchedFiltered];
@@ -569,11 +661,33 @@ export default function SearchesPage() {
                         >
                           {domain}
                         </a>
+                        {deepResult && (
+                          <span className="ml-2 text-blue-400">★ Deep analyzed</span>
+                        )}
                       </div>
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {score && (
+                      {displayScore && (
+                        <div className="flex gap-2 flex-wrap">
+                          <Badge tone={displayScore.toLowerCase() as "good" | "maybe" | "bad"}>
+                            {displayScore.toUpperCase()}
+                          </Badge>
+                          {displayType && <TypePill companyType={displayType} />}
+                          {displayCountryISO2 && (
+                            <CountryPill
+                              countryISO2={displayCountryISO2}
+                              countryName={displayCountryName}
+                            />
+                          )}
+                          {lowInfo && (
+                            <span className="text-[10px] uppercase tracking-wide px-2 py-1 rounded-md bg-yellow-500/20 text-yellow-400 border border-yellow-500/30">
+                              LOW INFO
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {!displayScore && score && (
                         <div className="flex gap-2 flex-wrap">
                           <Badge tone={score.label}>
                             {score.label.toUpperCase()}
@@ -619,10 +733,45 @@ export default function SearchesPage() {
                     </div>
                   )}
 
-                  {score && (
+                  {/* Deep Analysis Evidence */}
+                  {deepResult && (
+                    <div className="mt-3 p-3 bg-blue-900/10 border border-blue-500/20 rounded-lg">
+                      <div className="text-xs text-blue-300 mb-2 font-semibold">
+                        Deep Analysis Evidence:
+                      </div>
+                      <div className="text-xs space-y-1">
+                        {deepResult.summary && (
+                          <div>
+                            <strong>Summary:</strong> {deepResult.summary}
+                          </div>
+                        )}
+                        {deepResult.evidence?.length > 0 && (
+                          <div>
+                            <strong>Evidence:</strong>
+                            <ul className="list-disc pl-5 mt-1">
+                              {deepResult.evidence.map((e: string, i: number) => (
+                                <li key={i}>{e}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {deepResult.factPool && (
+                          <div className="mt-2 pt-2 border-t border-blue-500/20">
+                            <strong>Coverage:</strong> {deepResult.factPool.coverage.totalPages} pages
+                            {deepResult.factPool.coverage.hasContact && " • Contact ✓"}
+                            {deepResult.factPool.coverage.hasAbout && " • About ✓"}
+                            {deepResult.factPool.coverage.hasProducts && " • Products ✓"}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Quick Analysis Details */}
+                  {score && !deepResult && (
                     <div className="mt-3 p-3 bg-black/20 rounded-lg">
                       <div className="text-xs text-[var(--muted)] mb-2">
-                        LLM Analysis Details:
+                        Quick Analysis Details:
                       </div>
                       <div className="text-xs space-y-1">
                         <div>

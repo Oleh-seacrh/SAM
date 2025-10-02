@@ -15,7 +15,8 @@ interface Body {
   provider?: "openai" | "anthropic" | "gemini";
   model?: string;
   prompt: string;
-  items: Item[];
+  items?: Item[];
+  factPool?: any; // For crawl-based scoring
 }
 
 interface LLMScore {
@@ -238,12 +239,73 @@ function normalizeScores(resp: any): LLMResponse {
 }
 
 /* ==================================================
+ * FactPool-based Scoring
+ * ================================================== */
+import { scorePreset } from "@/lib/llm-presets";
+
+async function scoreFromFactPool(
+  provider: "openai" | "anthropic" | "gemini",
+  model: string | undefined,
+  userPrompt: string,
+  factPool: any
+): Promise<Response> {
+  const promptText = scorePreset(factPool, userPrompt);
+  const mdl = model?.trim();
+
+  let raw = "";
+
+  try {
+    if (provider === "openai") {
+      const key = process.env.OPENAI_API_KEY;
+      if (!key)
+        return Response.json(
+          { error: "Missing OPENAI_API_KEY" },
+          { status: 500 }
+        );
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: mdl || "gpt-4o-mini",
+          temperature: 0.1,
+          messages: [
+            {
+              role: "system",
+              content: "You are a precise B2B scoring assistant. Output ONLY raw JSON.",
+            },
+            { role: "user", content: promptText },
+          ],
+          max_tokens: 1500,
+        }),
+      });
+      const j = await r.json();
+      raw = j?.choices?.[0]?.message?.content || "";
+      if (!r.ok) throw new Error(j?.error?.message || "OpenAI error");
+    } else {
+      return Response.json(
+        { error: "Provider not supported for factPool scoring" },
+        { status: 400 }
+      );
+    }
+
+    const parsed = parseLLMJson(raw);
+    return Response.json(parsed);
+  } catch (e: any) {
+    console.error("scoreFromFactPool error", e?.message);
+    return Response.json(
+      { error: e?.message || "Scoring failed", raw },
+      { status: 500 }
+    );
+  }
+}
+
+/* ==================================================
  * Main Route
  * ================================================== */
 export async function POST(req: NextRequest) {
   let raw = "";
   try {
-    const { provider = "openai", model, prompt, items }: Body = await req.json();
+    const { provider = "openai", model, prompt, items, factPool }: Body = await req.json();
 
     if (!prompt?.trim()) {
       return Response.json(
@@ -251,6 +313,12 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    // Support factPool-based scoring OR items-based scoring
+    if (factPool) {
+      return await scoreFromFactPool(provider, model, prompt, factPool);
+    }
+
     if (!items?.length) {
       return Response.json(
         { error: "No items to score", scoresByDomain: {} },

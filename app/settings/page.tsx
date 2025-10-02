@@ -10,7 +10,7 @@ export const dynamic = "force-dynamic";
 
 import React, { useEffect, useState } from "react";
 
-type Tab = "profile" | "products" | "users" | "billing" | "enrichment";
+type Tab = "profile" | "products" | "users" | "billing" | "enrichment" | "ai-model";
 
 /* ------------------ PAGE ------------------ */
 export default function SettingsPage() {
@@ -24,9 +24,9 @@ export default function SettingsPage() {
           Settings
         </div>
         <nav className="px-2 pb-4 space-y-1">
-          {(["profile","products","users","billing","enrichment"] as Tab[]).map((t) => {
+          {(["profile","products","users","billing","enrichment","ai-model"] as Tab[]).map((t) => {
             const active = activeTab === t;
-            const label = t.charAt(0).toUpperCase() + t.slice(1);
+            const label = t === "ai-model" ? "AI Model" : t.charAt(0).toUpperCase() + t.slice(1);
             return (
               <button
                 key={t}
@@ -58,6 +58,7 @@ export default function SettingsPage() {
           />
         )}
         {activeTab === "enrichment" && <EnrichmentTab />}
+        {activeTab === "ai-model" && <AIModelTab />}
       </main>
     </div>
   );
@@ -638,5 +639,174 @@ function Check({
       <input type="checkbox" checked={checked} onChange={onChange} />
       <span>{label}</span>
     </label>
+  );
+}
+
+/* ------------------ AI MODEL TAB ------------------ */
+type AIModelSettings = {
+  provider: "openai" | "anthropic" | "gemini";
+  defaultModel: string;
+  temperature: number;
+  top_p: number;
+  seed?: number;
+};
+
+const DEFAULT_AI_SETTINGS: AIModelSettings = {
+  provider: "openai",
+  defaultModel: "gpt-4o-mini",
+  temperature: 0.1,
+  top_p: 1.0,
+};
+
+function AIModelTab() {
+  const [form, setForm] = useState<AIModelSettings>(DEFAULT_AI_SETTINGS);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        setLoading(true);
+        const r = await fetch("/api/settings/ai-model", { cache: "no-store" });
+        const j = await r.json();
+        if (!cancelled) {
+          setForm({
+            ...DEFAULT_AI_SETTINGS,
+            ...j,
+          });
+        }
+      } catch (e: any) {
+        if (!cancelled) setErr(e?.message || "Failed to load settings");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  const setField = (key: keyof AIModelSettings) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const val = e.target.value;
+    setForm(prev => ({ ...prev, [key]: key === "temperature" || key === "top_p" ? parseFloat(val) || 0 : key === "seed" ? (val ? parseInt(val) : undefined) : val }));
+  };
+
+  async function onSave() {
+    setSaving(true);
+    setErr(null);
+    setOk(false);
+    try {
+      const r = await fetch("/api/settings/ai-model", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      setOk(true);
+    } catch (e: any) {
+      setErr(e?.message || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="text-sm opacity-70">Loading…</div>;
+  }
+
+  return (
+    <section className="space-y-6 max-w-3xl">
+      <h2 className="text-xl font-semibold">AI Model</h2>
+      <p className="text-sm opacity-80">
+        Configure default AI model settings for Quick/Deep analysis. These settings will be used as defaults in the Searches page.
+      </p>
+
+      <div className="space-y-4">
+        <L label="Provider">
+          <select
+            className="input"
+            value={form.provider}
+            onChange={setField("provider")}
+          >
+            <option value="openai">OpenAI</option>
+            <option value="anthropic">Anthropic</option>
+            <option value="gemini">Gemini</option>
+          </select>
+        </L>
+
+        <L label="Default Model">
+          <input
+            className="input"
+            placeholder="e.g., gpt-4o-mini, claude-3-haiku-20240307, gemini-1.5-flash"
+            value={form.defaultModel}
+            onChange={setField("defaultModel")}
+          />
+        </L>
+
+        <L label="Temperature (0-1)">
+          <input
+            className="input"
+            type="number"
+            step="0.1"
+            min="0"
+            max="1"
+            placeholder="0.1"
+            value={form.temperature}
+            onChange={setField("temperature")}
+          />
+        </L>
+
+        <L label="Top P (0-1)">
+          <input
+            className="input"
+            type="number"
+            step="0.1"
+            min="0"
+            max="1"
+            placeholder="1.0"
+            value={form.top_p}
+            onChange={setField("top_p")}
+          />
+        </L>
+
+        <L label="Seed (optional integer)">
+          <input
+            className="input"
+            type="number"
+            step="1"
+            placeholder="Leave empty for random"
+            value={form.seed ?? ""}
+            onChange={setField("seed")}
+          />
+        </L>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          className="rounded-lg px-3 py-2 bg-white/10 hover:bg-white/20 text-sm disabled:opacity-50"
+          onClick={onSave}
+          disabled={saving}
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+        {err && <span className="text-sm text-red-400">{err}</span>}
+        {ok && <span className="text-sm text-emerald-400">Saved ✔</span>}
+      </div>
+
+      <style jsx>{`
+        .input {
+          width: 100%;
+          border-radius: 0.5rem;
+          border: 1px solid var(--border, #1f2937);
+          padding: 0.5rem 0.75rem;
+          font-size: 0.875rem;
+          background: var(--bg, #0b0b0d);
+          color: var(--text, #e5e7eb);
+          outline: none;
+        }
+      `}</style>
+    </section>
   );
 }

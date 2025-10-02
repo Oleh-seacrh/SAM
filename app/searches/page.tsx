@@ -47,6 +47,7 @@ type Score = {
   companyType: "manufacturer" | "distributor" | "dealer" | "other";
   countryISO2: string | null;
   countryName: string | null;
+  countryConfidence?: "HIGH" | "WEAK" | "LLM" | null;
   detectedBrands: string[];
 };
 
@@ -77,6 +78,10 @@ function normalizeScores(raw: any): ScoresByDomain {
           )
         )
       : [];
+    const countryConfidence = 
+      v.countryConfidence && ["HIGH", "WEAK", "LLM"].includes(v.countryConfidence)
+        ? v.countryConfidence
+        : null;
     out[domain] = {
       label: ["good", "maybe", "bad"].includes(v.label) ? v.label : "maybe",
       confidence:
@@ -93,6 +98,7 @@ function normalizeScores(raw: any): ScoresByDomain {
           : "other",
       countryISO2,
       countryName: countryISO2 ? countryName : countryName && countryName.length >= 3 ? countryName : null,
+      countryConfidence,
       detectedBrands,
     };
   }
@@ -139,6 +145,10 @@ export default function SearchesPage() {
   // brandMatches (configured inference)
   const [brandMatches, setBrandMatches] = useState<Record<string, string[]>>({});
 
+  // Deep analysis state per URL
+  const [deepAnalyzed, setDeepAnalyzed] = useState<Set<string>>(new Set());
+  const [deepAnalyzing, setDeepAnalyzing] = useState<Set<string>>(new Set());
+
   // History
   const [history, setHistory] = useState<string[]>([]);
 
@@ -149,6 +159,22 @@ export default function SearchesPage() {
   const [tagsText, setTagsText] = useState("");
 
   /* ---------------- Effects ---------------- */
+  useEffect(() => {
+    // Fetch AI Model settings on mount
+    (async () => {
+      try {
+        const r = await fetch("/api/settings/ai-model", { cache: "no-store" });
+        if (r.ok) {
+          const aiSettings = await r.json();
+          if (aiSettings.provider) setProvider(aiSettings.provider);
+          if (aiSettings.defaultModel) setModel(aiSettings.defaultModel);
+        }
+      } catch (e) {
+        console.error("Failed to load AI Model settings:", e);
+      }
+    })();
+  }, []);
+
   useEffect(() => {
     if (!settings) return;
     settings.lastQuery && setQ(settings.lastQuery);
@@ -287,6 +313,43 @@ export default function SearchesPage() {
       tags,
     });
     setOpen(false);
+  }
+
+  async function runDeepAnalyze(url: string, domain: string) {
+    setDeepAnalyzing(prev => new Set(prev).add(url));
+    try {
+      // For now, we'll use the score API as a placeholder for deep analysis
+      // In the future, this should call a dedicated /api/crawl endpoint
+      const r = await fetch("/api/score", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          model: model || undefined,
+          prompt,
+          items: [{
+            title: "",
+            snippet: "",
+            homepage: url,
+            domain,
+          }],
+        }),
+      });
+      const j = await r.json();
+      if (r.ok && j?.scoresByDomain) {
+        // Merge deep scores into existing scores
+        setScores(prev => ({ ...prev, ...normalizeScores(j) }));
+        setDeepAnalyzed(prev => new Set(prev).add(url));
+      }
+    } catch (e: any) {
+      console.error("Deep analyze error:", e);
+    } finally {
+      setDeepAnalyzing(prev => {
+        const next = new Set(prev);
+        next.delete(url);
+        return next;
+      });
+    }
   }
 
   /* ---------------- Memo ---------------- */
@@ -533,6 +596,8 @@ export default function SearchesPage() {
               const domain = getDomain(homepage).replace(/^www\./i, "");
               const score = pickScore(scores, domain);
               const inCRM = existsDomain(domain);
+              const isDeepAnalyzed = deepAnalyzed.has(it.link);
+              const isDeepAnalyzing = deepAnalyzing.has(it.link);
 
               const llmBrands = score?.detectedBrands || [];
               const matched = brandMatches[it.link] || [];
@@ -551,24 +616,23 @@ export default function SearchesPage() {
                 >
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1">
-                      <a
-                        href={it.link}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-400 hover:underline"
-                      >
-                        {it.title}
-                      </a>
-                      <div className="text-xs text-[var(--muted)] mt-1">
-                        {it.displayLink} •{" "}
+                      <div className="flex items-center gap-2">
                         <a
-                          href={homepage}
+                          href={it.link}
                           target="_blank"
                           rel="noreferrer"
-                          className="hover:underline"
+                          className="text-blue-400 hover:underline"
                         >
-                          {domain}
+                          {it.title}
                         </a>
+                        {isDeepAnalyzed && (
+                          <span className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 border border-blue-500/30">
+                            Deep analyzed
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs text-[var(--muted)] mt-1">
+                        • {domain}
                       </div>
                     </div>
 
@@ -582,6 +646,7 @@ export default function SearchesPage() {
                           <CountryPill
                             countryISO2={score.countryISO2}
                             countryName={score.countryName}
+                            confidence={score.countryConfidence || null}
                           />
                         </div>
                       )}
@@ -590,12 +655,22 @@ export default function SearchesPage() {
                           In CRM
                         </span>
                       ) : (
-                        <button
-                          onClick={() => openAddModal(it)}
-                          className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10"
-                        >
-                          + Add
-                        </button>
+                        <>
+                          <button
+                            onClick={() => runDeepAnalyze(it.link, domain)}
+                            disabled={isDeepAnalyzing || isDeepAnalyzed}
+                            className="rounded-md text-sm px-3 py-1.5 border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+                            title="Deep analyze this result"
+                          >
+                            {isDeepAnalyzing ? "Analyzing…" : "Deep analyze"}
+                          </button>
+                          <button
+                            onClick={() => openAddModal(it)}
+                            className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10"
+                          >
+                            + Add
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -620,24 +695,49 @@ export default function SearchesPage() {
                   )}
 
                   {score && (
-                    <div className="mt-3 p-3 bg-black/20 rounded-lg">
-                      <div className="text-xs text-[var(--muted)] mb-2">
-                        LLM Analysis Details:
-                      </div>
-                      <div className="text-xs space-y-1">
-                        <div>
-                          <strong>Confidence:</strong>{" "}
-                          {(score.confidence * 100).toFixed(0)}%
-                        </div>
-                        {score.reasons?.length > 0 && (
+                    <details open className="mt-3">
+                      <summary className="cursor-pointer text-xs text-[var(--muted)] mb-2 select-none">
+                        LLM Analysis Details (Quick)
+                      </summary>
+                      <div className="p-3 bg-black/20 rounded-lg">
+                        <div className="text-xs space-y-1">
                           <div>
-                            <strong>Reasons:</strong>{" "}
-                            {score.reasons.join(", ")}
+                            <strong>Confidence:</strong>{" "}
+                            {(score.confidence * 100).toFixed(0)}%
+                          </div>
+                          {score.reasons?.length > 0 && (
+                            <div>
+                              <strong>Reasons:</strong>{" "}
+                              {score.reasons.join(", ")}
+                            </div>
+                          )}
+                          {score.tags?.length > 0 && (
+                            <div>
+                              <strong>Tags:</strong> {score.tags.join(", ")}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </details>
+                  )}
+
+                  {isDeepAnalyzed && score && (
+                    <div className="mt-3 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+                      <div className="text-xs text-blue-300 mb-2 font-medium">
+                        Deep Analysis Results
+                      </div>
+                      <div className="text-xs space-y-1 text-[var(--muted)]">
+                        <div>
+                          <strong>Company Type:</strong> {score.companyType}
+                        </div>
+                        {score.countryISO2 && (
+                          <div>
+                            <strong>Country:</strong> {score.countryISO2} {score.countryName ? `(${score.countryName})` : ""}
                           </div>
                         )}
-                        {score.tags?.length > 0 && (
+                        {score.detectedBrands?.length > 0 && (
                           <div>
-                            <strong>Tags:</strong> {score.tags.join(", ")}
+                            <strong>Brands:</strong> {score.detectedBrands.join(", ")}
                           </div>
                         )}
                       </div>

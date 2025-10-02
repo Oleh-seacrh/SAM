@@ -114,7 +114,7 @@ function pickScore(scores: ScoresByDomain, rawDomain: string): Score | undefined
  * ================================================== */
 export default function SearchesPage() {
   const [q, setQ] = useState("");
-  const [num, setNum] = useState(10);
+  // Видалено: const [num, setNum] = useState(10);
   const [start, setStart] = useState(1);
   const [data, setData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -153,7 +153,7 @@ export default function SearchesPage() {
     if (!settings) return;
     settings.lastQuery && setQ(settings.lastQuery);
     settings.lastStart && setStart(settings.lastStart);
-    settings.lastNum && setNum(settings.lastNum);
+    // Видалено: settings.lastNum && setNum(settings.lastNum);
     settings.lastProvider && setProvider(settings.lastProvider);
     settings.lastModel && setModel(settings.lastModel);
     settings.lastPrompt && setPrompt(settings.lastPrompt);
@@ -180,15 +180,17 @@ export default function SearchesPage() {
     setLoading(true);
     setErr(null);
     try {
+      // Видалено параметр &num=...
       const r = await fetch(
-        `/api/search?q=${encodeURIComponent(query)}&num=${num}&start=${nextStart || 1}`
+        `/api/search?q=${encodeURIComponent(query)}&start=${nextStart || 1}`
       );
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Search failed");
       setData(j as SearchResponse);
       setScores({});
       setBrandMatches({});
-      setLastSearch(query, num, j.start);
+      // Оновлено виклик setLastSearch без num
+      setLastSearch(query, j.start);
 
       // session snapshot
       const savedItems: SavedItem[] = (j.items ?? []).map((it: any) => {
@@ -204,7 +206,7 @@ export default function SearchesPage() {
       });
       addSession({
         q: j.q,
-        num: j.num,
+        num: j.num, // залишено якщо бекенд і далі повертає num
         start: j.start,
         totalResults: j.totalResults || 0,
         items: savedItems,
@@ -325,14 +327,7 @@ export default function SearchesPage() {
             value={q}
             onChange={e => setQ(e.target.value)}
           />
-          <input
-            type="number"
-            min={1}
-            max={50}
-            className="w-32 rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-            value={num}
-            onChange={e => setNum(Number(e.target.value) || 10)}
-          />
+          {/* Вилучене поле для кількості результатів */}
           <button
             type="submit"
             disabled={loading || !q.trim()}
@@ -351,7 +346,7 @@ export default function SearchesPage() {
             />
             Auto-run last search on load
           </label>
-          {settings?.lastQuery && (
+            {settings?.lastQuery && (
             <span>
               Last: <b>{settings.lastQuery}</b>
             </span>
@@ -539,17 +534,13 @@ export default function SearchesPage() {
               const score = pickScore(scores, domain);
               const inCRM = existsDomain(domain);
 
-              // --- brands logic ---
               const llmBrands = score?.detectedBrands || [];
               const matched = brandMatches[it.link] || [];
 
               const llmLower = new Set(llmBrands.map(b => b.toLowerCase()));
               const matchedFiltered = matched.filter(b => !llmLower.has(b.toLowerCase()));
 
-              // Full ordered list (LLM priority first)
               const orderedBrands = [...llmBrands, ...matchedFiltered];
-
-              // Visible first 3
               const visibleBrands = orderedBrands.slice(0, 3);
               const hiddenCount = orderedBrands.length - visibleBrands.length;
 
@@ -615,7 +606,6 @@ export default function SearchesPage() {
                     </p>
                   )}
 
-                  {/* Brands (max 3 visible) */}
                   {orderedBrands.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {visibleBrands.map(b => (
@@ -673,7 +663,7 @@ export default function SearchesPage() {
           <div className="text-sm uppercase tracking-wide text-[var(--muted)]">
             Company
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Field
               label="Company"
               value={draft.companyName || ""}

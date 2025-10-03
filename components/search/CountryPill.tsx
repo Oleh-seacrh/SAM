@@ -7,9 +7,11 @@ import { flagImgSrc, flagEmoji } from "@/lib/flags";
 export function CountryPill({
   countryISO2,
   countryName,
+  confidence,
 }: {
   countryISO2: string | null;
   countryName: string | null;
+  confidence?: "HIGH" | "WEAK" | null;
 }) {
   if (!countryISO2 && !countryName) return null;
   const iso = (countryISO2 || "").toUpperCase();
@@ -34,6 +36,11 @@ export function CountryPill({
         <span className="text-xs leading-none">{fallback}</span>
       )}
       <span>{display}</span>
+      {confidence && (
+        <span className="text-[9px] uppercase tracking-wider opacity-70 ml-1">
+          {confidence}
+        </span>
+      )}
     </Badge>
   );
 }

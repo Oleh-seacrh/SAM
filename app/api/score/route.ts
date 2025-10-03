@@ -1,6 +1,9 @@
 export const runtime = "nodejs";
 
 import { NextRequest } from "next/server";
+import { getTenantIdFromSession } from "@/lib/auth";
+import { getSql } from "@/lib/db";
+import { matchBrands } from "@/lib/crawl/factPool";
 
 /* ==================================================
  * Types
@@ -138,7 +141,7 @@ async function preparePrompt(prompt: string, items: Item[]) {
       domain: stripWWW(it.domain.toLowerCase()),
     }))
   );
-  return buildPrompt(prompt, enriched);
+  return { promptText: buildPrompt(prompt, enriched), enriched };
 }
 
 /* ==================================================
@@ -243,6 +246,11 @@ function normalizeScores(resp: any): LLMResponse {
 export async function POST(req: NextRequest) {
   let raw = "";
   try {
+    const tenantId = await getTenantIdFromSession();
+    if (!tenantId) {
+      return Response.json({ error: "No tenant" }, { status: 401 });
+    }
+
     const { provider = "openai", model, prompt, items }: Body = await req.json();
 
     if (!prompt?.trim()) {
@@ -258,7 +266,18 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const userText = await preparePrompt(prompt, items);
+    // Get brand dictionary from tenant_settings
+    const sql = getSql();
+    const brandRows = await sql/*sql*/`
+      select name
+      from public.brands
+      where tenant_id = ${tenantId}
+      order by lower(name)
+      limit 100
+    `;
+    const brandDict = brandRows.map((r: any) => r.name);
+
+    const { promptText: userText, enriched } = await preparePrompt(prompt, items);
     const mdl = model?.trim();
 
     if (provider === "openai") {
@@ -345,6 +364,20 @@ export async function POST(req: NextRequest) {
 
     const parsed = parseLLMJson(raw);
     const processed = normalizeScores(parsed);
+    
+    // Enhance with tenant brands - match brands in content
+    for (const domain of Object.keys(processed.scoresByDomain)) {
+      const enrichedItem = enriched.find(e => e.domain === domain);
+      if (enrichedItem && brandDict.length > 0) {
+        const matchedBrands = matchBrands(enrichedItem.content, brandDict);
+        const llmBrands = processed.scoresByDomain[domain].detectedBrands;
+        
+        // Merge: keep LLM brands + add matched brands (dedupe)
+        const allBrandsSet = new Set([...llmBrands, ...matchedBrands]);
+        processed.scoresByDomain[domain].detectedBrands = Array.from(allBrandsSet);
+      }
+    }
+    
     return Response.json(processed);
   } catch (e: any) {
     console.error("/api/score error", e?.message);

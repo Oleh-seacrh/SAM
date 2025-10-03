@@ -174,6 +174,13 @@ export function ResultCard({
               )}
             </div>
           )}
+          <button
+            onClick={handleDeepAnalyze}
+            disabled={deepLoading || !!deepResult}
+            className="rounded-md text-sm px-3 py-1.5 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50"
+          >
+            {deepLoading ? "Analyzing…" : deepResult ? "✓ Deep Analyzed" : "🔍 Deep Analyze"}
+          </button>
           {inCRM ? (
             <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">
               In CRM
@@ -193,6 +200,10 @@ export function ResultCard({
 
       {item.snippet && (
         <p className="mt-2 text-sm text-[var(--muted)]">{item.snippet}</p>
+      )}
+
+      {deepError && (
+        <div className="mt-2 text-xs text-red-400">{deepError}</div>
       )}
 
       {orderedBrands.length > 0 && (
@@ -231,20 +242,6 @@ export function ResultCard({
           </div>
         </div>
       )}
-
-      {/* Deep Analyze Button */}
-      <div className="mt-3 flex items-center gap-2">
-        <button
-          onClick={handleDeepAnalyze}
-          disabled={deepLoading || !!deepResult}
-          className="rounded-md text-sm px-3 py-1.5 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50"
-        >
-          {deepLoading ? "Analyzing…" : deepResult ? "✓ Deep Analyzed" : "🔍 Deep Analyze"}
-        </button>
-        {deepError && (
-          <span className="text-xs text-red-400">{deepError}</span>
-        )}
-      </div>
 
       {/* Deep Analysis Results */}
       {deepResult && (

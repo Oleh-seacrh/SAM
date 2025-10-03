@@ -9,9 +9,7 @@ import { canonicalHomepage, getDomain } from "@/lib/domain";
 import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
 import { FindClientButton } from "@/components/search/FindClientButton";
-import { BrandBadge } from "@/components/search/BrandBadge";
-import { CountryPill } from "@/components/search/CountryPill";
-import { TypePill } from "@/components/search/TypePill";
+import { ResultCard } from "@/components/search/ResultCard";
 
 /* ==================================================
  * Config / Debug
@@ -534,116 +532,15 @@ export default function SearchesPage() {
               const score = pickScore(scores, domain);
               const inCRM = existsDomain(domain);
 
-              const llmBrands = score?.detectedBrands || [];
-              const matched = brandMatches[it.link] || [];
-
-              const llmLower = new Set(llmBrands.map(b => b.toLowerCase()));
-              const matchedFiltered = matched.filter(b => !llmLower.has(b.toLowerCase()));
-
-              const orderedBrands = [...llmBrands, ...matchedFiltered];
-              const visibleBrands = orderedBrands.slice(0, 3);
-              const hiddenCount = orderedBrands.length - visibleBrands.length;
-
               return (
-                <li
+                <ResultCard
                   key={it.link}
-                  className="rounded-xl bg-[var(--card)] p-4 border border-white/10"
-                >
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="flex-1">
-                      <a
-                        href={it.link}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-blue-400 hover:underline"
-                      >
-                        {it.title}
-                      </a>
-                      <div className="text-xs text-[var(--muted)] mt-1">
-                        {it.displayLink} •{" "}
-                        <a
-                          href={homepage}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="hover:underline"
-                        >
-                          {domain}
-                        </a>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      {score && (
-                        <div className="flex gap-2 flex-wrap">
-                          <Badge tone={score.label}>
-                            {score.label.toUpperCase()}
-                          </Badge>
-                          <TypePill companyType={score.companyType} />
-                          <CountryPill
-                            countryISO2={score.countryISO2}
-                            countryName={score.countryName}
-                          />
-                        </div>
-                      )}
-                      {inCRM ? (
-                        <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">
-                          In CRM
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => openAddModal(it)}
-                          className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10"
-                        >
-                          + Add
-                        </button>
-                      )}
-                    </div>
-                  </div>
-
-                  {it.snippet && (
-                    <p className="mt-2 text-sm text-[var(--muted)]">
-                      {it.snippet}
-                    </p>
-                  )}
-
-                  {orderedBrands.length > 0 && (
-                    <div className="mt-2 flex flex-wrap gap-2">
-                      {visibleBrands.map(b => (
-                        <BrandBadge key={b} label={b} tone="maybe" />
-                      ))}
-                      {hiddenCount > 0 && (
-                        <span className="text-[10px] uppercase tracking-wide text-[var(--muted)] self-center">
-                          +{hiddenCount} more
-                        </span>
-                      )}
-                    </div>
-                  )}
-
-                  {score && (
-                    <div className="mt-3 p-3 bg-black/20 rounded-lg">
-                      <div className="text-xs text-[var(--muted)] mb-2">
-                        LLM Analysis Details:
-                      </div>
-                      <div className="text-xs space-y-1">
-                        <div>
-                          <strong>Confidence:</strong>{" "}
-                          {(score.confidence * 100).toFixed(0)}%
-                        </div>
-                        {score.reasons?.length > 0 && (
-                          <div>
-                            <strong>Reasons:</strong>{" "}
-                            {score.reasons.join(", ")}
-                          </div>
-                        )}
-                        {score.tags?.length > 0 && (
-                          <div>
-                            <strong>Tags:</strong> {score.tags.join(", ")}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </li>
+                  item={it}
+                  score={score}
+                  brandMatches={brandMatches[it.link] || []}
+                  inCRM={inCRM}
+                  onAddToCRM={() => openAddModal(it)}
+                />
               );
             })}
           </ul>

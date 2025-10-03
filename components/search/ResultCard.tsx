@@ -40,6 +40,8 @@ export type DeepResult = {
     confidence: "HIGH" | "WEAK" | null;
     confidenceScore: number;
   };
+  companyType?: string;
+  evidence?: string[];
 };
 
 /* ==================================================
@@ -61,6 +63,8 @@ export function ResultCard({
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepResult, setDeepResult] = useState<DeepResult | null>(null);
   const [deepError, setDeepError] = useState<string | null>(null);
+  const [deepProgress, setDeepProgress] = useState<{ current: number; total: number } | null>(null);
+  const [abortController, setAbortController] = useState<AbortController | null>(null);
 
   const canonicalHomepage = (url: string) => {
     try {
@@ -109,12 +113,21 @@ export function ResultCard({
       }
     : null;
 
-  // Company type: use Deep if companyType was UNKNOWN in Quick (not implemented here, but can be)
-  const displayCompanyType = score?.companyType;
+  // Company type: use Deep if available and valid, else Quick
+  const displayCompanyType = 
+    deepResult?.companyType && deepResult.companyType !== "other"
+      ? (deepResult.companyType as "manufacturer" | "distributor" | "dealer" | "other")
+      : score?.companyType;
 
   const handleDeepAnalyze = async () => {
     setDeepLoading(true);
     setDeepError(null);
+    setDeepProgress({ current: 0, total: 25 });
+    
+    // Create abort controller for cancellation
+    const controller = new AbortController();
+    setAbortController(controller);
+    
     try {
       const res = await fetch("/api/crawl", {
         method: "POST",
@@ -122,16 +135,32 @@ export function ResultCard({
         body: JSON.stringify({
           url: homepage,
           domain,
-          maxPages: 3,
+          profile: "deep",
         }),
+        signal: controller.signal,
       });
+      
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || "Crawl failed");
+      
       setDeepResult(data);
+      setDeepProgress({ current: data.pagesAnalyzed || 0, total: 25 });
     } catch (e: any) {
-      setDeepError(e.message || "Deep analysis failed");
+      if (e.name === "AbortError") {
+        setDeepError("Deep analysis cancelled");
+      } else {
+        setDeepError(e.message || "Deep analysis failed");
+      }
     } finally {
       setDeepLoading(false);
+      setAbortController(null);
+    }
+  };
+
+  const handleCancelDeep = () => {
+    if (abortController) {
+      abortController.abort();
+      setAbortController(null);
     }
   };
 
@@ -177,10 +206,22 @@ export function ResultCard({
           <button
             onClick={handleDeepAnalyze}
             disabled={deepLoading || !!deepResult}
-            className="rounded-md text-sm px-3 py-1.5 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50"
+            className="rounded-md text-sm px-3 py-1.5 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50 whitespace-nowrap"
           >
-            {deepLoading ? "Analyzing…" : deepResult ? "✓ Deep Analyzed" : "🔍 Deep Analyze"}
+            {deepLoading && deepProgress
+              ? `Analyzing ${deepProgress.current}/${deepProgress.total}…`
+              : deepResult
+              ? "✓ Deep Analyzed"
+              : "🔍 Deep Analyze"}
           </button>
+          {deepLoading && abortController && (
+            <button
+              onClick={handleCancelDeep}
+              className="rounded-md text-sm px-2 py-1.5 border border-red-500/40 bg-red-500/10 hover:bg-red-500/20"
+            >
+              Cancel
+            </button>
+          )}
           {inCRM ? (
             <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">
               In CRM
@@ -255,6 +296,13 @@ export function ResultCard({
             )}
           </div>
           <div className="text-xs space-y-2">
+            {/* Company Type */}
+            {deepResult.companyType && (
+              <div>
+                <strong>Company Type:</strong> {deepResult.companyType}
+              </div>
+            )}
+
             {/* Country */}
             {deepResult.country.iso2 && (
               <div>

@@ -1,126 +1,107 @@
 // app/analysis/page.tsx
-// Product Monitor (LLM-only parser) for SAM
-// - Uses your existing LLM helper from "@/lib/llm" (jsonExtract) — no new clients
-// - Stores into Neon table: analysis_products (url, name, price, availability)
-// - Simple UI: add URL, list, refresh one/all
-// - No DDL here (you said you'll create the table yourself)
+// Product Monitor (LLM-only) for SAM
+// - "Reload list" лише перечитує з БД і оновлює таблицю на екрані (без парсингу)
+// - "Refresh all (re-parse)" фетчить HTML і просить LLM (через твій jsonExtract) витягнути name/price/availability
+// - Показує записи навіть якщо tenant_id не збігається (fallback: якщо пусто — прочитати всі)
+//
+// ПРИМІТКА: DDL тут немає (таблицю ти вже створив).
 
 import { revalidatePath, unstable_noStore as noStore } from "next/cache";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
-import { jsonExtract } from "@/lib/llm"; // <- use your existing helper
+import { jsonExtract } from "@/lib/llm"; // твій існуючий хелпер
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// ---------- Types ----------
 type Row = {
   id: string;
   tenant_id: string | null;
   url: string;
   name: string | null;
-  price: string | null; // numeric comes back as string from Neon
+  price: string | null;        // numeric з Neon приходить рядком
   availability: boolean | null;
   updated_at: string | null;
 };
 
-// ---------- Utils ----------
+// --------- helpers ----------
 async function getTenantId(): Promise<string | null> {
-  // fallbacks so prod doesn't crash if there's no session
   return (await getTenantIdFromSession()) || (process.env.TENANT_ID as string | undefined) || null;
 }
 
-function decodeHtmlEntities(s: string) {
+function decodeHtml(s: string) {
   return s
     .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
+    .replace(/&quot;/g, "\"")
     .replace(/&#x27;|&#39;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
 }
 
-// ---------- LLM extraction (through your helper) ----------
+// --------- LLM через твій jsonExtract ----------
 async function llmExtract(html: string, url?: string): Promise<{
   name: string | null;
   price: number | null;
   availability: boolean | null;
 }> {
-  // JSON Schema that your `jsonExtract` accepts
   const schema = {
     type: "object",
     additionalProperties: false,
     properties: {
       name: { anyOf: [{ type: "string" }, { type: "null" }] },
       price: { anyOf: [{ type: "number" }, { type: "null" }] },
-      availability: { anyOf: [{ type: "boolean" }, { type: "null" }] },
+      availability: { anyOf: [{ type: "boolean" }, { type: "null" }] }
     },
-    required: ["name", "price", "availability"],
+    required: ["name", "price", "availability"]
   };
 
   const system =
     "You extract structured data from a single e-commerce product page and return STRICT JSON only.";
-
   const user = [
     "Return JSON with EXACT keys: name (string|null), price (number|null), availability (true|false|null).",
-    "Normalize price to dot-decimal if needed (e.g., '1 299,00' -> 1299.00).",
-    "If a field is not found, use null.",
+    "Normalize price to a dot-decimal number (examples: '1 299,00' -> 1299.00 ; '2.499,50' -> 2499.50 ; '1,199.00' -> 1199.00).",
+    "Do NOT include currency signs in price. If not found, use null.",
     url ? `URL: ${url}` : "",
     "HTML:",
-    html.slice(0, 18000), // keep the prompt efficient
+    html.slice(0, 18000)
   ]
     .filter(Boolean)
     .join("\n");
 
-  const out = await jsonExtract<{
-    name: string | null;
-    price: number | null;
-    availability: boolean | null;
-  }>({
+  const out = await jsonExtract<{ name: string | null; price: number | null; availability: boolean | null }>({
     system,
     user,
     schema,
-    temperature: 0,
-    // model/provider if your helper supports it:
-    // model: "gpt-4o-mini",
-    // provider: "openai",
+    temperature: 0
+    // за потреби тут можна передати model/provider відповідно до твого llm.ts
   });
 
   return {
     name: out?.name ?? null,
     price: typeof out?.price === "number" ? out!.price : null,
-    availability:
-      typeof out?.availability === "boolean" ? out!.availability : null,
+    availability: typeof out?.availability === "boolean" ? out!.availability : null
   };
 }
 
-// ---------- Fetch page & parse via LLM only ----------
-async function fetchAndParse(url: string): Promise<{
-  name: string | null;
-  price: number | null;
-  availability: boolean | null;
-}> {
-  const r = await fetch(url, {
-    headers: { "User-Agent": "SAM-ProductMonitor/1.0" },
-    cache: "no-store",
-  });
+// --------- fetch + parse через LLM ----------
+async function fetchAndParse(url: string): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
+  const r = await fetch(url, { headers: { "User-Agent": "SAM-ProductMonitor/1.0" }, cache: "no-store" });
   if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
   const html = await r.text();
 
   const ai = await llmExtract(html, url);
 
-  const name =
-    ai.name && typeof ai.name === "string" ? decodeHtmlEntities(ai.name) : ai.name;
+  const name = ai.name ? decodeHtml(ai.name) : null;
   const price = ai.price ?? null;
   const availability = ai.availability ?? null;
 
   return { name, price, availability };
 }
 
-// ---------- DB helpers ----------
-async function listProducts(): Promise<Row[]> {
+// --------- DB ----------
+async function listProductsForTenant(tenantId: string | null): Promise<Row[]> {
   const sql = getSql();
-  const tenantId = await getTenantId();
-  const rows = await sql<Row[]>`
+  return await sql<Row[]>`
     SELECT
       id,
       tenant_id,
@@ -133,13 +114,34 @@ async function listProducts(): Promise<Row[]> {
     WHERE (${tenantId} IS NULL AND tenant_id IS NULL) OR tenant_id = ${tenantId}
     ORDER BY updated_at DESC NULLS LAST, url ASC
   `;
+}
+
+// fallback: якщо для цього tenant пусто — показати всі (щоб ти бачив дані відразу)
+async function listProducts(): Promise<Row[]> {
+  const tenantId = await getTenantId();
+  const sql = getSql();
+  let rows = await listProductsForTenant(tenantId);
+  if (rows.length === 0) {
+    rows = await sql<Row[]>`
+      SELECT
+        id,
+        tenant_id,
+        url,
+        name,
+        price::text AS price,
+        availability,
+        updated_at::text AS updated_at
+      FROM analysis_products
+      ORDER BY updated_at DESC NULLS LAST, url ASC
+      LIMIT 500
+    `;
+  }
   return rows;
 }
 
 async function upsertProduct(url: string): Promise<Row> {
   const sql = getSql();
   const tenantId = await getTenantId();
-
   const parsed = await fetchAndParse(url);
 
   const rows = await sql<Row[]>`
@@ -162,7 +164,8 @@ async function upsertProduct(url: string): Promise<Row> {
   return rows[0];
 }
 
-// ---------- Server Actions ----------
+// --------- Server Actions ---------
+// Додає URL та одразу перепарсює (LLM)
 export async function addUrlAction(formData: FormData) {
   "use server";
   const url = String(formData.get("url") || "").trim();
@@ -175,18 +178,13 @@ export async function addUrlAction(formData: FormData) {
   revalidatePath("/analysis");
 }
 
-export async function refreshOneAction(formData: FormData) {
+// Лише перечитує список з БД і оновлює сторінку (без парсингу)
+export async function reloadListAction() {
   "use server";
-  const url = String(formData.get("url") || "").trim();
-  if (!url) return;
-  try {
-    await upsertProduct(url);
-  } catch (e) {
-    console.error("refreshOneAction failed:", e);
-  }
   revalidatePath("/analysis");
 }
 
+// Повний перепарсинг усіх URL
 export async function refreshAllAction() {
   "use server";
   try {
@@ -204,7 +202,20 @@ export async function refreshAllAction() {
   revalidatePath("/analysis");
 }
 
-// ---------- Page ----------
+// Перепарсинг одного URL (LLM)
+export async function refreshOneAction(formData: FormData) {
+  "use server";
+  const url = String(formData.get("url") || "").trim();
+  if (!url) return;
+  try {
+    await upsertProduct(url);
+  } catch (e) {
+    console.error("refreshOneAction failed:", e);
+  }
+  revalidatePath("/analysis");
+}
+
+// --------- Page ----------
 export default async function AnalysisPage() {
   noStore();
 
@@ -219,9 +230,7 @@ export default async function AnalysisPage() {
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Analysis</h1>
       <p className="text-sm opacity-70">
-        LLM-only product monitor. Adds/refreshes URL → saves{" "}
-        <code>name</code>, <code>price</code>, <code>availability</code> in
-        Neon.
+        LLM-only product monitor. Add/Reload to view DB data. Refresh to re-parse via GPT.
       </p>
 
       {/* Add URL */}
@@ -233,17 +242,21 @@ export default async function AnalysisPage() {
           placeholder="https://example.com/product/123"
           className="w-full max-w-xl rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2 outline-none"
         />
-        <button className="rounded-xl px-4 py-2 bg-white text-black hover:opacity-90">
-          Add
-        </button>
+        <button className="rounded-xl px-4 py-2 bg-white text-black hover:opacity-90">Add</button>
       </form>
 
-      {/* Bulk refresh */}
-      <form action={refreshAllAction}>
-        <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">
-          Refresh all
-        </button>
-      </form>
+      <div className="flex gap-2">
+        <form action={reloadListAction}>
+          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">
+            Reload list
+          </button>
+        </form>
+        <form action={refreshAllAction}>
+          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">
+            Refresh all (re-parse)
+          </button>
+        </form>
+      </div>
 
       {/* Table */}
       <div className="overflow-x-auto">
@@ -261,73 +274,53 @@ export default async function AnalysisPage() {
           <tbody>
             {items.length === 0 && (
               <tr>
-                <td
-                  colSpan={6}
-                  className="px-3 py-6 text-center opacity-60"
-                >
-                  No items yet. Add a product URL above.
+                <td colSpan={6} className="px-3 py-6 text-center opacity-60">
+                  No items yet. Add a product URL above or click Reload list.
                 </td>
               </tr>
             )}
-            {items.map((row) => (
-              <tr
-                key={row.id}
-                className="bg-neutral-900/40 hover:bg-neutral-900"
-              >
-                <td className="px-3 py-2 align-top max-w-[380px]">
-                  <a
-                    href={row.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="underline break-all"
-                  >
-                    {row.url}
-                  </a>
-                </td>
-                <td
-                  className="px-3 py-2 align-top max-w-[320px]"
-                  title={row.name ?? undefined}
-                >
-                  <div className="truncate">{row.name ?? "—"}</div>
-                </td>
-                <td className="px-3 py-2 align-top">
-                  {row.price ?? "—"}
-                </td>
-                <td className="px-3 py-2 align-top">
-                  {row.availability === null ? (
-                    "—"
-                  ) : row.availability ? (
-                    <span className="inline-flex items-center rounded-lg px-2 py-1 bg-green-600/20 text-green-300">
-                      In stock
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center rounded-lg px-2 py-1 bg-red-600/20 text-red-300">
-                      Out
-                    </span>
-                  )}
-                </td>
-                <td className="px-3 py-2 align-top opacity-70">
-                  {row.updated_at
-                    ? new Date(row.updated_at).toLocaleString()
-                    : "—"}
-                </td>
-                <td className="px-3 py-2 align-top">
-                  <form action={refreshOneAction} className="inline">
-                    <input type="hidden" name="url" value={row.url} />
-                    <button className="rounded-xl px-3 py-1 border border-neutral-700 hover:bg-neutral-800">
-                      Refresh
-                    </button>
-                  </form>
-                </td>
-              </tr>
-            ))}
+            {items.map((row) => {
+              const displayName = row.name ? decodeHtml(row.name) : "—";
+              return (
+                <tr key={row.id} className="bg-neutral-900/40 hover:bg-neutral-900">
+                  <td className="px-3 py-2 align-top max-w-[380px]">
+                    <a href={row.url} target="_blank" rel="noreferrer" className="underline break-all">
+                      {row.url}
+                    </a>
+                  </td>
+                  <td className="px-3 py-2 align-top max-w-[320px]" title={displayName}>
+                    <div className="truncate">{displayName}</div>
+                  </td>
+                  <td className="px-3 py-2 align-top">{row.price ?? "—"}</td>
+                  <td className="px-3 py-2 align-top">
+                    {row.availability === null ? (
+                      "—"
+                    ) : row.availability ? (
+                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-green-600/20 text-green-300">In stock</span>
+                    ) : (
+                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-red-600/20 text-red-300">Out</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2 align-top opacity-70">
+                    {row.updated_at ? new Date(row.updated_at).toLocaleString() : "—"}
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <form action={refreshOneAction} className="inline">
+                      <input type="hidden" name="url" value={row.url} />
+                      <button className="rounded-xl px-3 py-1 border border-neutral-700 hover:bg-neutral-800">
+                        Refresh
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
       <div className="text-xs opacity-60">
-        Parser uses your <code>jsonExtract</code> helper under{" "}
-        <code>@/lib/llm</code>. Ensure your provider/model is configured there.
+        Uses <code>jsonExtract</code> from <code>@/lib/llm</code>. Ensure provider/model configured there.
       </div>
     </div>
   );

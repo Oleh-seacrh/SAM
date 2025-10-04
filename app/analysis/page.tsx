@@ -35,20 +35,10 @@ export type ProductRow = {
 
 // ---------- DDL (run on first load) ----------
 async function ensureTable() {
+  // DDL disabled here because you created the table manually.
+  // We just ping the DB so the page won’t crash if CREATE EXTENSION is forbidden on prod.
   const sql = getSql();
-  await sql`
-    CREATE TABLE IF NOT EXISTS analysis_products (
-      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-      tenant_id UUID,
-      url TEXT NOT NULL,
-      name TEXT,
-      price NUMERIC,
-      availability BOOLEAN,
-      updated_at TIMESTAMPTZ DEFAULT now(),
-      created_at TIMESTAMPTZ DEFAULT now(),
-      CONSTRAINT analysis_products_tenant_url_uniq UNIQUE (tenant_id, url)
-    );
-  `;
+  try { await sql`select 1`; } catch (e) { console.error("ensureTable ping failed", e); }
 }
 
 // ---------- Heuristics parser (no extra deps) ----------
@@ -149,7 +139,7 @@ async function fetchAndParse(url: string): Promise<{ name: string|null; price: n
 
 async function upsertProduct(url: string) {
   const sql = getSql();
-  const tenantId = await getTenantIdFromSession();
+  const tenantId = (await getTenantIdFromSession()) || (process.env.TENANT_ID as string | null) || null;
   const parsed = await fetchAndParse(url);
   // upsert by (tenant_id, url)
   const rows = await sql<ProductRow[]>`
@@ -167,7 +157,7 @@ async function upsertProduct(url: string) {
 
 async function listProducts(): Promise<ProductRow[]> {
   const sql = getSql();
-  const tenantId = await getTenantIdFromSession();
+  const tenantId = (await getTenantIdFromSession()) || (process.env.TENANT_ID as string | null) || null;
   const rows = await sql<ProductRow[]>`
     SELECT id, tenant_id, url, name, price::text as price, availability, updated_at::text
     FROM analysis_products
@@ -213,10 +203,16 @@ export async function refreshAllAction() {
 }
 
 // ---------- UI ----------
+export const runtime = "nodejs";
+
 export default async function AnalysisPage() {
   await init();
-  const items = await listProducts();
-
+  let items: ProductRow[] = [];
+  try {
+    items = await listProducts();
+  } catch (e) {
+    console.error("listProducts failed", e);
+  }
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Analysis</h1>

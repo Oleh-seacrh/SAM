@@ -85,57 +85,65 @@ function extractAvailability(txt: string): boolean | null {
 }
 
 // ---------- Optional LLM fallback ----------
-async function llmExtract(html: string): Promise<{ name?: string|null; price?: number|null; availability?: boolean|null } | null> {
+async function llmExtract(html: string, url?: string): Promise<{ name?: string|null; price?: number|null; availability?: boolean|null } | null> {
   const key = process.env.OPENAI_API_KEY;
   if (!key) return null;
-  // Keep prompt tight; ask for JSON only.
-  const user = `Return JSON with keys: name (string|null), price (number|null), availability (true|false|null). HTML: ${html.slice(0, 20000)}`;
+  const system = "You extract structured data from product pages. Return strict JSON only.";
+  const user = JSON.stringify({
+    instruction:
+      "Return JSON: {name: string|null, price: number|null, availability: true|false|null}. If price has separators, normalize to dot decimal. If not found, use null.",
+    url,
+    html: html.slice(0, 18000),
+  });
   try {
     const resp = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${key}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}` },
       body: JSON.stringify({
-        model: "gpt-4o-mini",
+        model: process.env.OPENAI_MODEL || "gpt-4o-mini",
         temperature: 0,
-        messages: [{ role: "user", content: user }],
         response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: system },
+          { role: "user", content: user },
+        ],
       }),
     });
     const data = await resp.json();
     const text = data?.choices?.[0]?.message?.content;
     if (!text) return null;
     return JSON.parse(text);
-  } catch {
+  } catch (e) {
+    console.error("llmExtract failed", e);
     return null;
   }
 }
 
+
 // ---------- Core parse + upsert ----------
 async function fetchAndParse(url: string): Promise<{ name: string|null; price: number|null; availability: boolean|null }> {
+  if (!process.env.OPENAI_API_KEY) throw new Error("OPENAI_API_KEY is required for LLM parsing mode");
   const r = await fetch(url, { headers: { "User-Agent": "SAM-ProductMonitor/1.0" }, cache: "no-store" });
   if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
   const html = await r.text();
-  const txt = textOnly(html);
 
-  let name = extractName(html);
-  let { price } = extractPriceCurrency(txt);
-  let availability = extractAvailability(txt);
+  const ai = await llmExtract(html, url);
+  let name = (ai?.name ?? null);
+  const price = (ai?.price ?? null) as number | null;
+  const availability = (typeof ai?.availability === "boolean" ? ai!.availability : null);
 
-  // Fallback to LLM if some fields are missing
-  if ((name == null || price == null || availability == null)) {
-    const ai = await llmExtract(html);
-    if (ai) {
-      if (name == null && typeof ai.name !== "undefined") name = ai.name ?? null;
-      if (price == null && typeof ai.price !== "undefined") price = ai.price ?? null;
-      if (availability == null && typeof ai.availability !== "undefined") availability = ai.availability ?? null;
-    }
-  }
+  // Minimal HTML entities decode for common cases
+  const decode = (s: string) => s
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
+  if (name) name = decode(name);
 
-  return { name: name ?? null, price: price ?? null, availability: availability ?? null };
+  return { name, price, availability };
 }
+
 
 async function upsertProduct(url: string) {
   const sql = getSql();
@@ -179,8 +187,12 @@ export async function addUrlAction(formData: FormData) {
   "use server";
   const url = String(formData.get("url") || "").trim();
   if (!url) return;
-  await ensureTable();
-  await upsertProduct(url);
+  try {
+    await ensureTable();
+    await upsertProduct(url);
+  } catch (e) {
+    console.error("addUrlAction failed", e);
+  }
   revalidatePath("/analysis");
 }
 

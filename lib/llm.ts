@@ -208,4 +208,86 @@ export async function extractInquiry(opts: {
   // provider === "gemini"
   throw new Error("Gemini vision extract is not implemented yet");
 }
+
+/* ===================== GENERIC JSON EXTRACT ===================== */
+/** Generic structured JSON extraction with strict schema validation */
+export async function jsonExtract<T = any>(opts: {
+  system?: string;
+  user: string;
+  schema?: any;
+  temperature?: number;
+  provider?: LLMProvider;
+  model?: string;
+  signal?: AbortSignal;
+}): Promise<T> {
+  const {
+    system = "You are a precise data extraction assistant that returns only valid JSON.",
+    user,
+    schema,
+    temperature = 0,
+    provider = "openai",
+    model,
+    signal,
+  } = opts;
+
+  const effectiveModel = ensureModel(provider, model);
+
+  if (provider === "openai") {
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) throw new Error("Missing OPENAI_API_KEY");
+
+    const messages: any[] = [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ];
+
+    // If schema is provided, try to use structured outputs (response_format with json_schema)
+    // Otherwise fall back to json_object mode
+    const bodyPayload: any = {
+      model: effectiveModel,
+      temperature,
+      messages,
+    };
+
+    if (schema && typeof schema === "object") {
+      // Use structured outputs with json_schema (requires compatible models like gpt-4o-mini)
+      bodyPayload.response_format = {
+        type: "json_schema",
+        json_schema: {
+          name: "extraction_response",
+          strict: true,
+          schema,
+        },
+      };
+    } else {
+      // Fallback to json_object mode
+      bodyPayload.response_format = { type: "json_object" };
+    }
+
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      signal,
+      body: JSON.stringify(bodyPayload),
+    });
+
+    const json = await res.json();
+    if (!res.ok) {
+      throw new Error(json?.error?.message || `OpenAI error ${res.status}`);
+    }
+
+    const text = json?.choices?.[0]?.message?.content || "{}";
+    return safeParseJsonObject(text) as T;
+  }
+
+  if (provider === "anthropic") {
+    throw new Error("Anthropic jsonExtract is not implemented yet");
+  }
+
+  // provider === "gemini"
+  throw new Error("Gemini jsonExtract is not implemented yet");
+}
  

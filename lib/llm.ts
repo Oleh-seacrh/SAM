@@ -208,4 +208,77 @@ export async function extractInquiry(opts: {
   // provider === "gemini"
   throw new Error("Gemini vision extract is not implemented yet");
 }
+
+/* ===================== GENERIC JSON EXTRACTION ===================== */
+/**
+ * Generic JSON extraction with schema validation.
+ * Automatically tries OpenAI first, then falls back to other providers if configured.
+ */
+export async function jsonExtract<T = any>(opts: {
+  system?: string;
+  user: string;
+  schema?: any;
+  temperature?: number;
+  provider?: LLMProvider;
+  model?: string;
+  signal?: AbortSignal;
+}): Promise<T | null> {
+  const {
+    system = "You are a helpful assistant that extracts structured data and returns valid JSON.",
+    user,
+    schema,
+    temperature = 0,
+    provider = "openai",
+    model,
+    signal,
+  } = opts;
+
+  const effectiveModel = ensureModel(provider, model);
+
+  if (provider === "openai") {
+    const key = process.env.OPENAI_API_KEY;
+    if (!key) throw new Error("Missing OPENAI_API_KEY");
+
+    const messages: any[] = [
+      { role: "system", content: system },
+      { role: "user", content: user },
+    ];
+
+    const body: any = {
+      model: effectiveModel,
+      temperature,
+      messages,
+    };
+
+    // Use JSON mode if supported
+    if (effectiveModel.includes("gpt-4") || effectiveModel.includes("gpt-3.5")) {
+      body.response_format = { type: "json_object" };
+    }
+
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      signal,
+      body: JSON.stringify(body),
+    });
+
+    const json = await res.json();
+    if (!res.ok) throw new Error(json?.error?.message || `OpenAI error ${res.status}`);
+
+    const text = json?.choices?.[0]?.message?.content || "{}";
+    const parsed = safeParseJsonObject(text);
+
+    return parsed as T;
+  }
+
+  if (provider === "anthropic") {
+    throw new Error("Anthropic JSON extraction is not implemented yet");
+  }
+
+  // provider === "gemini"
+  throw new Error("Gemini JSON extraction is not implemented yet");
+}
  

@@ -103,8 +103,8 @@ async function listProductsForTenant(tenantId: string | null): Promise<Row[]> {
   const sql = getSql();
   return await sql<Row[]>`
     SELECT
-      id,
-      tenant_id,
+      id::text,
+      tenant_id::text,
       url,
       name,
       price::text AS price,
@@ -124,8 +124,8 @@ async function listProducts(): Promise<Row[]> {
   if (rows.length === 0) {
     rows = await sql<Row[]>`
       SELECT
-        id,
-        tenant_id,
+        id::text,
+        tenant_id::text,
         url,
         name,
         price::text AS price,
@@ -153,8 +153,8 @@ async function upsertProduct(url: string): Promise<Row> {
       availability = EXCLUDED.availability,
       updated_at = now()
     RETURNING
-      id,
-      tenant_id,
+      id::text,
+      tenant_id::text,
       url,
       name,
       price::text AS price,

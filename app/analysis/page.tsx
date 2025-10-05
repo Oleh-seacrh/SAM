@@ -1,15 +1,13 @@
 // app/analysis/page.tsx
-// Product Monitor (LLM-only) for SAM
-// - "Reload list" лише перечитує з БД і оновлює таблицю (без парсингу)
-// - "Refresh all (re-parse)" фетчить HTML і просить LLM (через твій jsonExtract) витягнути name/price/availability
-// - Тимчасово показуємо всі записи (без фільтра по tenant_id), щоб бачити результат
-//
-// ПРИМІТКА: DDL тут немає (таблицю ти вже створив).
+// Product Monitor (LLM-light) for SAM
+// 1) Спочатку читаємо JSON-LD (schema.org Product/Offer) -> price + availability по потрібному ML
+// 2) Якщо нема/криво — фолбек LLM (через твій jsonExtract) + детерміновані перевірки
+// 3) Reload list: просто перечитує БД; Refresh — перепарс
 
 import { revalidatePath, unstable_noStore as noStore } from "next/cache";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
-import { jsonExtract } from "@/lib/llm"; // твій існуючий хелпер
+import { jsonExtract } from "@/lib/llm";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -28,17 +26,16 @@ type Row = {
 async function getTenantId(): Promise<string | null> {
   return (await getTenantIdFromSession()) || (process.env.TENANT_ID as string | undefined) || null;
 }
-
-function decodeHtml(s: string) {
-  return s
+const decodeHtml = (s: string) =>
+  s
+    .replace(/&nbsp;/g, " ")
+    .replace(/\u00A0/g, " ")
     .replace(/&amp;/g, "&")
     .replace(/&quot;/g, '"')
     .replace(/&#x27;|&#39;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
-}
 
-// --- детерміновані пост-перевірки (щоб LLM не «вигадувала») ---
 const NEG_WORDS = [
   "тимчасово немає в наявності",
   "немає в наявності",
@@ -47,7 +44,6 @@ const NEG_WORDS = [
   "sold out",
   "під замовлення",
 ];
-
 const POS_WORDS = [
   "в наявності",
   "є в наявності",
@@ -57,28 +53,18 @@ const POS_WORDS = [
   "add to cart",
 ];
 
-function normText(s: string) {
-  return s
-    .replace(/&nbsp;/g, " ")
-    .replace(/\u00A0/g, " ")
-    .replace(/\s+/g, " ")
-    .toLowerCase();
-}
+const normText = (s: string) =>
+  s.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ").replace(/\s+/g, " ").toLowerCase();
 
-// NEG > POS, щоби «Тимчасово немає…» завжди перемагало
 function detectAvailability(html: string): boolean | null {
   const t = normText(html);
-  for (const w of NEG_WORDS) if (t.includes(w)) return false;
-  // уникнемо хибних спрацювань через підрядок
+  for (const w of NEG_WORDS) if (t.includes(w)) return false; // NEG > POS
   for (const w of POS_WORDS) {
-    if (t.includes(w) && !t.includes("немає " + w) && !t.includes("тимчасово немає " + w)) {
-      return true;
-    }
+    if (t.includes(w) && !t.includes("немає " + w) && !t.includes("тимчасово немає " + w)) return true;
   }
   return null;
 }
 
-// Витягуємо всі числа з HTML (1 234,56 / 2.107,80 / 1,199.00 / 1299 -> нормалізовані числа)
 function extractNumbersFromHtml(html: string): number[] {
   const body = html.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
   const rx = /\b\d{1,3}(?:[ .,\u00A0]\d{3})*(?:[.,]\d{1,2})?\b/g;
@@ -87,9 +73,7 @@ function extractNumbersFromHtml(html: string): number[] {
     const raw = m[0];
     const cleaned = raw
       .replace(/\u00A0/g, " ")
-      // прибрати групи тисяч, розділені пробілом або крапкою: "2 107,80" -> "2107,80" ; "2.107,80" -> "2107,80"
       .replace(/(?<=\d)[ .](?=\d{3}(\D|$))/g, "")
-      // першу десяткову кому -> крапку
       .replace(/,/, ".");
     const num = Number(cleaned);
     if (!Number.isNaN(num)) out.push(num);
@@ -97,18 +81,146 @@ function extractNumbersFromHtml(html: string): number[] {
   return out;
 }
 
-// Приймаємо ціну з LLM лише якщо вона реально присутня у HTML
 function validatePriceInHtml(html: string, price: number | null): number | null {
   if (price == null) return null;
   const nums = extractNumbersFromHtml(html);
   const eps = 0.01;
-  for (const n of nums) {
-    if (Math.abs(n - price) <= eps) return price;
+  for (const n of nums) if (Math.abs(n - price) <= eps) return price;
+  return null;
+}
+
+// ---------------- JSON-LD parser ----------------
+type OfferLike = {
+  price?: number | string;
+  priceSpecification?: { price?: number | string } | Array<{ price?: number | string }>;
+  availability?: string;
+  sku?: string;
+  gtin13?: string;
+  name?: string;
+  url?: string;
+};
+
+function pickNumber(x: unknown): number | null {
+  if (typeof x === "number") return x;
+  if (typeof x === "string") {
+    const cleaned = x.replace(/[^\d.,\u00A0 ]/g, "").replace(/\u00A0/g, " ");
+    const normalized = cleaned.replace(/(?<=\d)[ .](?=\d{3}(\D|$))/g, "").replace(/,/, ".");
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : null;
   }
   return null;
 }
 
-// ---------------- LLM через твій jsonExtract ----------------
+function parseJson(text: string): any[] {
+  const blocks: any[] = [];
+  try {
+    const data = JSON.parse(text);
+    if (Array.isArray(data)) blocks.push(...data);
+    else blocks.push(data);
+  } catch {
+    // інколи кілька JSON у одному <script> — пробуємо на рівні рядків
+    const parts = text.split(/\}\s*,\s*\{/).map((p, i, a) => (i === 0 ? p + "}" : i === a.length - 1 ? "{" + p : "{" + p + "}"));
+    for (const p of parts) {
+      try {
+        blocks.push(JSON.parse(p));
+      } catch {}
+    }
+  }
+  return blocks;
+}
+
+function findProductBlocks(html: string): any[] {
+  const res: any[] = [];
+  const rx = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = rx.exec(html))) {
+    const content = decodeHtml(m[1].trim());
+    const blocks = parseJson(content);
+    for (const b of blocks) res.push(b);
+  }
+  return res;
+}
+
+function normalizeAvailability(av: string | undefined): boolean | null {
+  if (!av) return null;
+  const a = av.toLowerCase();
+  if (a.includes("instock")) return true;
+  if (a.includes("outofstock") || a.includes("soldout")) return false;
+  return null;
+}
+
+function parseMlFromUrl(url: string): number | null {
+  // ...-30-ml-..., ...-50-ml-... (або ML у верхньому регістрі)
+  const m = url.toLowerCase().match(/(\d{2,3})-ml/);
+  return m ? Number(m[1]) : null;
+}
+
+function pickOfferForMl(offers: OfferLike[], mlWanted: number | null): OfferLike | null {
+  if (offers.length === 0) return null;
+  if (mlWanted == null) {
+    // якщо ml не вказано — беремо мінімальну актуальну ціну
+    const sorted = offers
+      .map((o) => ({ o, p: pickNumber(o.price ?? (Array.isArray(o.priceSpecification) ? o.priceSpecification[0]?.price : (o.priceSpecification as any)?.price)) }))
+      .filter((x) => x.p != null)
+      .sort((a, b) => (a.p as number) - (b.p as number));
+    return sorted[0]?.o ?? offers[0];
+  }
+  // пробуємо знайти в назві/URL 30 ML / 50 ML / 90 ML
+  const byName = offers.find((o) => (o.name || "").toLowerCase().includes(`${mlWanted} ml`));
+  if (byName) return byName;
+  const byUrl = offers.find((o) => (o.url || "").toLowerCase().includes(`${mlWanted}-ml`));
+  if (byUrl) return byUrl;
+  return null;
+}
+
+function extractFromJsonLd(html: string, url: string): { name?: string; price?: number | null; availability?: boolean | null } | null {
+  const blocks = findProductBlocks(html);
+  if (blocks.length === 0) return null;
+
+  // шукаємо Product
+  const products: any[] = [];
+  for (const b of blocks) {
+    if (!b) continue;
+    const type = (b["@type"] || b.type || "").toString().toLowerCase();
+    if (type.includes("product")) products.push(b);
+    if (Array.isArray(b["@graph"])) {
+      for (const g of b["@graph"]) {
+        const t = (g["@type"] || g.type || "").toString().toLowerCase();
+        if (t.includes("product")) products.push(g);
+      }
+    }
+  }
+  if (products.length === 0) return null;
+
+  // збираємо всі оффери
+  const mlWanted = parseMlFromUrl(url);
+  for (const p of products) {
+    const name: string | undefined = p.name || p.title;
+    const offers: OfferLike[] = [];
+    const raw = p.offers;
+    if (raw) {
+      if (Array.isArray(raw)) offers.push(...(raw as OfferLike[]));
+      else offers.push(raw as OfferLike);
+    }
+    if (offers.length === 0) continue;
+
+    let offer: OfferLike | null = pickOfferForMl(offers, mlWanted);
+    if (!offer) offer = offers[0];
+
+    let price =
+      pickNumber(
+        offer.price ??
+          (Array.isArray(offer.priceSpecification) ? offer.priceSpecification[0]?.price : (offer.priceSpecification as any)?.price)
+      ) ?? null;
+
+    const availability = normalizeAvailability(offer.availability);
+
+    return { name, price, availability };
+  }
+  return null;
+}
+
+// ---------------- LLM (фолбек) ----------------
 async function llmExtract(
   html: string,
   url?: string
@@ -124,25 +236,12 @@ async function llmExtract(
     required: ["name", "price", "availability"],
   };
 
-  const system =
-    "You extract structured data from a single e-commerce product page and return STRICT JSON only.";
-
+  const system = "You extract structured data from a single e-commerce product page and return STRICT JSON only.";
   const user = [
-    "OUTPUT: JSON with EXACT keys: name (string|null), price (number|null), availability (true|false|null).",
-    "HARD RULES:",
-    "- Return ONLY values that visibly appear in the provided HTML.",
-    "- If you are NOT CERTAIN a value exists in the HTML, return null (do NOT guess).",
-    "PRICE RULES:",
-    "- If multiple prices exist (old crossed-out vs discounted), return the CURRENT/ACTIVE price.",
-    "- Ignore any price inside <del> or in elements with class/id containing: old, strike, crossed, was, regular, rrp.",
-    "- Prefer price near: 'Ціна', 'Цена', 'price', or near purchase buttons: 'Додати в кошик' / 'Add to cart'.",
-    "- Normalize to dot-decimal number (e.g., '1 299,00' -> 1299.00). Do NOT include currency symbols.",
-    "AVAILABILITY RULES:",
-    "- availability=true only if HTML shows it can be purchased (e.g., 'В наявності', 'Є в наявності', 'In stock', 'Available', or a visible purchase button).",
-    "- availability=false if HTML has 'Немає в наявності', 'Тимчасово немає в наявності', 'Out of stock', 'Sold out', 'Під замовлення'.",
-    "- If unclear, set availability to null.",
-    "NAME RULES:",
-    "- Use the product title/name (not breadcrumbs or navigation).",
+    "OUTPUT: JSON with EXACT keys {name, price, availability}.",
+    "Do NOT guess — if unsure, use null.",
+    "PRICE: if multiple (old vs discounted), return current/active; ignore <del>/old/strike/was/regular/rrp; dot-decimal number only.",
+    "AVAILABILITY: true only if clearly purchasable (e.g., 'В наявності', 'In stock', visible 'Додати в кошик'); false if 'Тимчасово немає в наявності'/'Out of stock'.",
     url ? `URL: ${url}` : "",
     "HTML:",
     html.slice(0, 18000),
@@ -150,11 +249,7 @@ async function llmExtract(
     .filter(Boolean)
     .join("\n");
 
-  const out = await jsonExtract<{
-    name: string | null;
-    price: number | null;
-    availability: boolean | null;
-  }>({
+  const out = await jsonExtract<{ name: string | null; price: number | null; availability: boolean | null }>({
     system,
     user,
     schema,
@@ -168,30 +263,44 @@ async function llmExtract(
   };
 }
 
-// ---------------- fetch + parse через LLM (з валідаціями) ----------------
+// ---------------- fetch + parse (JSON-LD → детермінатика → LLM-фолбек) ----------------
 async function fetchAndParse(
   url: string
 ): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
-  const r = await fetch(url, {
-    headers: { "User-Agent": "SAM-ProductMonitor/1.0" },
-    cache: "no-store",
-  });
+  const r = await fetch(url, { headers: { "User-Agent": "SAM-ProductMonitor/1.0" }, cache: "no-store" });
   if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
-
   const rawHtml = await r.text();
-  const html = rawHtml.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
+  const html = decodeHtml(rawHtml);
 
-  // 1) LLM
-  const ai = await llmExtract(html, url);
+  // (A) Спроба через JSON-LD (найнадійніше для ціни по ML)
+  const fromLd = extractFromJsonLd(html, url);
 
-  // 2) Детермінований статус наявності (перекриває LLM)
+  // (B) Детермінована наявність з тексту сторінки (перекриває все)
   const detectedAvail = detectAvailability(html);
-  let availability = detectedAvail !== null ? detectedAvail : ai.availability ?? null;
 
-  // 3) Приймаємо ціну лише якщо вона реально присутня у HTML; якщо товар відсутній — price=null
-  let price = availability === false ? null : validatePriceInHtml(html, ai.price);
+  // (C) Якщо JSON-LD не дав ні ціну, ні ім'я — фолбек до LLM
+  let fallback: { name: string | null; price: number | null; availability: boolean | null } | null = null;
+  if (!fromLd?.price || !fromLd?.name) {
+    fallback = await llmExtract(html, url);
+  }
 
-  const name = ai.name ? decodeHtml(ai.name) : null;
+  // (D) Збираємо фінал
+  const name = fromLd?.name ? decodeHtml(fromLd.name) : fallback?.name ? decodeHtml(fallback.name) : null;
+
+  // якщо товар відсутній — price = null
+  let availability = detectedAvail !== null ? detectedAvail : (fromLd?.availability ?? fallback?.availability ?? null);
+
+  let price: number | null = null;
+  if (availability !== false) {
+    // Пріоритет: JSON-LD → (валідація в HTML) → LLM (з валідацією)
+    price = fromLd?.price ?? null;
+    if (price != null) {
+      // опційна валідація: інколи у JSON-LD є ціни всіх варіантів — але ми вже вибрали offer по ML
+      price = validatePriceInHtml(html, price) ?? price; // якщо в HTML не знайдено — все одно лишаємо з JSON-LD
+    } else if (fallback?.price != null) {
+      price = validatePriceInHtml(html, fallback.price);
+    }
+  }
 
   return { name, price, availability };
 }
@@ -201,14 +310,7 @@ async function listProducts(): Promise<Row[]> {
   const sql = getSql();
   // Тимчасово без фільтра по tenant_id — показуємо все
   return await sql<Row[]>`
-    SELECT
-      id,
-      tenant_id,
-      url,
-      name,
-      price::text AS price,
-      availability,
-      updated_at::text AS updated_at
+    SELECT id, tenant_id, url, name, price::text AS price, availability, updated_at::text AS updated_at
     FROM analysis_products
     ORDER BY updated_at DESC NULLS LAST, url ASC
   `;
@@ -227,20 +329,12 @@ async function upsertProduct(url: string): Promise<Row> {
       price = EXCLUDED.price,
       availability = EXCLUDED.availability,
       updated_at = now()
-    RETURNING
-      id,
-      tenant_id,
-      url,
-      name,
-      price::text AS price,
-      availability,
-      updated_at::text AS updated_at
+    RETURNING id, tenant_id, url, name, price::text AS price, availability, updated_at::text AS updated_at
   `;
   return rows[0];
 }
 
 // ---------------- Server Actions ----------------
-// Додає URL та одразу перепарсює (LLM)
 export async function addUrlAction(formData: FormData) {
   "use server";
   const url = String(formData.get("url") || "").trim();
@@ -252,14 +346,10 @@ export async function addUrlAction(formData: FormData) {
   }
   revalidatePath("/analysis");
 }
-
-// Лише перечитує список з БД і оновлює сторінку (без парсингу)
 export async function reloadListAction() {
   "use server";
   revalidatePath("/analysis");
 }
-
-// Повний перепарсинг усіх URL
 export async function refreshAllAction() {
   "use server";
   try {
@@ -276,8 +366,6 @@ export async function refreshAllAction() {
   }
   revalidatePath("/analysis");
 }
-
-// Перепарсинг одного URL (LLM)
 export async function refreshOneAction(formData: FormData) {
   "use server";
   const url = String(formData.get("url") || "").trim();
@@ -304,11 +392,8 @@ export default async function AnalysisPage() {
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Analysis</h1>
-      <p className="text-sm opacity-70">
-        LLM-only product monitor. Add/Reload to view DB data. Refresh to re-parse via GPT.
-      </p>
+      <p className="text-sm opacity-70">Reads JSON-LD first; falls back to GPT. Reload = DB only. Refresh = re-parse.</p>
 
-      {/* Add URL */}
       <form action={addUrlAction} className="flex gap-2 items-center">
         <input
           type="url"
@@ -322,18 +407,13 @@ export default async function AnalysisPage() {
 
       <div className="flex gap-2">
         <form action={reloadListAction}>
-          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">
-            Reload list
-          </button>
+          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">Reload list</button>
         </form>
         <form action={refreshAllAction}>
-          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">
-            Refresh all (re-parse)
-          </button>
+          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">Refresh all (re-parse)</button>
         </form>
       </div>
 
-      {/* Table */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm border-separate border-spacing-y-2">
           <thead>
@@ -359,12 +439,7 @@ export default async function AnalysisPage() {
               return (
                 <tr key={row.id} className="bg-neutral-900/40 hover:bg-neutral-900">
                   <td className="px-3 py-2 align-top max-w-[520px]">
-                    <a
-                      href={row.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="underline break-all"
-                    >
+                    <a href={row.url} target="_blank" rel="noreferrer" className="underline break-all">
                       {row.url}
                     </a>
                   </td>
@@ -376,13 +451,9 @@ export default async function AnalysisPage() {
                     {row.availability === null ? (
                       "—"
                     ) : row.availability ? (
-                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-green-600/20 text-green-300">
-                        In stock
-                      </span>
+                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-green-600/20 text-green-300">In stock</span>
                     ) : (
-                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-red-600/20 text-red-300">
-                        Out
-                      </span>
+                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-red-600/20 text-red-300">Out</span>
                     )}
                   </td>
                   <td className="px-3 py-2 align-top opacity-70">
@@ -391,9 +462,7 @@ export default async function AnalysisPage() {
                   <td className="px-3 py-2 align-top">
                     <form action={refreshOneAction} className="inline">
                       <input type="hidden" name="url" value={row.url} />
-                      <button className="rounded-xl px-3 py-1 border border-neutral-700 hover:bg-neutral-800">
-                        Refresh
-                      </button>
+                      <button className="rounded-xl px-3 py-1 border border-neutral-700 hover:bg-neutral-800">Refresh</button>
                     </form>
                   </td>
                 </tr>
@@ -404,7 +473,7 @@ export default async function AnalysisPage() {
       </div>
 
       <div className="text-xs opacity-60">
-        Uses <code>jsonExtract</code> from <code>@/lib/llm</code>. Ensure provider/model configured there.
+        Uses JSON-LD when available and <code>jsonExtract</code> as fallback under <code>@/lib/llm</code>.
       </div>
     </div>
   );

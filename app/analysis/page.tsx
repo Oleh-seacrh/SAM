@@ -1,8 +1,8 @@
 // app/analysis/page.tsx
 // Product Monitor (LLM-only) for SAM
-// - "Reload list" лише перечитує з БД і оновлює таблицю на екрані (без парсингу)
+// - "Reload list" лише перечитує з БД і оновлює таблицю (без парсингу)
 // - "Refresh all (re-parse)" фетчить HTML і просить LLM (через твій jsonExtract) витягнути name/price/availability
-// - Показує записи навіть якщо tenant_id не збігається (fallback: якщо пусто — прочитати всі)
+// - Тимчасово показуємо всі записи (без фільтра по tenant_id), щоб ти бачив результат
 //
 // ПРИМІТКА: DDL тут немає (таблицю ти вже створив).
 
@@ -19,12 +19,12 @@ type Row = {
   tenant_id: string | null;
   url: string;
   name: string | null;
-  price: string | null;        // numeric з Neon приходить рядком
+  price: string | null; // numeric з Neon приходить рядком
   availability: boolean | null;
   updated_at: string | null;
 };
 
-// --------- helpers ----------
+// ---------------- helpers ----------------
 async function getTenantId(): Promise<string | null> {
   return (await getTenantIdFromSession()) || (process.env.TENANT_ID as string | undefined) || null;
 }
@@ -32,18 +32,62 @@ async function getTenantId(): Promise<string | null> {
 function decodeHtml(s: string) {
   return s
     .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, "\"")
+    .replace(/&quot;/g, '"')
     .replace(/&#x27;|&#39;/g, "'")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
 }
 
-// --------- LLM через твій jsonExtract ----------
-async function llmExtract(html: string, url?: string): Promise<{
-  name: string | null;
-  price: number | null;
-  availability: boolean | null;
-}> {
+// --- детерміновані пост-перевірки, щоб LLM не «вигадувала» ---
+const POS_WORDS = [
+  "в наявності",
+  "є в наявності",
+  "in stock",
+  "available",
+  "додати в кошик",
+  "add to cart",
+];
+const NEG_WORDS = [
+  "немає в наявності",
+  "тимчасово немає в наявності",
+  "відсутній",
+  "out of stock",
+  "sold out",
+  "під замовлення",
+];
+
+function normText(s: string) {
+  return s
+    .replace(/&nbsp;/g, " ")
+    .replace(/\u00A0/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+function validatePriceInHtml(html: string, price: number | null): number | null {
+  if (price == null) return null;
+  const t = normText(html);
+  const patterns = [
+    new RegExp(`\\b${price.toFixed(2)}\\b`), // 2107.80
+    new RegExp(`\\b${price.toFixed(1)}\\b`), // 2107.8
+    new RegExp(`\\b${Math.round(price)}\\b`), // 2108
+  ];
+  for (const rx of patterns) if (rx.test(t)) return price;
+  return null;
+}
+
+function detectAvailability(html: string): boolean | null {
+  const t = normText(html);
+  for (const w of POS_WORDS) if (t.includes(w)) return true;
+  for (const w of NEG_WORDS) if (t.includes(w)) return false;
+  return null;
+}
+
+// ---------------- LLM через твій jsonExtract ----------------
+async function llmExtract(
+  html: string,
+  url?: string
+): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
   // JSON Schema для твого jsonExtract
   const schema = {
     type: "object",
@@ -51,88 +95,88 @@ async function llmExtract(html: string, url?: string): Promise<{
     properties: {
       name: { anyOf: [{ type: "string" }, { type: "null" }] },
       price: { anyOf: [{ type: "number" }, { type: "null" }] },
-      availability: { anyOf: [{ type: "boolean" }, { type: "null" }] }
+      availability: { anyOf: [{ type: "boolean" }, { type: "null" }] },
     },
-    required: ["name", "price", "availability"]
+    required: ["name", "price", "availability"],
   };
 
   const system =
     "You extract structured data from a single e-commerce product page and return STRICT JSON only.";
 
-  // посилили інструкції щодо старої/акційної ціни та наявності
+  // посилили інструкції під акційні/перекреслені ціни та не-вгадувати значення
   const user = [
-    "Return JSON with EXACT keys: name (string|null), price (number|null), availability (true|false|null).",
-    "PRICE rules:",
-    "- If multiple prices exist (e.g., old crossed-out and discounted), return the CURRENT/ACTIVE price.",
-    "- Ignore any prices inside <del> tags or elements whose class/id contains: old, strike, crossed, was, regular, rrp.",
-    "- Prefer price near keywords: 'Ціна', 'Цена', 'price', or near 'Add to cart' / 'Додати в кошик'.",
-    "- Normalize to dot-decimal number (examples: '1 299,00' -> 1299.00 ; '2.499,50' -> 2499.50 ; '1,199.00' -> 1199.00).",
-    "- Do NOT return currency symbols; just the number.",
-    "AVAILABILITY rules:",
-    "- availability=true if the page indicates it can be purchased, e.g., contains: 'В наявності', 'Є в наявності', 'In stock', 'Available', or a visible purchase button like 'Додати в кошик' / 'Add to cart'.",
-    "- availability=false if: 'Немає в наявності', 'Відсутній', 'Out of stock', 'Sold out', 'Під замовлення'.",
-    "- If unclear, use null.",
-    "NAME rules:",
-    "- Use the product title; avoid brand lists or navigation labels.",
-    "",
+    "OUTPUT: JSON with EXACT keys: name (string|null), price (number|null), availability (true|false|null).",
+    "HARD RULES:",
+    "- Return ONLY values that visibly appear in the provided HTML.",
+    "- If you are NOT CERTAIN a value exists in the HTML, return null (do NOT guess).",
+    "PRICE RULES:",
+    "- If multiple prices exist (old crossed-out vs discounted), return the CURRENT/ACTIVE price.",
+    "- Ignore any price inside <del> tags or elements with class/id containing: old, strike, crossed, was, regular, rrp.",
+    "- Prefer price near keywords: 'Ціна', 'Цена', 'price', or near purchase buttons: 'Додати в кошик' / 'Add to cart'.",
+    "- Normalize to dot-decimal number (e.g., '1 299,00' -> 1299.00). Do NOT include currency symbols.",
+    "AVAILABILITY RULES:",
+    "- availability=true only if HTML shows it can be purchased (e.g., 'В наявності', 'Є в наявності', 'In stock', 'Available', or a visible purchase button).",
+    "- availability=false if HTML has 'Немає в наявності', 'Тимчасово немає в наявності', 'Out of stock', 'Sold out', 'Під замовлення'.",
+    "- If unclear, set availability to null.",
+    "NAME RULES:",
+    "- Use the product title/name (not breadcrumbs or navigation).",
     url ? `URL: ${url}` : "",
     "HTML:",
-    html.slice(0, 18000)
+    html.slice(0, 18000),
   ]
     .filter(Boolean)
     .join("\n");
 
-  const out = await jsonExtract<{ name: string | null; price: number | null; availability: boolean | null }>({
+  const out = await jsonExtract<{
+    name: string | null;
+    price: number | null;
+    availability: boolean | null;
+  }>({
     system,
     user,
     schema,
-    temperature: 0
+    temperature: 0,
   });
 
   return {
     name: out?.name ?? null,
     price: typeof out?.price === "number" ? out!.price : null,
-    availability: typeof out?.availability === "boolean" ? out!.availability : null
+    availability: typeof out?.availability === "boolean" ? out!.availability : null,
   };
 }
 
-// --------- fetch + parse через LLM ----------
-async function fetchAndParse(url: string): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
-  const r = await fetch(url, { headers: { "User-Agent": "SAM-ProductMonitor/1.0" }, cache: "no-store" });
+// ---------------- fetch + parse через LLM (з валідаціями) ----------------
+async function fetchAndParse(
+  url: string
+): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
+  const r = await fetch(url, {
+    headers: { "User-Agent": "SAM-ProductMonitor/1.0" },
+    cache: "no-store",
+  });
   if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
-  const html = await r.text();
 
+  // нормалізуємо NBSP та подібні пробіли — це допомагає і LLM, і детермінаціям нижче
+  const rawHtml = await r.text();
+  const html = rawHtml.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
+
+  // 1) LLM
   const ai = await llmExtract(html, url);
 
+  // 2) Детерміновані перевірки/перекриття
+  const detectedAvail = detectAvailability(html);
+  const safeAvailability = detectedAvail !== null ? detectedAvail : ai.availability;
+
+  const safePrice = validatePriceInHtml(html, ai.price);
+
   const name = ai.name ? decodeHtml(ai.name) : null;
-  const price = ai.price ?? null;
-  const availability = ai.availability ?? null;
 
-  return { name, price, availability };
+  return { name, price: safePrice, availability: safeAvailability ?? null };
 }
 
-// --------- DB ----------
-async function listProductsForTenant(tenantId: string | null): Promise<Row[]> {
-  const sql = getSql();
-  return await sql<Row[]>`
-    SELECT
-      id,
-      tenant_id,
-      url,
-      name,
-      price::text AS price,
-      availability,
-      updated_at::text AS updated_at
-    FROM analysis_products
-    WHERE (${tenantId} IS NULL AND tenant_id IS NULL) OR tenant_id = ${tenantId}
-    ORDER BY updated_at DESC NULLS LAST, url ASC
-  `;
-}
-
-// fallback: якщо для цього tenant пусто — показати всі (щоб ти бачив дані відразу)
+// ---------------- DB ----------------
 async function listProducts(): Promise<Row[]> {
   const sql = getSql();
-  // Тимчасово без фільтра по tenant_id — просто покажемо все, щоб бачити результат
+  // Тимчасово без фільтра по tenant_id — показуємо все, щоб не було «порожньої» сторінки
   return await sql<Row[]>`
     SELECT
       id,
@@ -146,6 +190,7 @@ async function listProducts(): Promise<Row[]> {
     ORDER BY updated_at DESC NULLS LAST, url ASC
   `;
 }
+
 async function upsertProduct(url: string): Promise<Row> {
   const sql = getSql();
   const tenantId = await getTenantId();
@@ -171,7 +216,7 @@ async function upsertProduct(url: string): Promise<Row> {
   return rows[0];
 }
 
-// --------- Server Actions ---------
+// ---------------- Server Actions ----------------
 // Додає URL та одразу перепарсює (LLM)
 export async function addUrlAction(formData: FormData) {
   "use server";
@@ -222,7 +267,7 @@ export async function refreshOneAction(formData: FormData) {
   revalidatePath("/analysis");
 }
 
-// --------- Page ----------
+// ---------------- Page ----------------
 export default async function AnalysisPage() {
   noStore();
 
@@ -290,12 +335,17 @@ export default async function AnalysisPage() {
               const displayName = row.name ? decodeHtml(row.name) : "—";
               return (
                 <tr key={row.id} className="bg-neutral-900/40 hover:bg-neutral-900">
-                  <td className="px-3 py-2 align-top max-w-[380px]">
-                    <a href={row.url} target="_blank" rel="noreferrer" className="underline break-all">
+                  <td className="px-3 py-2 align-top max-w-[520px]">
+                    <a
+                      href={row.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline break-all"
+                    >
                       {row.url}
                     </a>
                   </td>
-                  <td className="px-3 py-2 align-top max-w-[320px]" title={displayName}>
+                  <td className="px-3 py-2 align-top max-w-[340px]" title={displayName}>
                     <div className="truncate">{displayName}</div>
                   </td>
                   <td className="px-3 py-2 align-top">{row.price ?? "—"}</td>
@@ -303,9 +353,13 @@ export default async function AnalysisPage() {
                     {row.availability === null ? (
                       "—"
                     ) : row.availability ? (
-                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-green-600/20 text-green-300">In stock</span>
+                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-green-600/20 text-green-300">
+                        In stock
+                      </span>
                     ) : (
-                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-red-600/20 text-red-300">Out</span>
+                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-red-600/20 text-red-300">
+                        Out
+                      </span>
                     )}
                   </td>
                   <td className="px-3 py-2 align-top opacity-70">

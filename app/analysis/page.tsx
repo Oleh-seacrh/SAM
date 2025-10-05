@@ -44,6 +44,7 @@ async function llmExtract(html: string, url?: string): Promise<{
   price: number | null;
   availability: boolean | null;
 }> {
+  // JSON Schema для твого jsonExtract
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -57,10 +58,23 @@ async function llmExtract(html: string, url?: string): Promise<{
 
   const system =
     "You extract structured data from a single e-commerce product page and return STRICT JSON only.";
+
+  // посилили інструкції щодо старої/акційної ціни та наявності
   const user = [
     "Return JSON with EXACT keys: name (string|null), price (number|null), availability (true|false|null).",
-    "Normalize price to a dot-decimal number (examples: '1 299,00' -> 1299.00 ; '2.499,50' -> 2499.50 ; '1,199.00' -> 1199.00).",
-    "Do NOT include currency signs in price. If not found, use null.",
+    "PRICE rules:",
+    "- If multiple prices exist (e.g., old crossed-out and discounted), return the CURRENT/ACTIVE price.",
+    "- Ignore any prices inside <del> tags or elements whose class/id contains: old, strike, crossed, was, regular, rrp.",
+    "- Prefer price near keywords: 'Ціна', 'Цена', 'price', or near 'Add to cart' / 'Додати в кошик'.",
+    "- Normalize to dot-decimal number (examples: '1 299,00' -> 1299.00 ; '2.499,50' -> 2499.50 ; '1,199.00' -> 1199.00).",
+    "- Do NOT return currency symbols; just the number.",
+    "AVAILABILITY rules:",
+    "- availability=true if the page indicates it can be purchased, e.g., contains: 'В наявності', 'Є в наявності', 'In stock', 'Available', or a visible purchase button like 'Додати в кошик' / 'Add to cart'.",
+    "- availability=false if: 'Немає в наявності', 'Відсутній', 'Out of stock', 'Sold out', 'Під замовлення'.",
+    "- If unclear, use null.",
+    "NAME rules:",
+    "- Use the product title; avoid brand lists or navigation labels.",
+    "",
     url ? `URL: ${url}` : "",
     "HTML:",
     html.slice(0, 18000)
@@ -73,7 +87,6 @@ async function llmExtract(html: string, url?: string): Promise<{
     user,
     schema,
     temperature: 0
-    // за потреби тут можна передати model/provider відповідно до твого llm.ts
   });
 
   return {

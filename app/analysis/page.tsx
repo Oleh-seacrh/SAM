@@ -2,7 +2,7 @@
 // Product Monitor (LLM-only) for SAM
 // - "Reload list" лише перечитує з БД і оновлює таблицю (без парсингу)
 // - "Refresh all (re-parse)" фетчить HTML і просить LLM (через твій jsonExtract) витягнути name/price/availability
-// - Тимчасово показуємо всі записи (без фільтра по tenant_id), щоб ти бачив результат
+// - Тимчасово показуємо всі записи (без фільтра по tenant_id), щоб бачити результат
 //
 // ПРИМІТКА: DDL тут немає (таблицю ти вже створив).
 
@@ -38,7 +38,16 @@ function decodeHtml(s: string) {
     .replace(/&gt;/g, ">");
 }
 
-// --- детерміновані пост-перевірки, щоб LLM не «вигадувала» ---
+// --- детерміновані пост-перевірки (щоб LLM не «вигадувала») ---
+const NEG_WORDS = [
+  "тимчасово немає в наявності",
+  "немає в наявності",
+  "відсутній",
+  "out of stock",
+  "sold out",
+  "під замовлення",
+];
+
 const POS_WORDS = [
   "в наявності",
   "є в наявності",
@@ -46,14 +55,6 @@ const POS_WORDS = [
   "available",
   "додати в кошик",
   "add to cart",
-];
-const NEG_WORDS = [
-  "немає в наявності",
-  "тимчасово немає в наявності",
-  "відсутній",
-  "out of stock",
-  "sold out",
-  "під замовлення",
 ];
 
 function normText(s: string) {
@@ -64,22 +65,46 @@ function normText(s: string) {
     .toLowerCase();
 }
 
-function validatePriceInHtml(html: string, price: number | null): number | null {
-  if (price == null) return null;
+// NEG > POS, щоби «Тимчасово немає…» завжди перемагало
+function detectAvailability(html: string): boolean | null {
   const t = normText(html);
-  const patterns = [
-    new RegExp(`\\b${price.toFixed(2)}\\b`), // 2107.80
-    new RegExp(`\\b${price.toFixed(1)}\\b`), // 2107.8
-    new RegExp(`\\b${Math.round(price)}\\b`), // 2108
-  ];
-  for (const rx of patterns) if (rx.test(t)) return price;
+  for (const w of NEG_WORDS) if (t.includes(w)) return false;
+  // уникнемо хибних спрацювань через підрядок
+  for (const w of POS_WORDS) {
+    if (t.includes(w) && !t.includes("немає " + w) && !t.includes("тимчасово немає " + w)) {
+      return true;
+    }
+  }
   return null;
 }
 
-function detectAvailability(html: string): boolean | null {
-  const t = normText(html);
-  for (const w of POS_WORDS) if (t.includes(w)) return true;
-  for (const w of NEG_WORDS) if (t.includes(w)) return false;
+// Витягуємо всі числа з HTML (1 234,56 / 2.107,80 / 1,199.00 / 1299 -> нормалізовані числа)
+function extractNumbersFromHtml(html: string): number[] {
+  const body = html.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
+  const rx = /\b\d{1,3}(?:[ .,\u00A0]\d{3})*(?:[.,]\d{1,2})?\b/g;
+  const out: number[] = [];
+  for (const m of body.matchAll(rx)) {
+    const raw = m[0];
+    const cleaned = raw
+      .replace(/\u00A0/g, " ")
+      // прибрати групи тисяч, розділені пробілом або крапкою: "2 107,80" -> "2107,80" ; "2.107,80" -> "2107,80"
+      .replace(/(?<=\d)[ .](?=\d{3}(\D|$))/g, "")
+      // першу десяткову кому -> крапку
+      .replace(/,/, ".");
+    const num = Number(cleaned);
+    if (!Number.isNaN(num)) out.push(num);
+  }
+  return out;
+}
+
+// Приймаємо ціну з LLM лише якщо вона реально присутня у HTML
+function validatePriceInHtml(html: string, price: number | null): number | null {
+  if (price == null) return null;
+  const nums = extractNumbersFromHtml(html);
+  const eps = 0.01;
+  for (const n of nums) {
+    if (Math.abs(n - price) <= eps) return price;
+  }
   return null;
 }
 
@@ -88,7 +113,6 @@ async function llmExtract(
   html: string,
   url?: string
 ): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
-  // JSON Schema для твого jsonExtract
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -103,7 +127,6 @@ async function llmExtract(
   const system =
     "You extract structured data from a single e-commerce product page and return STRICT JSON only.";
 
-  // посилили інструкції під акційні/перекреслені ціни та не-вгадувати значення
   const user = [
     "OUTPUT: JSON with EXACT keys: name (string|null), price (number|null), availability (true|false|null).",
     "HARD RULES:",
@@ -111,8 +134,8 @@ async function llmExtract(
     "- If you are NOT CERTAIN a value exists in the HTML, return null (do NOT guess).",
     "PRICE RULES:",
     "- If multiple prices exist (old crossed-out vs discounted), return the CURRENT/ACTIVE price.",
-    "- Ignore any price inside <del> tags or elements with class/id containing: old, strike, crossed, was, regular, rrp.",
-    "- Prefer price near keywords: 'Ціна', 'Цена', 'price', or near purchase buttons: 'Додати в кошик' / 'Add to cart'.",
+    "- Ignore any price inside <del> or in elements with class/id containing: old, strike, crossed, was, regular, rrp.",
+    "- Prefer price near: 'Ціна', 'Цена', 'price', or near purchase buttons: 'Додати в кошик' / 'Add to cart'.",
     "- Normalize to dot-decimal number (e.g., '1 299,00' -> 1299.00). Do NOT include currency symbols.",
     "AVAILABILITY RULES:",
     "- availability=true only if HTML shows it can be purchased (e.g., 'В наявності', 'Є в наявності', 'In stock', 'Available', or a visible purchase button).",
@@ -155,28 +178,28 @@ async function fetchAndParse(
   });
   if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
 
-  // нормалізуємо NBSP та подібні пробіли — це допомагає і LLM, і детермінаціям нижче
   const rawHtml = await r.text();
   const html = rawHtml.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
 
   // 1) LLM
   const ai = await llmExtract(html, url);
 
-  // 2) Детерміновані перевірки/перекриття
+  // 2) Детермінований статус наявності (перекриває LLM)
   const detectedAvail = detectAvailability(html);
-  const safeAvailability = detectedAvail !== null ? detectedAvail : ai.availability;
+  let availability = detectedAvail !== null ? detectedAvail : ai.availability ?? null;
 
-  const safePrice = validatePriceInHtml(html, ai.price);
+  // 3) Приймаємо ціну лише якщо вона реально присутня у HTML; якщо товар відсутній — price=null
+  let price = availability === false ? null : validatePriceInHtml(html, ai.price);
 
   const name = ai.name ? decodeHtml(ai.name) : null;
 
-  return { name, price: safePrice, availability: safeAvailability ?? null };
+  return { name, price, availability };
 }
 
 // ---------------- DB ----------------
 async function listProducts(): Promise<Row[]> {
   const sql = getSql();
-  // Тимчасово без фільтра по tenant_id — показуємо все, щоб не було «порожньої» сторінки
+  // Тимчасово без фільтра по tenant_id — показуємо все
   return await sql<Row[]>`
     SELECT
       id,

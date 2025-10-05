@@ -118,27 +118,21 @@ async function listProductsForTenant(tenantId: string | null): Promise<Row[]> {
 
 // fallback: якщо для цього tenant пусто — показати всі (щоб ти бачив дані відразу)
 async function listProducts(): Promise<Row[]> {
-  const tenantId = await getTenantId();
   const sql = getSql();
-  let rows = await listProductsForTenant(tenantId);
-  if (rows.length === 0) {
-    rows = await sql<Row[]>`
-      SELECT
-        id,
-        tenant_id,
-        url,
-        name,
-        price::text AS price,
-        availability,
-        updated_at::text AS updated_at
-      FROM analysis_products
-      ORDER BY updated_at DESC NULLS LAST, url ASC
-      LIMIT 500
-    `;
-  }
-  return rows;
+  // Тимчасово без фільтра по tenant_id — просто покажемо все, щоб бачити результат
+  return await sql<Row[]>`
+    SELECT
+      id,
+      tenant_id,
+      url,
+      name,
+      price::text AS price,
+      availability,
+      updated_at::text AS updated_at
+    FROM analysis_products
+    ORDER BY updated_at DESC NULLS LAST, url ASC
+  `;
 }
-
 async function upsertProduct(url: string): Promise<Row> {
   const sql = getSql();
   const tenantId = await getTenantId();

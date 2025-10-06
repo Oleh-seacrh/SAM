@@ -57,7 +57,10 @@ function stripNonVisible(html: string): string {
     .replace(/<(?:del|s|strike)[^>]*>([\s\S]*?)<\/(?:del|s|strike)>/gi, "[OLD_PRICE]$1[/OLD_PRICE]")
     // Mark common class names implying old/compare price
     .replace(/<([a-z0-9]+)([^>]*class=["'][^"']*(?:old|regular|compare|rrp)[^"']*["'][^>]*)>([\s\S]{0,200})<\/\1>/gi,
-      (_m, tag, attrs, inner) => `<${tag}${attrs}>[OLD_PRICE]${inner}[/OLD_PRICE]</${tag}>`);
+      (_m, tag, attrs, inner) => `<${tag}${attrs}>[OLD_PRICE]${inner}[/OLD_PRICE]</${tag}>`)
+    // Mark non-product numeric mentions near delivery/payment keywords as NON_PRODUCT_PRICE
+    .replace(/((?:доставк|доставка|delivery|оплат|payment)[^<]{0,240}?)([0-9][0-9 ., ]{0,10}(?:₴|грн|uah))/gi,
+      (_m, pre, price) => `${pre}[NON_PRODUCT_PRICE]${price}[/NON_PRODUCT_PRICE]`);
 }
 
 /** Extract lightweight hints (still LLM-only final decision). */
@@ -159,7 +162,8 @@ async function llmExtractAll(
     "PRICE rules:",
     "- Prefer the current product price in UAH (грн, ₴, UAH).",
     "- Ignore crossed‑out/old prices, ranges, per‑installment, per‑unit when not the main card price.",
-    "- If multiple numbers appear, choose the one closest to buy/stock controls or clearly labeled as price.",
+    "- Ignore any numbers inside [OLD_PRICE]...[/OLD_PRICE] or [NON_PRODUCT_PRICE]...[/NON_PRODUCT_PRICE] markers.",
+    "- If multiple numbers appear, choose the one closest to buy/stock controls or clearly labeled as product price (NOT delivery/payment thresholds).",
     "- Return a NUMBER (no currency symbol, no separators). Use dot as decimal; round if the site shows whole UAH.",
     "AVAILABILITY rules:",
     "- availability=true if page clearly indicates in stock / add to cart visible / ready to ship.",

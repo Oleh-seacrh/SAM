@@ -45,7 +45,7 @@ const NEG_WORDS = [
   "під замовлення",
 ];
 
-// 🔼 доповнили словник позитивних сигналів (у т.ч. для ігрових магазинів)
+// + доповнення позитивних сигналів
 const POS_WORDS = [
   "в наявності",
   "є в наявності",
@@ -93,23 +93,67 @@ function validatePriceInHtml(html: string, price: number | null): number | null 
   return null;
 }
 
-// 🔼 Детермінований парсер ціни за валютою (підтримка грн/uah/₴ та пробіли/коми)
-function extractPriceByCurrency(html: string): number | null {
-  const body = html.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
-  const rx = /(\d{1,3}(?:[ .,\u00A0]\d{3})*(?:[.,]\d{1,2})?)\s*(?:грн|uah|₴)\b/gi;
-  const nums: number[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = rx.exec(body))) {
-    const raw = m[1]
-      .replace(/\u00A0/g, " ")
-      .replace(/(?<=\d)[ .](?=\d{3}(\D|$))/g, "")
-      .replace(/,/, ".");
-    const n = Number(raw);
-    if (Number.isFinite(n)) nums.push(n);
+// ---------- Детерміноване виділення ціни зі скоупом ----------
+const CURRENCY_RX = /(\d{1,3}(?:[ .,\u00A0]\d{3})*(?:[.,]\d{1,2})?)\s*(?:грн|uah|₴|\$|€)\b/gi;
+const CTA_ANCHORS = ["купити", "додати в кошик", "add to cart", "buy now", "купити зараз"];
+const PRICE_ANCHORS = ["ціна", "price"];
+
+function _parseNum(num: string): number | null {
+  const cleaned = num
+    .replace(/\u00A0/g, " ")
+    .replace(/(?<=\d)[ .](?=\d{3}(\D|$))/g, "")
+    .replace(/,/, ".");
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+function findNearestPriceAround(html: string, anchors: string[], radius = 1500): number | null {
+  const lower = normText(html);
+  let idx = -1;
+  for (const a of anchors) {
+    const i = lower.indexOf(a);
+    if (i !== -1) {
+      idx = i;
+      break; // беремо ПЕРШУ появу (основний блок товару)
+    }
   }
-  if (nums.length === 0) return null;
-  // беремо мінімальну — у більшості магазинів це актуальна (знижена) ціна
-  return nums.sort((a, b) => a - b)[0];
+  if (idx === -1) return null;
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(html.length, idx + radius);
+  const window = html.slice(start, end);
+
+  let best: { dist: number; val: number } | null = null;
+  let m: RegExpExecArray | null;
+  const r = new RegExp(CURRENCY_RX);
+  while ((m = r.exec(window))) {
+    const mid = start + (m.index + m[0].length / 2);
+    const dist = Math.abs(mid - idx);
+    const val = _parseNum(m[1]);
+    if (val == null) continue;
+    if (!best || dist < best.dist) best = { dist, val };
+  }
+  return best?.val ?? null;
+}
+
+// 1) Поруч із першою CTA
+function extractPriceNearCta(html: string): number | null {
+  return findNearestPriceAround(html, CTA_ANCHORS, 1600);
+}
+
+// 2) Поруч із першою згадкою "ціна/price"
+function extractPriceNearLabel(html: string): number | null {
+  return findNearestPriceAround(html, PRICE_ANCHORS, 1600);
+}
+
+// 3) Глобальний валюто-пошук (fallback) — БЕЗ вибору мінімальної (щоб не брати дешевші з "Рекомендованих")
+function extractPriceByCurrencyGlobal(html: string): number | null {
+  let m: RegExpExecArray | null;
+  const r = new RegExp(CURRENCY_RX);
+  while ((m = r.exec(html))) {
+    const val = _parseNum(m[1]);
+    if (val != null) return val; // беремо першу ціну у документі
+  }
+  return null;
 }
 
 // ---------------- JSON-LD parser ----------------
@@ -141,8 +185,9 @@ function parseJson(text: string): any[] {
     if (Array.isArray(data)) blocks.push(...data);
     else blocks.push(data);
   } catch {
-    // інколи кілька JSON у одному <script> — пробуємо на рівні рядків
-    const parts = text.split(/\}\s*,\s*\{/).map((p, i, a) => (i === 0 ? p + "}" : i === a.length - 1 ? "{" + p : "{" + p + "}"));
+    const parts = text
+      .split(/\}\s*,\s*\{/)
+      .map((p, i, a) => (i === 0 ? p + "}" : i === a.length - 1 ? "{" + p : "{" + p + "}"));
     for (const p of parts) {
       try {
         blocks.push(JSON.parse(p));
@@ -173,7 +218,6 @@ function normalizeAvailability(av: string | undefined): boolean | null {
 }
 
 function parseMlFromUrl(url: string): number | null {
-  // ...-30-ml-..., ...-50-ml-... (або ML у верхньому регістрі)
   const m = url.toLowerCase().match(/(\d{2,3})-ml/);
   return m ? Number(m[1]) : null;
 }
@@ -181,7 +225,6 @@ function parseMlFromUrl(url: string): number | null {
 function pickOfferForMl(offers: OfferLike[], mlWanted: number | null): OfferLike | null {
   if (offers.length === 0) return null;
   if (mlWanted == null) {
-    // якщо ml не вказано — беремо мінімальну актуальну ціну
     const sorted = offers
       .map((o) => ({
         o,
@@ -196,7 +239,6 @@ function pickOfferForMl(offers: OfferLike[], mlWanted: number | null): OfferLike
       .sort((a, b) => (a.p as number) - (b.p as number));
     return sorted[0]?.o ?? offers[0];
   }
-  // пробуємо знайти в назві/URL 30 ML / 50 ML / 90 ML
   const byName = offers.find((o) => (o.name || "").toLowerCase().includes(`${mlWanted} ml`));
   if (byName) return byName;
   const byUrl = offers.find((o) => (o.url || "").toLowerCase().includes(`${mlWanted}-ml`));
@@ -211,7 +253,6 @@ function extractFromJsonLd(
   const blocks = findProductBlocks(html);
   if (blocks.length === 0) return null;
 
-  // шукаємо Product
   const products: any[] = [];
   for (const b of blocks) {
     if (!b) continue;
@@ -226,7 +267,6 @@ function extractFromJsonLd(
   }
   if (products.length === 0) return null;
 
-  // збираємо всі оффери
   const mlWanted = parseMlFromUrl(url);
   for (const p of products) {
     const name: string | undefined = p.name || p.title;
@@ -314,13 +354,13 @@ async function fetchAndParse(
   const rawHtml = await r.text();
   const html = decodeHtml(rawHtml);
 
-  // (A) Спроба через JSON-LD (найнадійніше для ціни по ML)
+  // (A) Спроба через JSON-LD
   const fromLd = extractFromJsonLd(html, url);
 
-  // (B) Детермінована наявність з тексту сторінки (перекриває все)
+  // (B) Детермінована наявність
   const detectedAvail = detectAvailability(html);
 
-  // (C) Якщо JSON-LD не дав ні ціну, ні ім'я — фолбек до LLM
+  // (C) LLM — лише якщо бракує даних
   let fallback: { name: string | null; price: number | null; availability: boolean | null } | null = null;
   if (!fromLd?.price || !fromLd?.name) {
     fallback = await llmExtract(html, url);
@@ -328,23 +368,20 @@ async function fetchAndParse(
 
   // (D) Збираємо фінал
   const name = fromLd?.name ? decodeHtml(fromLd.name) : fallback?.name ? decodeHtml(fallback.name) : null;
-
-  // якщо товар відсутній — price = null
   let availability = detectedAvail !== null ? detectedAvail : (fromLd?.availability ?? fallback?.availability ?? null);
 
   let price: number | null = null;
   if (availability !== false) {
-    // Пріоритет: JSON-LD → детермінований парсер валюти → LLM (з валідацією)
+    // Пріоритет: JSON-LD → біля CTA → біля label → глобальне валютне → LLM (з валідацією)
     price = fromLd?.price ?? null;
-    if (price == null) {
-      // НОВЕ: витягуємо прямо "722 ГРН." / "2 107,80 ₴" тощо
-      price = extractPriceByCurrency(html);
-    }
+
+    if (price == null) price = extractPriceNearCta(html);
+    if (price == null) price = extractPriceNearLabel(html);
+    if (price == null) price = extractPriceByCurrencyGlobal(html);
+
     if (price == null && fallback?.price != null) {
-      // підстрахуємо LLM-ціною, але перевіримо, що таке число справді є у HTML
       price = validatePriceInHtml(html, fallback.price);
     }
-    // якщо ціна була з JSON-LD — можна (опційно) спробувати підтвердити її у HTML
     if (price == null && fromLd?.price != null) {
       price = validatePriceInHtml(html, fromLd.price) ?? fromLd.price;
     }
@@ -356,7 +393,6 @@ async function fetchAndParse(
 // ---------------- DB ----------------
 async function listProducts(): Promise<Row[]> {
   const sql = getSql();
-  // Тимчасово без фільтра по tenant_id — показуємо все
   return await sql<Row[]>`
     SELECT id, tenant_id, url, name, price::text AS price, availability, updated_at::text AS updated_at
     FROM analysis_products

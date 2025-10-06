@@ -60,7 +60,13 @@ function stripNonVisible(html: string): string {
       (_m, tag, attrs, inner) => `<${tag}${attrs}>[OLD_PRICE]${inner}[/OLD_PRICE]</${tag}>`)
     // Mark non-product numeric mentions near delivery/payment keywords as NON_PRODUCT_PRICE
     .replace(/((?:доставк|доставка|delivery|оплат|payment)[^<]{0,240}?)([0-9][0-9 ., ]{0,10}(?:₴|грн|uah))/gi,
-      (_m, pre, price) => `${pre}[NON_PRODUCT_PRICE]${price}[/NON_PRODUCT_PRICE]`);
+      (_m, pre, price) => `${pre}[NON_PRODUCT_PRICE]${price}[/NON_PRODUCT_PRICE]`)
+    // Mark explicit price containers as PRICE_CONTEXT to bias selection
+    .replace(/<([a-z0-9]+)([^>]*class=["'][^"']*(?:price-box|special-price|price\s+special-price)[^"']*["'][^>]*)>([\s\S]{0,800})<\/\1>/gi,
+      (_m, tag, attrs, inner) => `<${tag}${attrs}>[PRICE_CONTEXT]${inner}[/PRICE_CONTEXT]</${tag}>`)
+    // Also mark fragments near label 'Ціна' or 'Price' followed by numbers as PRICE_CONTEXT
+    .replace(/(Ціна[^<]{0,120}?|Price[^<]{0,120}?)([0-9][0-9 ., ]{0,15}(?:₴|грн|uah))/gi,
+      (_m, pre, num) => `${pre}[PRICE_CONTEXT]${num}[/PRICE_CONTEXT]`);
 }
 
 /** Extract lightweight hints (still LLM-only final decision). */
@@ -86,11 +92,11 @@ function extractHints(html: string) {
   // Availability cues
   const availabilityCues = [] as string[];
   const cueList = [
-    "в наявності",
-    "є в наявності",
+  "в наявності",
+  "є в наявності",
     "готовий до відправлення",
-    "in stock",
-    "додати в кошик",
+  "in stock",
+  "додати в кошик",
     "немає в наявності",
     "out of stock",
     "повідомити про наявність",
@@ -120,6 +126,9 @@ function extractHints(html: string) {
     }
   }
 
+  // Capture explicit PRICE_CONTEXT blocks for the model
+  const priceCtx = html.match(/\[PRICE_CONTEXT\]([\s\S]{0,600})\[\/PRICE_CONTEXT\]/i)?.[1];
+
   const lines = [
     titleMatch ? `title: ${decodeHtml(titleMatch[1]).trim()}` : null,
     ogTitle ? `og:title: ${decodeHtml(ogTitle[1]).trim()}` : null,
@@ -127,6 +136,7 @@ function extractHints(html: string) {
     availabilityCues.length ? `availabilityHints: ${availabilityCues.join(" | ")}` : null,
     jsonLd ? `jsonld: ${jsonLd.slice(0, 1200)}` : null,
     buyCtx ? `buyBlock: ${buyCtx.slice(0, 1200)}` : null,
+    priceCtx ? `priceBlock: ${priceCtx.slice(0, 600)}` : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -229,8 +239,8 @@ async function fetchAndParse(
       cache: "no-store",
       signal: controller.signal,
     });
-    if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
-    const rawHtml = await r.text();
+  if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
+  const rawHtml = await r.text();
     const rawHints = extractHints(rawHtml); // preserve JSON-LD and buy-block context
     const cleaned = stripNonVisible(rawHtml);
     const html = decodeHtml(cleaned);

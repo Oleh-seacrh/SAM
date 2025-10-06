@@ -3,6 +3,8 @@ import { revalidatePath, unstable_noStore as noStore } from "next/cache";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
 import { jsonExtract } from "@/lib/llm";
+import PendingButton from "@/components/ui/PendingButton";
+import PendingAddButton from "./PendingAddButton";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -364,17 +366,18 @@ export default async function AnalysisPage() {
           placeholder="https://example.com/product/123"
           className="w-full max-w-xl rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-2 outline-none"
         />
-        <button className="rounded-xl px-4 py-2 bg-white text-black hover:opacity-90">Add</button>
+        {/* Pending-aware submit */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        {/* Using client PendingButton for form status */}
+        <PendingAddButton />
       </form>
 
       <div className="flex gap-2">
         <form action={reloadListAction}>
-          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">Reload list</button>
+          <PendingButton>Reload list</PendingButton>
         </form>
         <form action={refreshAllAction}>
-          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">
-            Refresh all (re-parse)
-          </button>
+          <PendingButton>Refresh all (re-parse)</PendingButton>
         </form>
       </div>
 
@@ -431,7 +434,7 @@ export default async function AnalysisPage() {
                   <td className="px-3 py-2 align-top">
                     <form action={refreshOneAction} className="inline">
                       <input type="hidden" name="url" value={row.url} />
-                      <button className="rounded-xl px-3 py-1 border border-neutral-700 hover:bg-neutral-800">Refresh</button>
+                      <PendingButton className="px-3 py-1">Refresh</PendingButton>
                     </form>
                   </td>
                 </tr>

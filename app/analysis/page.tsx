@@ -1,8 +1,7 @@
 // app/analysis/page.tsx
 // Product Monitor (LLM-light) for SAM
-// 1) Спочатку читаємо JSON-LD (schema.org Product/Offer) -> price + availability по потрібному ML
-// 2) Якщо нема/криво — фолбек LLM (ТІЛЬКИ для name/availability) + детерміновані перевірки
-// 3) Reload list: просто перечитує БД; Refresh — перепарс
+// DOM price has priority; JSON-LD is a hint; LLM is used only for name/availability.
+// Reload = DB only. Refresh = re-parse.
 
 import { revalidatePath, unstable_noStore as noStore } from "next/cache";
 import { getSql } from "@/lib/db";
@@ -36,6 +35,13 @@ const decodeHtml = (s: string) =>
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">");
 
+function stripNonVisible(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
+    .replace(/<style[\s\S]*?<\/style>/gi, "")
+    .replace(/<!--[\s\S]*?-->/g, "");
+}
+
 const NEG_WORDS = [
   "тимчасово немає в наявності",
   "немає в наявності",
@@ -60,38 +66,14 @@ const normText = (s: string) =>
 
 function detectAvailability(html: string): boolean | null {
   const t = normText(html);
-  for (const w of NEG_WORDS) if (t.includes(w)) return false; // NEG > POS
+  for (const w of NEG_WORDS) if (t.includes(w)) return false;
   for (const w of POS_WORDS) {
     if (t.includes(w) && !t.includes("немає " + w) && !t.includes("тимчасово немає " + w)) return true;
   }
   return null;
 }
 
-function extractNumbersFromHtml(html: string): number[] {
-  const body = html.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
-  const rx = /\b\d{1,3}(?:[ .,\u00A0]\d{3})*(?:[.,]\d{1,2})?\b/g;
-  const out: number[] = [];
-  for (const m of body.matchAll(rx)) {
-    const raw = m[0];
-    const cleaned = raw
-      .replace(/\u00A0/g, " ")
-      .replace(/(?<=\d)[ .](?=\d{3}(\D|$))/g, "")
-      .replace(/,/, ".");
-    const num = Number(cleaned);
-    if (!Number.isNaN(num)) out.push(num);
-  }
-  return out;
-}
-
-function validatePriceInHtml(html: string, price: number | null): number | null {
-  if (price == null) return null;
-  const nums = extractNumbersFromHtml(html);
-  const eps = 0.01;
-  for (const n of nums) if (Math.abs(n - price) <= eps) return price;
-  return null;
-}
-
-// ---------- Детерміноване виділення ціни зі скоупом (reworked) ----------
+// ---------- Детерміноване виділення ціни зі скоупом ----------
 const CURRENCY_RX = /(\d{1,3}(?:[ .,\u00A0]\d{3})*(?:[.,]\d{1,2})?)\s*(?:грн\.?|uah|₴|\$|€)\b/gi;
 
 const CTA_ANCHORS = ["купити", "додати в кошик", "add to cart", "buy now", "купити зараз"];
@@ -105,7 +87,19 @@ const RECO_HEADERS = [
   "customers also bought",
 ];
 
-const BAD_PRICE_NEAR = ["стара", "стар", "перекреслен", "зниж", "скидк", "економ", "was", "regular", "rrp"];
+const BAD_PRICE_NEAR = [
+  "стара",
+  "стар",
+  "перекреслен",
+  "зниж",
+  "скидк",
+  "економ",
+  "was",
+  "regular",
+  "rrp",
+  "old price",
+  "compare at",
+];
 const BAD_PREFIXES = ["від"]; // "від 699 грн"
 const BAD_SIGNS_AROUND = ["%"]; // -20%, 10%
 
@@ -115,28 +109,27 @@ function _parseNum(num: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+// ВАЖЛИВО: індекси шукаємо в оригінальному html.toLowerCase(), без колапсу пробілів
 function findIndex(html: string, tokens: string[]): number {
-  const t = normText(html);
-  for (const s of tokens) {
-    const i = t.indexOf(s);
+  const lower = html.toLowerCase();
+  for (const t of tokens) {
+    const i = lower.indexOf(t.toLowerCase());
     if (i !== -1) return i;
   }
   return -1;
 }
-
-function findH1Index(html: string): number {
-  const m = html.match(/<h1[^>]*>/i);
-  return m ? m.index! : -1;
-}
-
 function findRecoIndex(html: string): number {
-  const t = normText(html);
+  const lower = html.toLowerCase();
   let best = -1;
   for (const key of RECO_HEADERS) {
-    const i = t.indexOf(key);
+    const i = lower.indexOf(key.toLowerCase());
     if (i !== -1 && (best === -1 || i < best)) best = i;
   }
   return best;
+}
+function findH1Index(html: string): number {
+  const m = html.match(/<h1[^>]*>/i);
+  return m ? m.index! : -1;
 }
 
 type PriceCandidate = { val: number; idx: number; ctx: string; score: number };
@@ -146,7 +139,6 @@ function withinTagOrOldClass(ctx: string): boolean {
   if (/class=["'][^"']*(old|regular|compare)[^"']*["']/i.test(ctx)) return true;
   return false;
 }
-
 function looksBadContext(ctx: string): boolean {
   const low = normText(ctx);
   if (BAD_SIGNS_AROUND.some((s) => ctx.includes(s))) return true;
@@ -164,7 +156,6 @@ function listCurrencyCandidates(windowHtml: string, baseIndex: number): PriceCan
     const val = _parseNum(raw);
     if (val == null) continue;
 
-    // локальний контекст ±120 символів
     const i0 = Math.max(0, m.index - 120);
     const i1 = Math.min(windowHtml.length, m.index + m[0].length + 120);
     const ctx = windowHtml.slice(i0, i1);
@@ -176,13 +167,12 @@ function listCurrencyCandidates(windowHtml: string, baseIndex: number): PriceCan
   }
   return out;
 }
-
 function scoreCandidate(c: PriceCandidate, anchorIdx: number): number {
   const dist = Math.max(1, Math.abs(c.idx - anchorIdx));
   let score = 100000 / dist;
   if (/(купити|додати в кошик|add to cart|buy)/i.test(c.ctx)) score += 50;
   if (/(ціна|price)/i.test(c.ctx)) score += 25;
-  if (c.val < 10) score -= 200; // мікро-значення (доставка 0 грн тощо)
+  if (c.val < 10) score -= 200;
   return score;
 }
 
@@ -195,34 +185,52 @@ function sliceMainWindow(html: string): { start: number; end: number } {
   const radius = 4000;
   const start = Math.max(0, (anchor !== -1 ? anchor : 0) - radius);
   let end = Math.min(html.length, (anchor !== -1 ? anchor : 0) + radius);
-
   if (reco !== -1 && reco > start) end = Math.min(end, reco);
   return { start, end };
 }
 
 function pickPriceFromDom(html: string): number | null {
+  const anchorsTry: string[][] = [CTA_ANCHORS, ["<h1"], PRICE_ANCHORS];
   const { start, end } = sliceMainWindow(html);
   const windowHtml = html.slice(start, end);
 
-  const localAnchorIdx = (() => {
-    const ctaLocal = findIndex(windowHtml, CTA_ANCHORS);
-    if (ctaLocal !== -1) return start + ctaLocal;
-    const h1Local = findH1Index(windowHtml);
-    if (h1Local !== -1) return start + h1Local;
-    const priceLocal = findIndex(windowHtml, PRICE_ANCHORS);
-    return priceLocal !== -1 ? start + priceLocal : start;
-  })();
+  for (const anchors of anchorsTry) {
+    const localIdx = findIndex(windowHtml, anchors);
+    const anchorIdx = localIdx !== -1 ? start + localIdx : start;
 
-  const candidates = listCurrencyCandidates(windowHtml, start);
-  if (candidates.length === 0) return null;
+    const candidates = listCurrencyCandidates(windowHtml, start);
+    if (candidates.length === 0) continue;
 
-  // посилюємо найбільш повторюване значення (часто дубль у mobile/header)
-  const freq = new Map<number, number>();
-  for (const c of candidates) freq.set(c.val, (freq.get(c.val) || 0) + 1);
-  for (const c of candidates) c.score = scoreCandidate(c, localAnchorIdx) + (freq.get(c.val)! - 1) * 30;
+    const freq = new Map<number, number>();
+    for (const c of candidates) freq.set(c.val, (freq.get(c.val) || 0) + 1);
+    for (const c of candidates) c.score = scoreCandidate(c, anchorIdx) + (freq.get(c.val)! - 1) * 30;
 
-  candidates.sort((a, b) => b.score - a.score);
-  return candidates[0].val ?? null;
+    candidates.sort((a, b) => b.score - a.score);
+    const picked = candidates[0]?.val ?? null;
+    if (picked != null) return picked;
+  }
+  return null;
+}
+
+// Верифікація LD-ціни — тільки з валютою і тільки у «головній» зоні
+function validatePriceWithCurrency(html: string, price: number): number | null {
+  const { start, end } = sliceMainWindow(html);
+  const windowHtml = html.slice(start, end);
+
+  let m: RegExpExecArray | null;
+  const r = new RegExp(CURRENCY_RX);
+  while ((m = r.exec(windowHtml))) {
+    const val = _parseNum(m[1]);
+    if (val == null) continue;
+
+    const i0 = Math.max(0, m.index - 120);
+    const i1 = Math.min(windowHtml.length, m.index + m[0].length + 120);
+    const ctx = windowHtml.slice(i0, i1);
+    if (withinTagOrOldClass(ctx) || looksBadContext(ctx)) continue;
+
+    if (Math.abs(val - price) <= 0.01) return price;
+  }
+  return null;
 }
 
 // ---------------- JSON-LD parser ----------------
@@ -246,7 +254,6 @@ function pickNumber(x: unknown): number | null {
   }
   return null;
 }
-
 function parseJson(text: string): any[] {
   const blocks: any[] = [];
   try {
@@ -265,7 +272,6 @@ function parseJson(text: string): any[] {
   }
   return blocks;
 }
-
 function findProductBlocks(html: string): any[] {
   const res: any[] = [];
   const rx = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
@@ -277,7 +283,6 @@ function findProductBlocks(html: string): any[] {
   }
   return res;
 }
-
 function normalizeAvailability(av: string | undefined): boolean | null {
   if (!av) return null;
   const a = av.toLowerCase();
@@ -285,12 +290,10 @@ function normalizeAvailability(av: string | undefined): boolean | null {
   if (a.includes("outofstock") || a.includes("soldout")) return false;
   return null;
 }
-
 function parseMlFromUrl(url: string): number | null {
   const m = url.toLowerCase().match(/(\d{2,3})-ml/);
   return m ? Number(m[1]) : null;
 }
-
 function pickOfferForMl(offers: OfferLike[], mlWanted: number | null): OfferLike | null {
   if (offers.length === 0) return null;
   if (mlWanted == null) {
@@ -314,7 +317,6 @@ function pickOfferForMl(offers: OfferLike[], mlWanted: number | null): OfferLike
   if (byUrl) return byUrl;
   return null;
 }
-
 function extractFromJsonLd(
   html: string,
   url: string
@@ -375,8 +377,7 @@ async function llmExtract(
     additionalProperties: false,
     properties: {
       name: { anyOf: [{ type: "string" }, { type: "null" }] },
-      // price тут є у схемі, але ми його ігноруємо (не використовуємо як джерело правди)
-      price: { anyOf: [{ type: "number" }, { type: "null" }] },
+      price: { anyOf: [{ type: "number" }, { type: "null" }] }, // не використовуємо
       availability: { anyOf: [{ type: "boolean" }, { type: "null" }] },
     },
     required: ["name", "price", "availability"],
@@ -396,11 +397,7 @@ async function llmExtract(
     .filter(Boolean)
     .join("\n");
 
-  const out = await jsonExtract<{
-    name: string | null;
-    price: number | null;
-    availability: boolean | null;
-  }>({
+  const out = await jsonExtract<{ name: string | null; price: number | null; availability: boolean | null }>({
     system,
     user,
     schema,
@@ -409,41 +406,41 @@ async function llmExtract(
 
   return {
     name: out?.name ?? null,
-    price: null, // важливо: LLM price ігноруємо
+    price: null, // LLM price ігноруємо
     availability: typeof out?.availability === "boolean" ? out!.availability : null,
   };
 }
 
-// ---------------- fetch + parse (DOM → JSON-LD як підказка; LLM тільки для name/availability) ----------------
+// ---------------- fetch + parse ----------------
 async function fetchAndParse(
   url: string
 ): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
   const r = await fetch(url, { headers: { "User-Agent": "SAM-ProductMonitor/1.0" }, cache: "no-store" });
   if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
   const rawHtml = await r.text();
-  const html = decodeHtml(rawHtml);
+  const html = decodeHtml(stripNonVisible(rawHtml));
 
-  // (A) JSON-LD підказка
+  // (A) JSON-LD hint
   const fromLd = extractFromJsonLd(html, url);
 
-  // (B) Детермінована наявність
+  // (B) Deterministic availability
   const detectedAvail = detectAvailability(html);
 
-  // (C) LLM — лише name/availability, якщо треба
+  // (C) LLM — only for name/availability if needed
   let fallback: { name: string | null; price: null; availability: boolean | null } | null = null;
   if (!fromLd?.name || detectedAvail === null) {
     fallback = await llmExtract(html, url);
   }
 
-  // (D) Фінал
+  // (D) Final
   const name = fromLd?.name ? decodeHtml(fromLd.name) : fallback?.name ? decodeHtml(fallback.name) : null;
   let availability = detectedAvail !== null ? detectedAvail : (fromLd?.availability ?? fallback?.availability ?? null);
 
-  // ЦІНА: DOM — головне джерело; JSON-LD — лише як бекап/верифікація
+  // PRICE: DOM → JSON-LD (verified) ; never from LLM
   let price: number | null = null;
   if (availability !== false) {
-    const domPrice = pickPriceFromDom(html);      // головне джерело
-    const ldPrice = fromLd?.price ?? null;        // підказка
+    const domPrice = pickPriceFromDom(html);
+    const ldPrice = fromLd?.price ?? null;
 
     if (domPrice != null) {
       price = domPrice;
@@ -451,10 +448,10 @@ async function fetchAndParse(
         console.debug("Price mismatch: DOM vs JSON-LD", { domPrice, ldPrice, url });
       }
     } else if (ldPrice != null) {
-      const verified = validatePriceInHtml(html, ldPrice); // перевіряємо, що LD-ціна реально «видима»
-      price = verified ?? ldPrice;
+      const verified = validatePriceWithCurrency(html, ldPrice);
+      price = verified ?? null; // краще null, ніж випадкове ld-число
     } else {
-      price = null; // ніяких LLM-чисел
+      price = null;
     }
   }
 
@@ -470,7 +467,6 @@ async function listProducts(): Promise<Row[]> {
     ORDER BY updated_at DESC NULLS LAST, url ASC
   `;
 }
-
 async function upsertProduct(url: string): Promise<Row> {
   const sql = getSql();
   const tenantId = await getTenantId();
@@ -547,7 +543,9 @@ export default async function AnalysisPage() {
   return (
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Analysis</h1>
-      <p className="text-sm opacity-70">Reads JSON-LD first; DOM has priority for price. Reload = DB only. Refresh = re-parse.</p>
+      <p className="text-sm opacity-70">
+        Reads JSON-LD first; DOM has priority for price. Reload = DB only. Refresh = re-parse.
+      </p>
 
       <form action={addUrlAction} className="flex gap-2 items-center">
         <input
@@ -565,7 +563,9 @@ export default async function AnalysisPage() {
           <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">Reload list</button>
         </form>
         <form action={refreshAllAction}>
-          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">Refresh all (re-parse)</button>
+          <button className="rounded-xl px-4 py-2 border border-neutral-700 hover:bg-neutral-800">
+            Refresh all (re-parse)
+          </button>
         </form>
       </div>
 
@@ -606,9 +606,13 @@ export default async function AnalysisPage() {
                     {row.availability === null ? (
                       "—"
                     ) : row.availability ? (
-                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-green-600/20 text-green-300">In stock</span>
+                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-green-600/20 text-green-300">
+                        In stock
+                      </span>
                     ) : (
-                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-red-600/20 text-red-300">Out</span>
+                      <span className="inline-flex items-center rounded-lg px-2 py-1 bg-red-600/20 text-red-300">
+                        Out
+                      </span>
                     )}
                   </td>
                   <td className="px-3 py-2 align-top opacity-70">

@@ -44,6 +44,8 @@ const NEG_WORDS = [
   "sold out",
   "під замовлення",
 ];
+
+// 🔼 доповнили словник позитивних сигналів (у т.ч. для ігрових магазинів)
 const POS_WORDS = [
   "в наявності",
   "є в наявності",
@@ -51,6 +53,8 @@ const POS_WORDS = [
   "available",
   "додати в кошик",
   "add to cart",
+  "купити",
+  "готовий до відправлення",
 ];
 
 const normText = (s: string) =>
@@ -87,6 +91,25 @@ function validatePriceInHtml(html: string, price: number | null): number | null 
   const eps = 0.01;
   for (const n of nums) if (Math.abs(n - price) <= eps) return price;
   return null;
+}
+
+// 🔼 Детермінований парсер ціни за валютою (підтримка грн/uah/₴ та пробіли/коми)
+function extractPriceByCurrency(html: string): number | null {
+  const body = html.replace(/&nbsp;/g, " ").replace(/\u00A0/g, " ");
+  const rx = /(\d{1,3}(?:[ .,\u00A0]\d{3})*(?:[.,]\d{1,2})?)\s*(?:грн|uah|₴)\b/gi;
+  const nums: number[] = [];
+  let m: RegExpExecArray | null;
+  while ((m = rx.exec(body))) {
+    const raw = m[1]
+      .replace(/\u00A0/g, " ")
+      .replace(/(?<=\d)[ .](?=\d{3}(\D|$))/g, "")
+      .replace(/,/, ".");
+    const n = Number(raw);
+    if (Number.isFinite(n)) nums.push(n);
+  }
+  if (nums.length === 0) return null;
+  // беремо мінімальну — у більшості магазинів це актуальна (знижена) ціна
+  return nums.sort((a, b) => a - b)[0];
 }
 
 // ---------------- JSON-LD parser ----------------
@@ -160,7 +183,15 @@ function pickOfferForMl(offers: OfferLike[], mlWanted: number | null): OfferLike
   if (mlWanted == null) {
     // якщо ml не вказано — беремо мінімальну актуальну ціну
     const sorted = offers
-      .map((o) => ({ o, p: pickNumber(o.price ?? (Array.isArray(o.priceSpecification) ? o.priceSpecification[0]?.price : (o.priceSpecification as any)?.price)) }))
+      .map((o) => ({
+        o,
+        p: pickNumber(
+          o.price ??
+            (Array.isArray(o.priceSpecification)
+              ? o.priceSpecification[0]?.price
+              : (o.priceSpecification as any)?.price)
+        ),
+      }))
       .filter((x) => x.p != null)
       .sort((a, b) => (a.p as number) - (b.p as number));
     return sorted[0]?.o ?? offers[0];
@@ -173,7 +204,10 @@ function pickOfferForMl(offers: OfferLike[], mlWanted: number | null): OfferLike
   return null;
 }
 
-function extractFromJsonLd(html: string, url: string): { name?: string; price?: number | null; availability?: boolean | null } | null {
+function extractFromJsonLd(
+  html: string,
+  url: string
+): { name?: string; price?: number | null; availability?: boolean | null } | null {
   const blocks = findProductBlocks(html);
   if (blocks.length === 0) return null;
 
@@ -210,7 +244,9 @@ function extractFromJsonLd(html: string, url: string): { name?: string; price?: 
     let price =
       pickNumber(
         offer.price ??
-          (Array.isArray(offer.priceSpecification) ? offer.priceSpecification[0]?.price : (offer.priceSpecification as any)?.price)
+          (Array.isArray(offer.priceSpecification)
+            ? offer.priceSpecification[0]?.price
+            : (offer.priceSpecification as any)?.price)
       ) ?? null;
 
     const availability = normalizeAvailability(offer.availability);
@@ -236,11 +272,13 @@ async function llmExtract(
     required: ["name", "price", "availability"],
   };
 
-  const system = "You extract structured data from a single e-commerce product page and return STRICT JSON only.";
+  const system =
+    "You extract structured data from a single e-commerce product page and return STRICT JSON only.";
   const user = [
     "OUTPUT: JSON with EXACT keys {name, price, availability}.",
     "Do NOT guess — if unsure, use null.",
     "PRICE: if multiple (old vs discounted), return current/active; ignore <del>/old/strike/was/regular/rrp; dot-decimal number only.",
+    "Currency tokens may appear (грн, uah, ₴, $, €). Extract numeric value only.",
     "AVAILABILITY: true only if clearly purchasable (e.g., 'В наявності', 'In stock', visible 'Додати в кошик'); false if 'Тимчасово немає в наявності'/'Out of stock'.",
     url ? `URL: ${url}` : "",
     "HTML:",
@@ -249,7 +287,11 @@ async function llmExtract(
     .filter(Boolean)
     .join("\n");
 
-  const out = await jsonExtract<{ name: string | null; price: number | null; availability: boolean | null }>({
+  const out = await jsonExtract<{
+    name: string | null;
+    price: number | null;
+    availability: boolean | null;
+  }>({
     system,
     user,
     schema,
@@ -292,13 +334,19 @@ async function fetchAndParse(
 
   let price: number | null = null;
   if (availability !== false) {
-    // Пріоритет: JSON-LD → (валідація в HTML) → LLM (з валідацією)
+    // Пріоритет: JSON-LD → детермінований парсер валюти → LLM (з валідацією)
     price = fromLd?.price ?? null;
-    if (price != null) {
-      // опційна валідація: інколи у JSON-LD є ціни всіх варіантів — але ми вже вибрали offer по ML
-      price = validatePriceInHtml(html, price) ?? price; // якщо в HTML не знайдено — все одно лишаємо з JSON-LD
-    } else if (fallback?.price != null) {
+    if (price == null) {
+      // НОВЕ: витягуємо прямо "722 ГРН." / "2 107,80 ₴" тощо
+      price = extractPriceByCurrency(html);
+    }
+    if (price == null && fallback?.price != null) {
+      // підстрахуємо LLM-ціною, але перевіримо, що таке число справді є у HTML
       price = validatePriceInHtml(html, fallback.price);
+    }
+    // якщо ціна була з JSON-LD — можна (опційно) спробувати підтвердити її у HTML
+    if (price == null && fromLd?.price != null) {
+      price = validatePriceInHtml(html, fromLd.price) ?? fromLd.price;
     }
   }
 

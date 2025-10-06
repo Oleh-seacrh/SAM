@@ -1,4 +1,4 @@
-// app/analysis/page.tsx (LLM-only parsing)
+// app/analysis/page.tsx (LLM-only parsing, refined)
 import { revalidatePath, unstable_noStore as noStore } from "next/cache";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
@@ -7,6 +7,7 @@ import { jsonExtract } from "@/lib/llm";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// ---------------- types ----------------
 type Row = {
   id: string;
   tenant_id: string | null;
@@ -19,9 +20,12 @@ type Row = {
 
 // ---------------- helpers ----------------
 async function getTenantId(): Promise<string | null> {
-  return (await getTenantIdFromSession()) || (process.env.TENANT_ID as string | undefined) || null;
+  return (
+    (await getTenantIdFromSession()) || (process.env.TENANT_ID as string | undefined) || null
+  );
 }
 
+/** Decode a very small subset of HTML entities (enough for titles/prices). */
 function decodeHtml(s: string) {
   return s
     .replace(/&nbsp;/g, " ")
@@ -33,10 +37,73 @@ function decodeHtml(s: string) {
     .replace(/&gt;/g, ">");
 }
 
+/**
+ * Remove non-visible/low-signal blocks so the LLM focuses on product content.
+ * Keep <title> and common meta tags for better naming.
+ */
 function stripNonVisible(html: string): string {
   return html
+    // comments
+    .replace(/<!--[\s\S]*?-->/g, "")
+    // scripts/styles/iframes/templates/svg
+    .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<!--[\s\S]*?-->/g, "");
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
+    .replace(/<template[\s\S]*?<\/template>/gi, "")
+    .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, "");
+}
+
+/** Extract lightweight hints (still LLM-only final decision). */
+function extractHints(html: string) {
+  const lower = html.toLowerCase();
+
+  const titleMatch = html.match(/<title[^>]*>([^<]{5,120})<\/title>/i);
+  const ogTitle = html.match(/property=["']og:title["'][^>]*content=["']([^"']{5,160})["']/i);
+
+  // Cheap signals for price-like tokens (₴/грн/uah) — not used as truth, just context
+  const priceTokens = [] as string[];
+  const priceRegex = /([0-9][0-9 ., ]{0,10})(?:₴|грн|uah)/giu;
+  let m: RegExpExecArray | null;
+  while ((m = priceRegex.exec(html))) {
+    const raw = m[0]
+      .replace(/\s+/g, " ")
+      .replace(/&nbsp;/g, " ")
+      .trim();
+    if (raw.length <= 16) priceTokens.push(raw);
+    if (priceTokens.length >= 10) break; // cap noise
+  }
+
+  // Availability cues
+  const availabilityCues = [] as string[];
+  const cueList = [
+    "в наявності",
+    "є в наявності",
+    "готовий до відправлення",
+    "in stock",
+    "додати в кошик",
+    "немає в наявності",
+    "out of stock",
+    "повідомити про наявність",
+  ];
+  for (const cue of cueList) {
+    if (lower.includes(cue)) availabilityCues.push(cue);
+  }
+
+  // Tiny JSON-LD peek (do NOT parse deeply; still LLM decides)
+  const jsonLd = html.match(/<script[^>]*application\/(ld\+json)[^>]*>([\s\S]{0,5000})<\/script>/i)?.[2];
+
+  const lines = [
+    titleMatch ? `title: ${decodeHtml(titleMatch[1]).trim()}` : null,
+    ogTitle ? `og:title: ${decodeHtml(ogTitle[1]).trim()}` : null,
+    priceTokens.length ? `priceHints: ${priceTokens.join(" | ")}` : null,
+    availabilityCues.length ? `availabilityHints: ${availabilityCues.join(" | ")}` : null,
+    jsonLd ? `jsonld: ${jsonLd.slice(0, 1200)}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return lines;
 }
 
 // ---------------- LLM-only extract ----------------
@@ -44,6 +111,8 @@ async function llmExtractAll(
   html: string,
   url?: string
 ): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
+  const hints = extractHints(html);
+
   const schema = {
     type: "object",
     additionalProperties: false,
@@ -53,32 +122,54 @@ async function llmExtractAll(
       availability: { anyOf: [{ type: "boolean" }, { type: "null" }] },
     },
     required: ["name", "price", "availability"],
-  };
+  } as const;
 
-  const system =
-    "You are an expert parser of e-commerce product pages. Return STRICT JSON only with the exact keys {name, price, availability}. If unknown, return null. Base decisions only on the provided HTML.";
+  const system = [
+    "You are an expert parser of e‑commerce product pages.",
+    "Return STRICT JSON ONLY, with exactly these keys: {name, price, availability}.",
+    "If unknown, return null (not a string).",
+    "Decide based ONLY on the provided content (HTML + small hint block).",
+    // Disambiguation rules
+    "PRICE rules:",
+    "- Prefer the current product price in UAH (грн, ₴, UAH).",
+    "- Ignore crossed‑out/old prices, ranges, per‑installment, per‑unit when not the main card price.",
+    "- If multiple numbers appear, choose the one closest to buy/stock controls or clearly labeled as price.",
+    "- Return a NUMBER (no currency symbol, no separators). Use dot as decimal; round if the site shows whole UAH.",
+    "AVAILABILITY rules:",
+    "- availability=true if page clearly indicates in stock / add to cart visible / ready to ship.",
+    "- availability=false if out of stock / notify me / temporarily unavailable.",
+    "- else null.",
+    "NAME rules:",
+    "- Use the product title of THIS page (not category, not brand-only, not breadcrumbs).",
+    "- Prefer clean human-readable title (strip trailing shop branding).",
+  ].join("\n");
+
   const user = [
     "OUTPUT: JSON with EXACT keys {name, price, availability}.",
-    "Do NOT guess — if unsure, use null.",
-    "AVAILABILITY: true only if clearly purchasable (e.g., 'В наявності'/'In stock', visible 'Додати в кошик'/'Add to cart'); false if 'Тимчасово немає в наявності'/'Out of stock'.",
-    "NAME: product title, not brand or navigation.",
     url ? `URL: ${url}` : "",
-    "HTML:",
-    html.slice(0, 80000),
+    "HINTS (may include title/price/availability cues/JSON-LD — use as clues, not as truth):",
+    hints,
+    "HTML (clean subset):",
+    html.slice(0, 90000),
   ]
     .filter(Boolean)
-    .join("\n");
+    .join("\n\n");
 
-  const out = await jsonExtract<{ name: string | null; price: number | null; availability: boolean | null }>({
-    system,
-    user,
-    schema,
-    temperature: 0,
-  });
+  const out = await jsonExtract<{
+    name: string | null;
+    price: number | null;
+    availability: boolean | null;
+  }>({ system, user, schema, temperature: 0 });
+
+  // Post‑sanity: clamp absurd prices, coerce
+  const normPrice =
+    typeof out?.price === "number" && isFinite(out.price) && out.price > 0 && out.price < 500000
+      ? Math.round(out.price)
+      : null;
 
   return {
     name: out?.name ?? null,
-    price: typeof out?.price === "number" ? out.price : null,
+    price: normPrice,
     availability: typeof out?.availability === "boolean" ? out.availability : null,
   };
 }
@@ -87,18 +178,39 @@ async function llmExtractAll(
 async function fetchAndParse(
   url: string
 ): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
-  const r = await fetch(url, {
-    headers: {
-      "User-Agent": "SAM-ProductMonitor/1.0",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
-    },
-    cache: "no-store",
-  });
-  if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
-  const rawHtml = await r.text();
-  const html = decodeHtml(stripNonVisible(rawHtml));
-  return await llmExtractAll(html, url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 20000);
+  try {
+    const r = await fetch(url, {
+      headers: {
+        "User-Agent": "SAM-ProductMonitor/1.0 (+https://medem.ua)",
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+      },
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
+    const rawHtml = await r.text();
+    const cleaned = stripNonVisible(rawHtml);
+    const html = decodeHtml(cleaned);
+
+    // First pass
+    let parsed = await llmExtractAll(html, url);
+
+    // Retry once with stricter directive if price missing; occasionally helps tricky pages
+    if (parsed.price == null || parsed.name == null) {
+      const focus = [
+        "ВИЗНАЧ ЦІНУ в UAH біля кнопок купівлі або блоку ціни.",
+        "ІГНОРУЙ старі/перекреслені/акційні ціни, обери активну.",
+      ].join(" ");
+      parsed = await llmExtractAll(`${focus}\n\n${html}`, url);
+    }
+
+    return parsed;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 // ---------------- DB ----------------
@@ -110,6 +222,7 @@ async function listProducts(): Promise<Row[]> {
     ORDER BY updated_at DESC NULLS LAST, url ASC
   `;
 }
+
 async function upsertProduct(url: string): Promise<Row> {
   const sql = getSql();
   const tenantId = await getTenantId();
@@ -140,10 +253,12 @@ export async function addUrlAction(formData: FormData) {
   }
   revalidatePath("/analysis");
 }
+
 export async function reloadListAction() {
   "use server";
   revalidatePath("/analysis");
 }
+
 export async function refreshAllAction() {
   "use server";
   try {
@@ -160,6 +275,7 @@ export async function refreshAllAction() {
   }
   revalidatePath("/analysis");
 }
+
 export async function refreshOneAction(formData: FormData) {
   "use server";
   const url = String(formData.get("url") || "").trim();
@@ -187,7 +303,7 @@ export default async function AnalysisPage() {
     <div className="p-6 space-y-6">
       <h1 className="text-2xl font-semibold">Analysis</h1>
       <p className="text-sm opacity-70">
-        LLM-only parsing: name, price, availability are extracted exclusively by the model.
+        LLM-only parsing: name, price, availability are extracted exclusively by the model (with focused hints).
       </p>
 
       <form action={addUrlAction} className="flex gap-2 items-center">
@@ -234,6 +350,7 @@ export default async function AnalysisPage() {
             )}
             {items.map((row) => {
               const displayName = row.name ? decodeHtml(row.name) : "—";
+              const priceText = row.price ? `₴${Number(row.price).toLocaleString("uk-UA")}` : "—";
               return (
                 <tr key={row.id} className="bg-neutral-900/40 hover:bg-neutral-900">
                   <td className="px-3 py-2 align-top max-w-[520px]">
@@ -241,10 +358,10 @@ export default async function AnalysisPage() {
                       {row.url}
                     </a>
                   </td>
-                  <td className="px-3 py-2 align-top max-w-[340px]" title={displayName}>
+                  <td className="px-3 py-2 align-top max-w-[420px]" title={displayName}>
                     <div className="truncate">{displayName}</div>
                   </td>
-                  <td className="px-3 py-2 align-top">{row.price ?? "—"}</td>
+                  <td className="px-3 py-2 align-top tabular-nums">{priceText}</td>
                   <td className="px-3 py-2 align-top">
                     {row.availability === null ? (
                       "—"
@@ -275,7 +392,7 @@ export default async function AnalysisPage() {
       </div>
 
       <div className="text-xs opacity-60">
-        This page uses <code>jsonExtract</code> to parse all fields (LLM-only).
+        This page uses <code>jsonExtract</code> to parse all fields (LLM-only). Pre-hints are provided to increase accuracy without DOM logic.
       </div>
     </div>
   );

@@ -40,6 +40,7 @@ function decodeHtml(s: string) {
 /**
  * Remove non-visible/low-signal blocks so the LLM focuses on product content.
  * Keep <title> and common meta tags for better naming.
+ * Also annotate old/crossed-out prices to help the LLM ignore them.
  */
 function stripNonVisible(html: string): string {
   return html
@@ -51,7 +52,12 @@ function stripNonVisible(html: string): string {
     .replace(/<noscript[\s\S]*?<\/noscript>/gi, "")
     .replace(/<template[\s\S]*?<\/template>/gi, "")
     .replace(/<iframe[\s\S]*?<\/iframe>/gi, "")
-    .replace(/<svg[\s\S]*?<\/svg>/gi, "");
+    .replace(/<svg[\s\S]*?<\/svg>/gi, "")
+    // Mark classic strikethrough tags content as OLD_PRICE markers (not removed)
+    .replace(/<(?:del|s|strike)[^>]*>([\s\S]*?)<\/(?:del|s|strike)>/gi, "[OLD_PRICE]$1[/OLD_PRICE]")
+    // Mark common class names implying old/compare price
+    .replace(/<([a-z0-9]+)([^>]*class=["'][^"']*(?:old|regular|compare|rrp)[^"']*["'][^>]*)>([\s\S]{0,200})<\/\1>/gi,
+      (_m, tag, attrs, inner) => `<${tag}${attrs}>[OLD_PRICE]${inner}[/OLD_PRICE]</${tag}>`);
 }
 
 /** Extract lightweight hints (still LLM-only final decision). */
@@ -93,12 +99,31 @@ function extractHints(html: string) {
   // Tiny JSON-LD peek (do NOT parse deeply; still LLM decides)
   const jsonLd = html.match(/<script[^>]*application\/(ld\+json)[^>]*>([\s\S]{0,5000})<\/script>/i)?.[2];
 
+  // Capture context around buy buttons to bias towards the active price block
+  const buyTokens = [
+    "додати в кошик",
+    "купити",
+    "add to cart",
+    "buy now",
+  ];
+  let buyCtx: string | null = null;
+  for (const t of buyTokens) {
+    const i = lower.indexOf(t);
+    if (i !== -1) {
+      const start = Math.max(0, i - 600);
+      const end = Math.min(html.length, i + 600);
+      buyCtx = html.slice(start, end).replace(/\s+/g, " ");
+      break;
+    }
+  }
+
   const lines = [
     titleMatch ? `title: ${decodeHtml(titleMatch[1]).trim()}` : null,
     ogTitle ? `og:title: ${decodeHtml(ogTitle[1]).trim()}` : null,
     priceTokens.length ? `priceHints: ${priceTokens.join(" | ")}` : null,
     availabilityCues.length ? `availabilityHints: ${availabilityCues.join(" | ")}` : null,
     jsonLd ? `jsonld: ${jsonLd.slice(0, 1200)}` : null,
+    buyCtx ? `buyBlock: ${buyCtx.slice(0, 1200)}` : null,
   ]
     .filter(Boolean)
     .join("\n");
@@ -109,9 +134,10 @@ function extractHints(html: string) {
 // ---------------- LLM-only extract ----------------
 async function llmExtractAll(
   html: string,
-  url?: string
+  url?: string,
+  hinted?: string
 ): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
-  const hints = extractHints(html);
+  const hints = hinted ?? extractHints(html);
 
   const schema = {
     type: "object",
@@ -162,10 +188,19 @@ async function llmExtractAll(
   }>({ system, user, schema, temperature: 0 });
 
   // Post‑sanity: clamp absurd prices, coerce
-  const normPrice =
+  let normPrice =
     typeof out?.price === "number" && isFinite(out.price) && out.price > 0 && out.price < 500000
       ? Math.round(out.price)
       : null;
+  // Extra guard: if hints contain [OLD_PRICE] near the only number, prefer null
+  if (normPrice != null && /\[OLD_PRICE\][^\[]*?[0-9]/i.test(html)) {
+    // If we marked old price sections and model still returned that number, null it out
+    normPrice = normPrice; // keep unless only old markers exist; quick heuristic below
+    const withoutOld = html.replace(/\[OLD_PRICE\][\s\S]*?\[\/OLD_PRICE\]/gi, "");
+    if (!/[0-9][0-9 .,]*?(?:₴|грн|uah)/i.test(withoutOld)) {
+      normPrice = null;
+    }
+  }
 
   return {
     name: out?.name ?? null,
@@ -192,11 +227,12 @@ async function fetchAndParse(
     });
     if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
     const rawHtml = await r.text();
+    const rawHints = extractHints(rawHtml); // preserve JSON-LD and buy-block context
     const cleaned = stripNonVisible(rawHtml);
     const html = decodeHtml(cleaned);
 
     // First pass
-    let parsed = await llmExtractAll(html, url);
+    let parsed = await llmExtractAll(html, url, rawHints);
 
     // Retry once with stricter directive if price missing; occasionally helps tricky pages
     if (parsed.price == null || parsed.name == null) {
@@ -204,7 +240,7 @@ async function fetchAndParse(
         "ВИЗНАЧ ЦІНУ в UAH біля кнопок купівлі або блоку ціни.",
         "ІГНОРУЙ старі/перекреслені/акційні ціни, обери активну.",
       ].join(" ");
-      parsed = await llmExtractAll(`${focus}\n\n${html}`, url);
+      parsed = await llmExtractAll(`${focus}\n\n${html}`, url, rawHints);
     }
 
     return parsed;

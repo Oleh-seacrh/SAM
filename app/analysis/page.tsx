@@ -35,7 +35,6 @@ function decodeHtml(s: string) {
 
 function stripNonVisible(html: string): string {
   return html
-    .replace(/<script[\s\S]*?<\/script>/gi, "")
     .replace(/<style[\s\S]*?<\/style>/gi, "")
     .replace(/<!--[\s\S]*?-->/g, "");
 }
@@ -65,7 +64,7 @@ async function llmExtractAll(
     "NAME: product title, not brand or navigation.",
     url ? `URL: ${url}` : "",
     "HTML:",
-    html.slice(0, 18000),
+    html.slice(0, 80000),
   ]
     .filter(Boolean)
     .join("\n");
@@ -88,7 +87,14 @@ async function llmExtractAll(
 async function fetchAndParse(
   url: string
 ): Promise<{ name: string | null; price: number | null; availability: boolean | null }> {
-  const r = await fetch(url, { headers: { "User-Agent": "SAM-ProductMonitor/1.0" }, cache: "no-store" });
+  const r = await fetch(url, {
+    headers: {
+      "User-Agent": "SAM-ProductMonitor/1.0",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "uk-UA,uk;q=0.9,en-US;q=0.8,en;q=0.7",
+    },
+    cache: "no-store",
+  });
   if (!r.ok) throw new Error(`Fetch failed ${r.status}`);
   const rawHtml = await r.text();
   const html = decodeHtml(stripNonVisible(rawHtml));

@@ -79,11 +79,25 @@ export function ProspectTasksView() {
     setLoading(true);
     setError(null);
     try {
+      console.log("[ProspectTasksView] Fetching /api/prospects/board...");
       const r = await fetch("/api/prospects/board", { cache: "no-store" });
+      console.log("[ProspectTasksView] Response status:", r.status);
       const j: ProspectBoardPayload = await r.json();
-      if (!r.ok) throw new Error((j as any)?.error || "Failed to load");
+      console.log("[ProspectTasksView] Response data:", j);
+      
+      if (!r.ok) {
+        console.error("[ProspectTasksView] Error response:", j);
+        throw new Error((j as any)?.error || "Failed to load");
+      }
+      
+      console.log("[ProspectTasksView] Board loaded:", {
+        id: j.board.id,
+        columnsCount: j.board.columns?.length,
+        tasksCount: j.board.tasks?.length
+      });
       setBoard(j.board);
     } catch (e: any) {
+      console.error("[ProspectTasksView] Load error:", e);
       setError(e.message || "Failed");
     } finally {
       setLoading(false);
@@ -138,13 +152,32 @@ export function ProspectTasksView() {
 
   async function onDrop(e: React.DragEvent, col: ProspectColumn) {
     e.preventDefault();
-    if (!dragId) return;
+    if (!dragId) {
+      console.log("[onDrop] No dragId, skipping");
+      return;
+    }
     
-    await fetch(`/api/prospects/tasks/${dragId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ moveToColumnKey: col.key }),
-    });
+    console.log("[onDrop] Dropping task", dragId, "to column", col.key, "columnId", col.id);
+    
+    try {
+      const response = await fetch(`/api/prospects/tasks/${dragId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ moveToColumnKey: col.key }),
+      });
+      
+      console.log("[onDrop] Response status:", response.status);
+      
+      if (!response.ok) {
+        const error = await response.json();
+        console.error("[onDrop] Error:", error);
+      } else {
+        console.log("[onDrop] Success!");
+      }
+    } catch (error) {
+      console.error("[onDrop] Exception:", error);
+    }
+    
     setDragId(null);
     await load();
   }

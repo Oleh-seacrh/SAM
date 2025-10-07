@@ -11,6 +11,8 @@ export async function GET() {
   const sql = getSql();
   const tenantId = await getTenantIdFromSession();
 
+  console.log("[GET /api/prospects/board] tenantId:", tenantId);
+
   if (!tenantId) {
     return Response.json({ error: "No tenant" }, { status: 401 });
   }
@@ -24,14 +26,18 @@ export async function GET() {
       ORDER BY id ASC
       LIMIT 1;
     `;
+    
+    console.log("[GET /api/prospects/board] Found boards:", boards.length);
 
     if (!boards.length) {
+      console.log("[GET /api/prospects/board] Creating new board for tenant:", tenantId);
       const created = await sql`
         INSERT INTO prospect_boards(tenant_id, name)
         VALUES (${tenantId}, 'Prospects')
         RETURNING id, name;
       `;
       const boardId = created[0].id;
+      console.log("[GET /api/prospects/board] Created board:", boardId);
 
       // Create default columns for prospect workflow
       await sql`
@@ -44,11 +50,13 @@ export async function GET() {
         (${boardId}, 'won',           'Won',           6),
         (${boardId}, 'lost',          'Lost',          7);
       `;
+      console.log("[GET /api/prospects/board] Created 7 columns");
 
       boards = created;
     }
 
     const boardId = boards[0].id;
+    console.log("[GET /api/prospects/board] Using boardId:", boardId);
 
     // 2) Get columns
     const columns = await sql`
@@ -62,6 +70,8 @@ export async function GET() {
       WHERE board_id = ${boardId}
       ORDER BY position;
     `;
+    
+    console.log("[GET /api/prospects/board] Found columns:", columns.length);
 
     // 3) Get tasks with ISO date formatting
     const tasks = await sql`
@@ -133,12 +143,21 @@ export async function GET() {
         AND archived = false
       ORDER BY position, created_at;
     `;
+    
+    console.log("[GET /api/prospects/board] Found tasks:", tasks.length);
+    console.log("[GET /api/prospects/board] Returning board:", { 
+      id: boardId, 
+      name: boards[0].name, 
+      columnsCount: columns.length, 
+      tasksCount: tasks.length 
+    });
 
     return Response.json({
       board: { id: boardId, name: boards[0].name, columns, tasks },
     });
   } catch (e: any) {
     console.error("GET /api/prospects/board failed:", e);
+    console.error("Stack:", e?.stack);
     return Response.json(
       { error: e?.detail || e?.message || String(e) },
       { status: 500 }

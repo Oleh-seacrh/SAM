@@ -65,12 +65,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   const sql = getSql();
   const tenantId = await getTenantIdFromSession();
 
+  console.log("[PATCH /api/prospects/tasks/[id]] taskId:", id, "tenantId:", tenantId);
+
   if (!tenantId) {
     return NextResponse.json({ error: "No tenant" }, { status: 401 });
   }
 
   try {
     const payload = await req.json();
+    console.log("[PATCH /api/prospects/tasks/[id]] payload:", payload);
     const { moveToColumnKey, owner, priority, dueAt, progress, status } = payload;
 
     // Verify task belongs to tenant
@@ -86,16 +89,21 @@ export async function PATCH(req: NextRequest, { params }: Params) {
 
     // 1) Move to different column
     if (moveToColumnKey) {
+      console.log("[PATCH] Moving to column:", moveToColumnKey);
       const columns = await sql`
         SELECT id FROM prospect_columns WHERE key = ${moveToColumnKey} LIMIT 1;
       `;
+      
+      console.log("[PATCH] Found columns:", columns.length);
 
       if (!columns.length) {
+        console.error("[PATCH] Column not found:", moveToColumnKey);
         return NextResponse.json({ error: "Column not found" }, { status: 400 });
       }
 
       const colId = columns[0].id;
       const newStatus = statusByColKey(moveToColumnKey);
+      console.log("[PATCH] Moving to columnId:", colId, "newStatus:", newStatus);
 
       // Update timestamps based on column
       const updates: Record<string, any> = {
@@ -115,11 +123,15 @@ export async function PATCH(req: NextRequest, { params }: Params) {
         updates.lost_at = sql`NOW()`;
       }
 
+      console.log("[PATCH] Updating with:", updates);
+      
       await sql`
         UPDATE prospect_tasks
         SET ${sql(updates)}
         WHERE id = ${id};
       `;
+      
+      console.log("[PATCH] Task updated successfully");
     }
 
     // 2) Update individual fields

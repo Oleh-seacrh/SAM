@@ -17,14 +17,14 @@ const items = [
 export function Sidebar() {
   const pathname = usePathname();
   return (
-    <aside className="w-60 border-r border-white/10 bg-[var(--card)]">
+    <aside className="w-60 border-r border-white/10 bg-[var(--card)] flex flex-col h-screen">
       {/* шапка сайдбару з кнопкою перекладу праворуч */}
-      <div className="h-14 flex items-center justify-between px-4">
+      <div className="h-14 flex items-center justify-between px-4 flex-shrink-0 border-b border-white/10">
         <span className="text-lg font-semibold">SAM</span>
         <TranslateButton />
       </div>
 
-      <nav className="px-2 pb-4 space-y-1">
+      <nav className="px-2 py-4 space-y-1 flex-1 overflow-y-auto">
         {items.map((it) => {
           const active = pathname?.startsWith(it.href);
           return (

@@ -73,6 +73,7 @@ export function ProspectTasksView() {
   const [dragId, setDragId] = useState<number | null>(null);
   const [selectedTask, setSelectedTask] = useState<ProspectTask | null>(null);
   const [open, setOpen] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -111,6 +112,7 @@ export function ProspectTasksView() {
 
   function onDragStart(e: React.DragEvent, taskId: number) {
     setDragId(taskId);
+    setIsDragging(true);
     e.dataTransfer.setData("text/plain", String(taskId));
     e.dataTransfer.effectAllowed = "move";
     // Add visual feedback
@@ -125,6 +127,8 @@ export function ProspectTasksView() {
       e.currentTarget.style.opacity = "1";
     }
     setDragId(null);
+    // Delay resetting isDragging to prevent onClick from firing
+    setTimeout(() => setIsDragging(false), 100);
   }
 
   function onDragOver(e: React.DragEvent) {
@@ -146,6 +150,8 @@ export function ProspectTasksView() {
   }
 
   function openTaskModal(task: ProspectTask) {
+    // Don't open modal if we're dragging
+    if (isDragging) return;
     setSelectedTask(task);
     setOpen(true);
   }
@@ -194,7 +200,7 @@ export function ProspectTasksView() {
                     )}
                     
                     <div className="text-xs text-blue-400">
-                      {task.homepage?.replace(/^https?:\/\/(www\.)?/, "")}
+                      {task.homepage ? task.homepage.replace(/^https?:\/\/(www\.)?/, "") : ""}
                     </div>
 
                     {/* Score, Type, Country */}
@@ -210,7 +216,7 @@ export function ProspectTasksView() {
                       {task.countryIso2 && (
                         <CountryPill
                           countryISO2={task.countryIso2}
-                          countryName={task.countryName}
+                          countryName={task.countryName || null}
                           confidence={task.countryConfidence as any}
                         />
                       )}
@@ -244,7 +250,7 @@ export function ProspectTasksView() {
                     {task.tags && task.tags.length > 0 && (
                       <div className="flex gap-1 flex-wrap">
                         {task.tags.map((tag) => (
-                          <TagBadge key={tag} label={tag} />
+                          <TagBadge key={tag} tag={tag} />
                         ))}
                       </div>
                     )}
@@ -257,8 +263,10 @@ export function ProspectTasksView() {
       )}
 
       {/* Task Detail Modal */}
-      <Modal open={open} onClose={() => setOpen(false)} title={selectedTask?.title || "Prospect Details"}>
+      <Modal open={open} onClose={() => setOpen(false)}>
         {selectedTask && (
+          <div>
+            <h2 className="text-xl font-semibold mb-4">{selectedTask.title}</h2>
           <div className="space-y-4">
             <div className="space-y-2">
               <div>
@@ -340,6 +348,7 @@ export function ProspectTasksView() {
                 Close
               </button>
             </div>
+          </div>
           </div>
         )}
       </Modal>

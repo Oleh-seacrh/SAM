@@ -1,7 +1,8 @@
-// lib/crawl/parsePage.ts
+﻿// lib/crawl/parsePage.ts
 // Parse page content to extract contacts, brands, and country
 
 import { detectCountry, CountryDetection } from "../country";
+import { detectCountryLLM } from "../llmCountry";
 
 export interface PageData {
   url: string;
@@ -71,7 +72,7 @@ function extractTextContent(html: string): string {
 /**
  * Parse a page to extract contacts, country, and text
  */
-export function parsePage(page: PageData): ParsedPage {
+export async function parsePage(page: PageData): Promise<ParsedPage> {
   const { url, html } = page;
   
   // Extract contacts
@@ -83,11 +84,35 @@ export function parsePage(page: PageData): ParsedPage {
   
   // Detect country from all available signals
   const domain = new URL(url).hostname;
-  const country = detectCountry({
-    text: textContent,
-    phones,
-    domain,
-  });
+
+  // Try LLM first (most accurate, context-aware)
+  let country: CountryDetection | null = null;
+  try {
+    const llmResult = await detectCountryLLM({
+      text: textContent,
+      phones,
+      domain,
+    });
+    if (llmResult) {
+      country = {
+        iso2: llmResult.iso2!,
+        confidence: llmResult.confidence,
+        confidenceScore: llmResult.confidenceScore,
+        source: "WORD", // LLM is conceptually "WORD" (text-based inference)
+      };
+    }
+  } catch (e) {
+    console.warn("LLM country detection failed, falling back to heuristic:", e);
+  }
+
+  // Fallback to heuristic if LLM fails or returns null
+  if (!country) {
+    country = detectCountry({
+      text: textContent,
+      phones,
+      domain,
+    });
+  }
   
   return {
     url,

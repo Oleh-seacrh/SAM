@@ -154,7 +154,7 @@ async function crawlDomain(
   
   // Parse all crawled pages
   for (const page of crawledPages) {
-    const parsed = parsePage(page);
+    const parsed = await parsePage(page);
     
     // Collect contacts
     parsed.contacts.emails.forEach(e => allEmails.add(e));

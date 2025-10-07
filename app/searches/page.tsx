@@ -146,6 +146,35 @@ export default function SearchesPage() {
   const [newName, setNewName] = useState("");
   const [tagsText, setTagsText] = useState("");
 
+  /* ---------------- Restore from sessionStorage on mount ---------------- */
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem("searches:data");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setData(parsed.data);
+        setScores(parsed.scores || {});
+        setBrandMatches(parsed.brandMatches || {});
+      }
+    } catch (e) {
+      console.warn("Failed to restore search state:", e);
+    }
+  }, []);
+
+  /* ---------------- Persist to sessionStorage when data/scores/brandMatches change ---------------- */
+  useEffect(() => {
+    if (data) {
+      try {
+        sessionStorage.setItem(
+          "searches:data",
+          JSON.stringify({ data, scores, brandMatches })
+        );
+      } catch (e) {
+        console.warn("Failed to save search state:", e);
+      }
+    }
+  }, [data, scores, brandMatches]);
+
   /* ---------------- Effects ---------------- */
   useEffect(() => {
     if (!settings) return;

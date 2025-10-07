@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { BrandBadge } from "@/components/search/BrandBadge";
 import { CountryPill } from "@/components/search/CountryPill";
@@ -81,6 +81,30 @@ export function ResultCard({
 
   const homepage = canonicalHomepage(item.homepage ?? item.link);
   const domain = getDomain(homepage);
+
+  /* ---------------- Restore Deep Analysis from sessionStorage on mount ---------------- */
+  useEffect(() => {
+    try {
+      const saved = sessionStorage.getItem(`deepAnalysis:${domain}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        setDeepResult(parsed);
+      }
+    } catch (e) {
+      console.warn("Failed to restore deep analysis:", e);
+    }
+  }, [domain]);
+
+  /* ---------------- Persist Deep Analysis to sessionStorage when it changes ---------------- */
+  useEffect(() => {
+    if (deepResult) {
+      try {
+        sessionStorage.setItem(`deepAnalysis:${domain}`, JSON.stringify(deepResult));
+      } catch (e) {
+        console.warn("Failed to save deep analysis:", e);
+      }
+    }
+  }, [deepResult, domain]);
 
   // Merge brands: Quick (score) + Deep + brandMatches
   const quickBrands = score?.detectedBrands || [];

@@ -121,7 +121,7 @@ export default function SearchesPage() {
   const { add: addCRM, existsDomain } = useCRM();
   const { add: addSession } = useSessions();
   const { settings, setLastSearch, setLLM, setAutoRun } = useSettings();
-  const { prompts, add: addPrompt, remove: removePrompt, lastUsedId, setLastUsedId } =
+  const { prompts, add: addPrompt, remove: removePrompt, lastUsedId, setLastUsedId, loading: promptsLoading } =
     usePrompts();
 
   // LLM controls
@@ -468,8 +468,9 @@ export default function SearchesPage() {
               className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               value={lastUsedId ?? ""}
               onChange={e => setLastUsedId(e.target.value || null)}
+              disabled={promptsLoading}
             >
-              <option value="">— Select —</option>
+              <option value="">{promptsLoading ? "Loading..." : "— Select —"}</option>
               {prompts.map(p => (
                 <option key={p.id} value={p.id}>
                   {p.name}

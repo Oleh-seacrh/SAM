@@ -1,10 +1,9 @@
 // app/tasks/page.tsx
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { Modal } from "@/components/ui/Modal";
-import { TagBadge } from "@/components/ui/TagBadge";
-import { ProspectTasksView } from "@/components/tasks/ProspectTasksView";
+import { useState } from "react";
+import { GeneralTasksBoard } from "@/components/tasks/GeneralTasksBoard";
+import { ProspectTasksBoard } from "@/components/tasks/ProspectTasksBoard";
 
 // -------------------- types --------------------
 type Column = {
@@ -133,7 +132,6 @@ function normalizeTask(raw: any): Task {
 
 // -------------------- page --------------------
 export default function TasksPage() {
-  const [activeTab, setActiveTab] = useState<"general" | "prospects">("general");
   const [loading, setLoading] = useState(false);
   const [board, setBoard] = useState<{ id: number; name: string; columns: Column[]; tasks: Task[] } | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -295,40 +293,9 @@ export default function TasksPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">Tasks</h1>
-        
-        {/* Tabs */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => setActiveTab("general")}
-            className={`px-4 py-2 rounded-lg transition ${
-              activeTab === "general"
-                ? "bg-white/10 border border-white/20"
-                : "bg-white/5 border border-white/10 hover:bg-white/10"
-            }`}
-          >
-            General
-          </button>
-          <button
-            onClick={() => setActiveTab("prospects")}
-            className={`px-4 py-2 rounded-lg transition ${
-              activeTab === "prospects"
-                ? "bg-white/10 border border-white/20"
-                : "bg-white/5 border border-white/10 hover:bg-white/10"
-            }`}
-          >
-            Prospects
-          </button>
-        </div>
-      </div>
+      <h1 className="text-2xl font-semibold">Tasks</h1>
 
       {error && <div className="rounded-lg border border-rose-400/40 bg-rose-500/10 p-3 text-sm">{error}</div>}
-      
-      {activeTab === "prospects" ? (
-        <ProspectTasksView />
-      ) : (
-        <>
 
       {/* create */}
       <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
@@ -577,8 +544,6 @@ export default function TasksPage() {
           </div>
         ) : <div className="text-sm">Loading…</div>}
       </Modal>
-      </>
-      )}
     </div>
   );
 }

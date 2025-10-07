@@ -61,6 +61,7 @@ export function ResultCard({
   const [deepLoading, setDeepLoading] = useState(false);
   const [deepResult, setDeepResult] = useState<DeepResult | null>(null);
   const [deepError, setDeepError] = useState<string | null>(null);
+  const [addingToTasks, setAddingToTasks] = useState(false);
 
   const canonicalHomepage = (url: string) => {
     try {
@@ -170,6 +171,50 @@ export function ResultCard({
     }
   };
 
+  const handleAddToTasks = async () => {
+    setAddingToTasks(true);
+    try {
+      const r = await fetch("/api/prospects/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          domain,
+          homepage,
+          companyName: item.title,
+          title: `Outreach: ${item.title}`,
+          snippet: item.snippet,
+          scoreLabel: score?.label,
+          scoreConfidence: score?.confidence,
+          scoreReason: score?.reasons,
+          companyType: score?.companyType,
+          countryIso2: displayCountry?.iso2,
+          countryName: displayCountry?.name,
+          countryConfidence: displayCountry?.confidence,
+          emails: deepResult?.contacts?.emails || [],
+          phones: deepResult?.contacts?.phones || [],
+          brands: [...quickBrands, ...deepBrands, ...brandMatches],
+          pagesAnalyzed: deepResult?.pagesAnalyzed || 0,
+          deepAnalyzedAt: deepResult ? new Date().toISOString() : null,
+          columnKey: "to_contact",
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok) {
+        if (r.status === 409) {
+          alert("This prospect already exists in Tasks");
+        } else {
+          throw new Error(data.error || "Failed to add to tasks");
+        }
+      } else {
+        alert("Added to Prospect Tasks!");
+      }
+    } catch (e: any) {
+      alert(e.message || "Failed to add to tasks");
+    } finally {
+      setAddingToTasks(false);
+    }
+  };
+
   return (
     <li className="rounded-xl bg-[var(--card)] p-4 border border-white/10">
       <div className="flex items-start justify-between gap-4">
@@ -214,6 +259,13 @@ export function ResultCard({
             className="rounded-md text-sm px-3 py-1.5 border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50"
           >
             {deepLoading ? "Analyzing…" : deepResult ? "✓ Deep Analyzed" : "🔍 Deep Analyze"}
+          </button>
+          <button
+            onClick={handleAddToTasks}
+            disabled={addingToTasks}
+            className="rounded-md text-sm px-3 py-1.5 border border-orange-500/40 bg-orange-500/10 hover:bg-orange-500/20 disabled:opacity-50 whitespace-nowrap"
+          >
+            {addingToTasks ? "Adding..." : "+ Tasks"}
           </button>
           {inCRM ? (
             <span className="text-xs rounded-md px-2 py-1 border border-emerald-500/40 bg-emerald-500/10">

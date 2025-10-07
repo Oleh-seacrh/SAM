@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/Badge";
 import { BrandBadge } from "@/components/search/BrandBadge";
 import { CountryPill } from "@/components/search/CountryPill";
 import { TypePill } from "@/components/search/TypePill";
+import { useToast } from "@/components/ui/Toast";
 
 /* ==================================================
  * Types
@@ -62,6 +63,7 @@ export function ResultCard({
   const [deepResult, setDeepResult] = useState<DeepResult | null>(null);
   const [deepError, setDeepError] = useState<string | null>(null);
   const [addingToTasks, setAddingToTasks] = useState(false);
+  const { showToast, ToastContainer } = useToast();
 
   const canonicalHomepage = (url: string) => {
     try {
@@ -201,15 +203,15 @@ export function ResultCard({
       const data = await r.json();
       if (!r.ok) {
         if (r.status === 409) {
-          alert("This prospect already exists in Tasks");
+          showToast("Already in Tasks", "info");
         } else {
           throw new Error(data.error || "Failed to add to tasks");
         }
       } else {
-        alert("Added to Prospect Tasks!");
+        showToast("Added to Tasks", "success");
       }
     } catch (e: any) {
-      alert(e.message || "Failed to add to tasks");
+      showToast(e.message || "Failed to add", "error");
     } finally {
       setAddingToTasks(false);
     }
@@ -387,6 +389,8 @@ export function ResultCard({
           </div>
         </div>
       )}
+      
+      <ToastContainer />
     </li>
   );
 }

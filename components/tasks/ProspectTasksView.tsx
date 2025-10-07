@@ -113,6 +113,18 @@ export function ProspectTasksView() {
     setDragId(taskId);
     e.dataTransfer.setData("text/plain", String(taskId));
     e.dataTransfer.effectAllowed = "move";
+    // Add visual feedback
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = "0.5";
+    }
+  }
+
+  function onDragEnd(e: React.DragEvent) {
+    // Reset visual feedback
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = "1";
+    }
+    setDragId(null);
   }
 
   function onDragOver(e: React.DragEvent) {
@@ -120,8 +132,10 @@ export function ProspectTasksView() {
     e.dataTransfer.dropEffect = "move";
   }
 
-  async function onDrop(col: ProspectColumn) {
+  async function onDrop(e: React.DragEvent, col: ProspectColumn) {
+    e.preventDefault();
     if (!dragId) return;
+    
     await fetch(`/api/prospects/tasks/${dragId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -156,7 +170,7 @@ export function ProspectTasksView() {
               key={col.id}
               className="flex-shrink-0 w-80 rounded-xl bg-[var(--card)] border border-white/10 p-4"
               onDragOver={onDragOver}
-              onDrop={() => onDrop(col)}
+              onDrop={(e) => onDrop(e, col)}
             >
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-semibold">{col.title}</h3>
@@ -169,8 +183,9 @@ export function ProspectTasksView() {
                     key={task.id}
                     draggable
                     onDragStart={(e) => onDragStart(e, task.id)}
+                    onDragEnd={onDragEnd}
                     onClick={() => openTaskModal(task)}
-                    className="cursor-pointer rounded-lg bg-black/20 border border-white/10 p-3 hover:bg-black/30 transition space-y-2"
+                    className="cursor-move rounded-lg bg-black/20 border border-white/10 p-3 hover:bg-black/30 transition space-y-2"
                   >
                     <div className="font-medium text-sm">{task.title}</div>
                     

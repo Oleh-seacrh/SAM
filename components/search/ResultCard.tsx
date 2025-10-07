@@ -79,8 +79,19 @@ export function ResultCard({
     }
   };
 
+  const getDisplayUrl = (url: string) => {
+    try {
+      const hostname = new URL(url).hostname;
+      // Always add www. if not present
+      return hostname.startsWith("www.") ? hostname : `www.${hostname}`;
+    } catch {
+      return url;
+    }
+  };
+
   const homepage = canonicalHomepage(item.homepage ?? item.link);
   const domain = getDomain(homepage);
+  const displayUrl = getDisplayUrl(homepage);
 
   /* ---------------- Restore Deep Analysis from sessionStorage on mount ---------------- */
   useEffect(() => {
@@ -172,14 +183,13 @@ export function ResultCard({
             {item.title}
           </a>
           <div className="text-xs text-[var(--muted)] mt-1">
-            {item.displayLink} •{" "}
             <a
               href={homepage}
               target="_blank"
               rel="noreferrer"
               className="hover:underline"
             >
-              {domain}
+              {displayUrl}
             </a>
           </div>
         </div>

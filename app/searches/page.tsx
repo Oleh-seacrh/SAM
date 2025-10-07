@@ -10,6 +10,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Badge } from "@/components/ui/Badge";
 import { FindClientButton } from "@/components/search/FindClientButton";
 import { ResultCard } from "@/components/search/ResultCard";
+import Spinner from "@/components/ui/Spinner";
 
 /* ==================================================
  * Config / Debug
@@ -420,8 +421,9 @@ export default function SearchesPage() {
           <button
             onClick={analyze}
             disabled={!data?.items?.length || scoring}
-            className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50 transition"
+            className="flex items-center gap-2 rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50 transition"
           >
+            {scoring && <Spinner size={16} />}
             {scoring ? "Analyzing…" : "Analyze current results"}
           </button>
           <FindClientButton
@@ -456,7 +458,7 @@ export default function SearchesPage() {
                 ))}
               </select>
               <button
-                className="rounded-lg px-4 py-2 bg-blue-600 hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="rounded-lg px-4 py-2 border border-white/10 bg-white/5 hover:bg-white/10 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={() => {
                   const p = prompts.find(x => x.id === lastUsedId);
                   if (!p) return;
@@ -467,7 +469,7 @@ export default function SearchesPage() {
                 Load
               </button>
               <button
-                className="rounded-lg px-4 py-2 bg-red-600/80 hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                className="rounded-lg px-4 py-2 border border-white/10 bg-white/5 hover:bg-white/10 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 onClick={() => lastUsedId && removePrompt(lastUsedId)}
                 disabled={!lastUsedId}
               >
@@ -484,7 +486,7 @@ export default function SearchesPage() {
               onChange={e => setNewName(e.target.value)}
             />
             <button
-              className="rounded-lg px-4 py-2 bg-green-600 hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              className="rounded-lg px-4 py-2 border border-white/10 bg-white/5 hover:bg-white/10 transition disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={() => {
                 if (!newName.trim()) return;
                 addPrompt({

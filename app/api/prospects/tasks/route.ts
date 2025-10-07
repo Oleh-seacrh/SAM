@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { NextRequest, NextResponse } from "next/server";
-import { getSql } from "@/lib/db";
+import { getSql, toPgTextArray } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
 
 /* -------------------- POST: Create prospect task from search result -------------------- */
@@ -153,14 +153,14 @@ export async function POST(req: NextRequest) {
         ${countryIso2 || null},
         ${countryName || null},
         ${countryConfidence || null},
-        ${sql.array(emails)},
-        ${sql.array(phones)},
-        ${sql.array(brands)},
+        ${toPgTextArray(emails)}::text[],
+        ${toPgTextArray(phones)}::text[],
+        ${toPgTextArray(brands)}::text[],
         ${pagesAnalyzed || 0},
         ${deepAnalyzedAt || null},
         ${priority},
         'new',
-        ${sql.array(tags)},
+        ${toPgTextArray(tags)}::text[],
         ${owner || null},
         ${dueAt || null}
       )

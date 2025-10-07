@@ -39,12 +39,15 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const tenantId = await getTenantIdFromSession();
+    console.log("[POST /api/prompts] tenantId:", tenantId);
+    
     if (!tenantId) {
       return NextResponse.json({ error: "No tenant" }, { status: 401 });
     }
 
     const body = await req.json();
     const { name, text, provider, model } = body;
+    console.log("[POST /api/prompts] body:", { name, text: text?.slice(0, 50), provider, model });
 
     if (!name?.trim() || !text?.trim() || !provider) {
       return NextResponse.json(
@@ -55,15 +58,18 @@ export async function POST(req: NextRequest) {
 
     const sql = getSql();
     const id = crypto.randomUUID();
+    console.log("[POST /api/prompts] Inserting with id:", id);
+    
     const rows = await sql`
       INSERT INTO prompts (id, tenant_id, name, text, provider, model, created_at)
       VALUES (${id}, ${tenantId}, ${name}, ${text}, ${provider}, ${model || null}, NOW())
       RETURNING id, tenant_id, name, text, provider, model, created_at
     `;
 
+    console.log("[POST /api/prompts] Success, inserted:", rows[0]?.id);
     return NextResponse.json({ prompt: rows[0] });
   } catch (e: any) {
-    console.error("/api/prompts POST error:", e?.message);
+    console.error("/api/prompts POST error:", e?.message, e?.stack);
     return NextResponse.json(
       { error: e?.message || "Failed to create prompt" },
       { status: 500 }

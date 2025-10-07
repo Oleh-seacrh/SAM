@@ -60,8 +60,14 @@ export function usePrompts() {
           model: p.model || null,
         }),
       });
-      if (!r.ok) throw new Error("Failed to save prompt");
+      
       const data = await r.json();
+      
+      if (!r.ok) {
+        console.error("API error:", r.status, data);
+        throw new Error(data?.error || `Failed to save prompt (${r.status})`);
+      }
+      
       const newPrompt = data.prompt;
       
       // Update local state

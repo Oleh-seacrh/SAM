@@ -124,10 +124,7 @@ export default function SearchesPage() {
   const { prompts, add: addPrompt, remove: removePrompt, lastUsedId, setLastUsedId, loading: promptsLoading } =
     usePrompts();
 
-  // LLM controls
-  const [provider, setProvider] =
-    useState<"openai" | "anthropic" | "gemini">("openai");
-  const [model, setModel] = useState<string>("");
+  // LLM controls (now from settings)
   const [prompt, setPrompt] = useState<string>(
     "Target: B2B distributors/manufacturers of X-ray film and related medical imaging consumables. Exclude blogs, news, generic marketplaces."
   );
@@ -264,7 +261,12 @@ export default function SearchesPage() {
       const r = await fetch("/api/score", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, model: model || undefined, prompt, items }),
+        body: JSON.stringify({ 
+          provider: settings.llm?.provider || "openai", 
+          model: settings.llm?.model || undefined, 
+          prompt, 
+          items 
+        }),
       });
       const j = await r.json();
       if (!r.ok) throw new Error(j?.error || "Scoring failed");
@@ -403,55 +405,9 @@ export default function SearchesPage() {
       </div>
 
       {/* AI Panel */}
-      <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10 space-y-3">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <label className="text-sm">
-            <span className="mb-1 inline-block">Provider</span>
-            <select
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-              value={provider}
-              onChange={e => setProvider(e.target.value as any)}
-            >
-              <option value="openai">OpenAI</option>
-              <option value="anthropic">Anthropic</option>
-              <option value="gemini">Gemini</option>
-            </select>
-          </label>
-
-          <label className="text-sm">
-            <span className="mb-1 inline-block">Model (optional)</span>
-            <input
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-              placeholder="auto (e.g., gpt-4o-mini, claude-3-haiku, gemini-1.5-flash)"
-              value={model}
-              onChange={e => setModel(e.target.value)}
-            />
-          </label>
-
-          <div className="flex items-end gap-2">
-            <button
-              onClick={analyze}
-              disabled={!data?.items?.length || scoring}
-              className="w-full rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50"
-            >
-              {scoring ? "Analyzing…" : "Analyze current results"}
-            </button>
-            <FindClientButton
-              provider={provider}
-              model={model || undefined}
-              items={(data?.items || []).map(it => ({
-                link: it.link,
-                title: it.title,
-                snippet: it.snippet || "",
-              }))}
-              onResult={byUrl => setBrandMatches(byUrl)}
-              disabled={!data?.items?.length}
-            />
-          </div>
-        </div>
-
+      <div className="rounded-xl bg-[var(--card)] p-4 border border-white/10 space-y-4">
         <label className="text-sm block">
-          <span className="mb-1 inline-block">Prompt</span>
+          <span className="mb-1 inline-block font-medium">Prompt</span>
           <textarea
             className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2 h-28"
             value={prompt}
@@ -460,69 +416,86 @@ export default function SearchesPage() {
           />
         </label>
 
-        {/* Prompt Library */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-          <label className="text-sm">
-            <span className="mb-1 inline-block">Load saved prompt</span>
-            <select
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
-              value={lastUsedId ?? ""}
-              onChange={e => setLastUsedId(e.target.value || null)}
-              disabled={promptsLoading}
-            >
-              <option value="">{promptsLoading ? "Loading..." : "— Select —"}</option>
-              {prompts.map(p => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="flex gap-2">
+          <button
+            onClick={analyze}
+            disabled={!data?.items?.length || scoring}
+            className="rounded-lg px-4 py-2 bg-white/10 hover:bg-white/20 border border-white/10 disabled:opacity-50 transition"
+          >
+            {scoring ? "Analyzing…" : "Analyze current results"}
+          </button>
+          <FindClientButton
+            provider={settings.llm?.provider || "openai"}
+            model={settings.llm?.model || undefined}
+            items={(data?.items || []).map(it => ({
+              link: it.link,
+              title: it.title,
+              snippet: it.snippet || "",
+            }))}
+            onResult={byUrl => setBrandMatches(byUrl)}
+            disabled={!data?.items?.length}
+          />
+        </div>
 
-          <div className="flex items-end gap-2">
-            <button
-              className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
-              onClick={() => {
-                const p = prompts.find(x => x.id === lastUsedId);
-                if (!p) return;
-                setProvider(p.provider);
-                setModel(p.model || "");
-                setPrompt(p.text);
-                setLLM(p.provider, p.model, p.text);
-              }}
-              disabled={!lastUsedId}
-            >
-              Load
-            </button>
-            <button
-              className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
-              onClick={() => lastUsedId && removePrompt(lastUsedId)}
-              disabled={!lastUsedId}
-            >
-              Delete
-            </button>
-          </div>
+        {/* Prompt Library */}
+        <div className="pt-3 border-t border-white/10 space-y-3">
+          <label className="text-sm block">
+            <span className="mb-1 inline-block font-medium">Saved Prompts</span>
+            <div className="flex gap-2">
+              <select
+                className="flex-1 rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+                value={lastUsedId ?? ""}
+                onChange={e => setLastUsedId(e.target.value || null)}
+                disabled={promptsLoading}
+              >
+                <option value="">{promptsLoading ? "Loading..." : "— Select —"}</option>
+                {prompts.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="rounded-lg px-4 py-2 bg-blue-600 hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => {
+                  const p = prompts.find(x => x.id === lastUsedId);
+                  if (!p) return;
+                  setPrompt(p.text);
+                }}
+                disabled={!lastUsedId}
+              >
+                Load
+              </button>
+              <button
+                className="rounded-lg px-4 py-2 bg-red-600/80 hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                onClick={() => lastUsedId && removePrompt(lastUsedId)}
+                disabled={!lastUsedId}
+              >
+                Delete
+              </button>
+            </div>
+          </label>
 
           <div className="flex gap-2">
             <input
-              className="w-full rounded-lg bg-black/20 border border-white/10 px-3 py-2"
+              className="flex-1 rounded-lg bg-black/20 border border-white/10 px-3 py-2"
               placeholder="Name to save current prompt…"
               value={newName}
               onChange={e => setNewName(e.target.value)}
             />
             <button
-              className="rounded-lg px-3 py-2 border border-white/10 hover:bg-white/10"
+              className="rounded-lg px-4 py-2 bg-green-600 hover:bg-green-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={() => {
                 if (!newName.trim()) return;
                 addPrompt({
                   name: newName.trim(),
                   text: prompt,
-                  provider,
-                  model: model || undefined,
+                  provider: settings.llm?.provider || "openai",
+                  model: settings.llm?.model || undefined,
                 });
-                setLLM(provider, model || undefined, prompt);
                 setNewName("");
               }}
+              disabled={!newName.trim()}
             >
               Save
             </button>

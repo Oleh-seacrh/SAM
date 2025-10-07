@@ -279,7 +279,7 @@ export function ResultCard({
                 onClick={onAddToCRM}
                 className="rounded-md text-sm px-3 py-1.5 border border-white/10 hover:bg-white/10"
               >
-                + Add
+                + CRM
               </button>
             )
           )}

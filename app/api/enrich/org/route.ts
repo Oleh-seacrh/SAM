@@ -94,20 +94,64 @@ function extractOG(html: string, prop: string): string | null {
   const m = html.match(re);
   return m ? m[1] : null;
 }
+function validatePhoneCandidate(raw: string): string | null {
+  const cleaned = raw.replace(/[^\d+]/g, "");
+  const digits = cleaned.replace(/\+/g, "");
+  
+  // Must have 7-15 digits
+  if (digits.length < 7 || digits.length > 15) return null;
+  
+  // Reject if all digits are the same
+  if (/^(\d)\1+$/.test(digits)) return null;
+  
+  // Reject dates (8 digits starting with 20)
+  if (digits.length === 8 && /^20\d{6}$/.test(digits)) return null;
+  
+  // Reject years
+  if (digits.length === 4 && /^(19|20)\d{2}$/.test(digits)) return null;
+  
+  const hasPlus = raw.startsWith("+");
+  return hasPlus ? `+${digits}` : digits;
+}
+
 function cleanPhoneRaw(text: string): string[] {
-  const phones = new Set<string>();
+  const phones = new Map<string, number>(); // phone -> priority
   const body = text.replace(/<[^>]+>/g, " ");
-  const re = /\+?\d[\d()\s\-]{6,}\d/g;
-  const matches = body.match(re) || [];
-  for (const m of matches) {
-    const digits = m.replace(/[^\d+]/g, "");
-    const hasPlus = digits.startsWith("+");
-    const only = digits.replace(/\D/g, "");
-    if (only.length >= 7 && only.length <= 17) {
-      phones.add((hasPlus ? "+" : "") + only);
+  
+  // Priority 1: tel: links
+  const telLinks = /href=["']tel:([^"']+)["']/gi;
+  for (const m of body.matchAll(telLinks)) {
+    const validated = validatePhoneCandidate(m[1]);
+    if (validated) phones.set(validated, (phones.get(validated) || 0) + 10);
+  }
+  
+  // Priority 2: Labels (phone, tel, contact, etc.)
+  const labelPattern = /(?:phone|tel|telephone|mobile|fax|contact|тел|телефон|моб)[\s:]{0,5}(\+?\d[\d()\s\-]{6,}\d)/gi;
+  for (const m of body.matchAll(labelPattern)) {
+    const validated = validatePhoneCandidate(m[1]);
+    if (validated) phones.set(validated, (phones.get(validated) || 0) + 8);
+  }
+  
+  // Priority 3: International format
+  const intlPattern = /(?:\+|00)\d{1,3}[\s\-.]?\d{1,4}[\s\-.]?\d{1,4}[\s\-.]?\d{1,9}/g;
+  for (const m of body.matchAll(intlPattern)) {
+    const validated = validatePhoneCandidate(m[0]);
+    if (validated) phones.set(validated, (phones.get(validated) || 0) + 5);
+  }
+  
+  // Priority 4: General pattern (lower priority)
+  const generalPattern = /\+?\d[\d()\s\-]{6,}\d/g;
+  for (const m of body.matchAll(generalPattern)) {
+    const validated = validatePhoneCandidate(m[0]);
+    if (validated && !phones.has(validated)) {
+      phones.set(validated, 2);
     }
   }
-  return Array.from(phones);
+  
+  return Array.from(phones.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([phone]) => phone)
+    .slice(0, 10);
 }
 function extractEmails(html: string): string[] {
   const out = new Set<string>();

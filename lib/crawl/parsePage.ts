@@ -29,30 +29,79 @@ function extractEmails(html: string): string[] {
 }
 
 /**
- * Extract phone numbers from HTML
- * Looks for patterns like +XX, 00XX, or phone: labels
+ * Validate and normalize a phone number candidate
+ */
+function validatePhone(raw: string): string | null {
+  // Extract only digits and leading +
+  const cleaned = raw.replace(/[^\d+]/g, "");
+  const digits = cleaned.replace(/\+/g, "");
+  
+  // Must have 7-15 digits (international standard)
+  if (digits.length < 7 || digits.length > 15) return null;
+  
+  // Reject if all digits are the same (e.g., 111111111)
+  if (/^(\d)\1+$/.test(digits)) return null;
+  
+  // Reject common false positives (dates, years, IDs)
+  if (digits.length === 8 && /^20\d{6}$/.test(digits)) return null; // Dates like 20231215
+  if (digits.length === 4 && /^(19|20)\d{2}$/.test(digits)) return null; // Years
+  
+  // Normalize: keep + if present, otherwise just digits
+  const hasPlus = raw.startsWith("+");
+  return hasPlus ? `+${digits}` : digits;
+}
+
+/**
+ * Extract phone numbers from HTML with improved accuracy
+ * Prioritizes tel: links and context-aware patterns
  */
 function extractPhones(html: string): string[] {
-  const phones: Set<string> = new Set();
+  const phones: Map<string, number> = new Map(); // phone -> priority score
   
-  // Pattern 1: +XX XXX XXX XXXX or +XX-XXX-XXX-XXXX
-  const plusPattern = /\+\d{1,3}[\s\-.]?\d{1,4}[\s\-.]?\d{1,4}[\s\-.]?\d{1,9}/g;
-  const plusMatches = html.match(plusPattern) || [];
-  plusMatches.forEach(p => phones.add(p));
-  
-  // Pattern 2: 00XX XXX XXX XXXX (international prefix)
-  const zeroPattern = /00\d{1,3}[\s\-.]?\d{1,4}[\s\-.]?\d{1,4}[\s\-.]?\d{1,9}/g;
-  const zeroMatches = html.match(zeroPattern) || [];
-  zeroMatches.forEach(p => phones.add(p));
-  
-  // Pattern 3: Phone: label followed by number
-  const labelPattern = /(?:phone|tel|telephone|mobile|fax)[\s:]+(\+?\d[\d\s\-().]{7,20}\d)/gi;
-  const labelMatches = html.matchAll(labelPattern);
-  for (const match of labelMatches) {
-    if (match[1]) phones.add(match[1]);
+  // Priority 1: tel: links (highest confidence)
+  const telLinkPattern = /href=["']tel:([^"']+)["']/gi;
+  for (const match of html.matchAll(telLinkPattern)) {
+    const normalized = validatePhone(match[1]);
+    if (normalized) {
+      phones.set(normalized, (phones.get(normalized) || 0) + 10);
+    }
   }
   
-  return Array.from(phones);
+  // Priority 2: Phone/contact labels with nearby numbers
+  const labelPattern = /(?:phone|tel|telephone|mobile|fax|contact|тел|телефон|моб)[\s:]{0,5}(\+?\d[\d\s\-().]{7,20}\d)/gi;
+  for (const match of html.matchAll(labelPattern)) {
+    const normalized = validatePhone(match[1]);
+    if (normalized) {
+      phones.set(normalized, (phones.get(normalized) || 0) + 8);
+    }
+  }
+  
+  // Priority 3: International format (+XX or 00XX)
+  const intlPattern = /(?:\+|00)\d{1,3}[\s\-.]?\d{1,4}[\s\-.]?\d{1,4}[\s\-.]?\d{1,9}/g;
+  for (const match of html.matchAll(intlPattern)) {
+    const normalized = validatePhone(match[0]);
+    if (normalized) {
+      phones.set(normalized, (phones.get(normalized) || 0) + 5);
+    }
+  }
+  
+  // Priority 4: Parentheses format (e.g., (044) 123-4567)
+  const parenPattern = /\(?\d{2,4}\)?[\s\-.]?\d{2,4}[\s\-.]?\d{2,4}[\s\-.]?\d{2,4}/g;
+  for (const match of html.matchAll(parenPattern)) {
+    const normalized = validatePhone(match[0]);
+    if (normalized) {
+      // Only add if not already found with higher priority
+      if (!phones.has(normalized)) {
+        phones.set(normalized, 2);
+      }
+    }
+  }
+  
+  // Sort by priority (highest first) and return unique phones
+  return Array.from(phones.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([phone]) => phone)
+    .slice(0, 10); // Limit to top 10 to avoid spam
 }
 
 /**

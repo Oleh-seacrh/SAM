@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Spinner } from "@/components/ui/Spinner";
+import Spinner from "@/components/ui/Spinner";
 
 type Contact = {
   name: string;
@@ -264,8 +264,12 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     const value = String(s.value || "").trim();
     const domain = (current.domain || "").toLowerCase();
 
-    if (field === "name" || field === "company.displayName") {
+    if (field === "name") {
       return { key: "name", val: value };
+    }
+    // Ігноруємо company.displayName (дублікат name)
+    if (field === "company.displayName") {
+      return null;
     }
     if (field === "domain") {
       const d = normalizeDomainClient(value);
@@ -734,21 +738,62 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                 {suggestions.length > 0 && (
                   <div className="mt-4 space-y-2">
                     <div className="font-semibold text-sm">Suggestions:</div>
-                    {suggestions.map((s, i) => (
-                      <div key={i} className="flex items-center gap-2 text-sm border border-white/10 rounded-lg p-3 hover:bg-white/5">
-                        <input
-                          type="checkbox"
-                          checked={pick[i] || false}
-                          onChange={e => setPick(p => ({ ...p, [i]: e.target.checked }))}
-                          disabled={!canApplySuggestion(s, form)}
-                        />
-                        <span className="text-[var(--muted)] min-w-[140px]">{s.field}:</span>
-                        <span className="flex-1">{s.value}</span>
-                        {s.confidence != null && (
-                          <span className="text-xs text-[var(--muted)]">{(s.confidence * 100).toFixed(0)}%</span>
-                        )}
-                      </div>
-                    ))}
+                    {suggestions.map((s, i) => {
+                      // Іконки для різних джерел
+                      const getSourceIcon = (source?: string) => {
+                        if (!source) return null;
+                        if (source.includes('alibaba')) return '🏪';
+                        if (source.includes('made-in-china')) return '🏭';
+                        if (source.includes('indiamart')) return '🛒';
+                        if (source.includes('linkedin')) return '💼';
+                        if (source.includes('facebook')) return '📘';
+                        if (source.includes('web')) return '🌐';
+                        if (source.includes('page')) return '📄';
+                        return '📍';
+                      };
+
+                      // Текст джерела
+                      const getSourceText = (source?: string) => {
+                        if (!source) return '';
+                        if (source === 'alibaba-search') return 'Alibaba';
+                        if (source === 'alibaba-page') return 'Alibaba page';
+                        if (source === 'made-in-china-search') return 'Made-in-China';
+                        if (source === 'made-in-china-page') return 'Made-in-China page';
+                        if (source === 'indiamart-search') return 'IndiaMART';
+                        if (source === 'indiamart-page') return 'IndiaMART page';
+                        if (source === 'social-search') return 'Social media';
+                        if (source.includes('web')) return 'Web search';
+                        if (source.includes('page')) return 'Website';
+                        return source;
+                      };
+
+                      return (
+                        <div key={i} className="flex items-start gap-2 text-sm border border-white/10 rounded-lg p-3 hover:bg-white/5">
+                          <input
+                            type="checkbox"
+                            checked={pick[i] || false}
+                            onChange={e => setPick(p => ({ ...p, [i]: e.target.checked }))}
+                            disabled={!canApplySuggestion(s, form)}
+                            className="mt-0.5"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[var(--muted)] min-w-[120px]">{s.field}:</span>
+                              <span className="flex-1 break-all">{s.value}</span>
+                            </div>
+                            {(s as any).source && (
+                              <div className="flex items-center gap-1.5 mt-1 text-xs text-[var(--muted)]">
+                                <span>{getSourceIcon((s as any).source)}</span>
+                                <span>from {getSourceText((s as any).source)}</span>
+                              </div>
+                            )}
+                          </div>
+                          {s.confidence != null && (
+                            <span className="text-xs text-[var(--muted)] shrink-0">{(s.confidence * 100).toFixed(0)}%</span>
+                          )}
+                        </div>
+                      );
+                    })}
                     <button
                       onClick={applySelected}
                       className="px-4 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"

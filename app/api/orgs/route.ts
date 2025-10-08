@@ -160,6 +160,17 @@ export async function POST(req: NextRequest) {
     const general_email   = normEmail(body?.general_email) || emailsArr[0] || null;
     const contact_email   = normEmail(body?.contact_email) || emailsArr[1] || null;
 
+    /* ---------- Перевірка: потрібно хоча б одне поле ---------- */
+    if (!name && !domain && !general_email && !contact_email && !phone) {
+      return new Response(
+        JSON.stringify({
+          error: "VALIDATION_ERROR",
+          detail: "At least one field is required: name, domain, email, or phone",
+        }),
+        { status: 400, headers: { "content-type": "application/json" } }
+      );
+    }
+
     /* ---------- HARD LOCK: domain exact ---------- */
     if (domain) {
       const hit = await sql/*sql*/`

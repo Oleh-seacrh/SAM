@@ -398,10 +398,10 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
 
   return (
     <div className="fixed inset-0 z-[9999]">
-      <div className="absolute inset-0 bg-black/70" onClick={() => onOpenChange(false)} />
+      <div className="absolute inset-0 bg-black/60" onClick={() => onOpenChange(false)} />
       
       <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="relative bg-[var(--card)] border border-white/10 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="relative bg-[var(--card)] border border-white/10 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
           {/* Header */}
           <div className="flex items-center justify-between p-6 border-b border-white/10">
             <h2 className="text-xl font-semibold">{title}</h2>
@@ -409,13 +409,13 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
               <button
                 onClick={onFindInfo}
                 disabled={enriching || loading}
-                className="px-4 py-2 rounded-lg border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/20 disabled:opacity-50 transition text-sm"
+                className="px-4 py-2 rounded-lg border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50 transition text-sm"
               >
                 {enriching ? "Searching..." : "Find info"}
               </button>
               <button
                 onClick={() => onOpenChange(false)}
-                className="px-4 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition"
+                className="px-4 py-2 rounded-lg border border-white/10 hover:bg-white/10 transition"
               >
                 ✕
               </button>
@@ -499,7 +499,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                     form.contacts.length < 3 ? (
                       <button
                         onClick={addContact}
-                        className="px-3 py-1 rounded-lg border border-green-500/40 bg-green-500/10 hover:bg-green-500/20 transition text-sm"
+                        className="px-3 py-1.5 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
                       >
                         + Add Contact
                       </button>
@@ -512,13 +512,13 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                     </Field>
 
                     {form.contacts.map((contact, idx) => (
-                      <div key={idx} className="border border-white/10 rounded-lg p-4 space-y-3">
+                      <div key={idx} className="border border-white/10 rounded-xl p-4 space-y-3 bg-black/20">
                         <div className="flex items-center justify-between mb-2">
                           <h4 className="font-medium text-sm">Contact {idx + 1}</h4>
                           {form.contacts.length > 1 && (
                             <button
                               onClick={() => removeContact(idx)}
-                              className="text-xs text-red-400 hover:text-red-300"
+                              className="text-xs px-2 py-1 rounded border border-white/10 hover:bg-white/10 transition"
                             >
                               Remove
                             </button>
@@ -615,8 +615,8 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
 
                 {/* Enrichment Results */}
                 {enrichReason && (
-                  <div className="mt-3 rounded border border-white/10 p-3 text-sm">
-                    <div className="opacity-80 mb-1">
+                  <div className="mt-3 rounded-xl border border-white/10 p-3 text-sm bg-black/20">
+                    <div className="text-[var(--muted)] mb-1">
                       {enrichReason === "no_domain_input" && "Not enough input to search. Add company name, email or phone."}
                       {enrichReason === "domain_not_resolved" && "We couldn't resolve the company website from the provided data."}
                       {enrichReason === "pages_unreachable" && "Website found, but common pages (/, about, contact) were unreachable."}
@@ -625,9 +625,9 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                     </div>
 
                     {enrichTrace && (
-                      <div className="text-xs opacity-70 space-y-1">
+                      <div className="text-xs text-[var(--muted)] space-y-1">
                         <div>
-                          <span className="opacity-80">Resolve:</span>{" "}
+                          <span>Resolve:</span>{" "}
                           {Array.isArray(enrichTrace.domainResolution) && enrichTrace.domainResolution.length
                             ? enrichTrace.domainResolution.map((s: any, idx: number) =>
                                 `${s.stage}=${s.result}${s.value ? `(${s.value})` : ""}`
@@ -635,10 +635,10 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                             : "none"}
                         </div>
                         <div>
-                          <span className="opacity-80">Pages:</span> {enrichTrace.pages?.length || 0} fetched
+                          <span>Pages:</span> {enrichTrace.pages?.length || 0} fetched
                         </div>
                         <div>
-                          <span className="opacity-80">Extracted:</span>{" "}
+                          <span>Extracted:</span>{" "}
                           emails={enrichTrace.extracted?.emails || 0}, phones={enrichTrace.extracted?.phones || 0},
                           LinkedIn={enrichTrace.extracted?.socials?.linkedin ? "✓" : "✗"},
                           Facebook={enrichTrace.extracted?.socials?.facebook ? "✓" : "✗"},
@@ -653,17 +653,17 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                   <div className="mt-4 space-y-2">
                     <div className="font-semibold text-sm">Suggestions:</div>
                     {suggestions.map((s, i) => (
-                      <div key={i} className="flex items-center gap-2 text-sm border border-white/10 rounded p-2">
+                      <div key={i} className="flex items-center gap-2 text-sm border border-white/10 rounded-lg p-3 hover:bg-white/5">
                         <input
                           type="checkbox"
                           checked={pick[i] || false}
                           onChange={e => setPick(p => ({ ...p, [i]: e.target.checked }))}
                           disabled={!canApplySuggestion(s, form)}
                         />
-                        <span className="opacity-70 min-w-[140px]">{s.field}:</span>
+                        <span className="text-[var(--muted)] min-w-[140px]">{s.field}:</span>
                         <span className="flex-1">{s.value}</span>
                         {s.confidence != null && (
-                          <span className="text-xs opacity-60">conf: {(s.confidence * 100).toFixed(0)}%</span>
+                          <span className="text-xs text-[var(--muted)]">{(s.confidence * 100).toFixed(0)}%</span>
                         )}
                       </div>
                     ))}
@@ -683,14 +683,14 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
           <div className="flex items-center justify-end gap-3 p-6 border-t border-white/10">
             <button
               onClick={() => onOpenChange(false)}
-              className="px-6 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition"
+              className="px-6 py-2 rounded-lg border border-white/10 hover:bg-white/10 transition"
             >
               Cancel
             </button>
             <button
               onClick={onSave}
               disabled={saving}
-              className="px-6 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:opacity-50 transition font-medium"
+              className="px-6 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 disabled:opacity-50 transition"
             >
               {saving ? "Saving..." : "OK"}
             </button>
@@ -703,7 +703,7 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
 
 function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
-    <div className="border border-white/10 rounded-lg p-5">
+    <div className="border border-white/10 rounded-xl p-5">
       <div className="flex items-center justify-between mb-4">
         <h3 className="font-semibold text-base">{title}</h3>
         {action}
@@ -716,7 +716,7 @@ function Section({ title, children, action }: { title: string; children: React.R
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-sm font-medium mb-1.5 opacity-90">{label}</label>
+      <label className="block text-sm mb-1.5 text-[var(--muted)]">{label}</label>
       {children}
     </div>
   );

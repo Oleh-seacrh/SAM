@@ -10,6 +10,11 @@ async function migrate() {
   console.log('🚀 Starting migration...\n');
 
   try {
+    // Make name column nullable
+    console.log('📝 Making name column nullable...');
+    await sql`ALTER TABLE organizations ALTER COLUMN name DROP NOT NULL`;
+    console.log('   ✓ name is now nullable\n');
+
     // Add phone column
     console.log('📝 Adding phone column...');
     await sql`

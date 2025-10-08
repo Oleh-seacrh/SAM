@@ -815,6 +815,7 @@ function NewLeadModal({
         }
       }
 
+      // Успішно створено
       onCreated();
       onClose();
     } finally {
@@ -1332,6 +1333,8 @@ export default function ClientsPage() {
           onClose={() => setShowNew(false)}
           onCreated={async () => {
             setShowNew(false);
+            showToast("Lead created successfully", "success");
+            // Перезавантажуємо відповідну вкладку
             await (view === "tabs" ? reload(tab) : reload("all"));
           }}
           onOpenOrg={openOrgHere} // <- новий колбек для софтлоку
@@ -1342,9 +1345,12 @@ export default function ClientsPage() {
       {selectedOrgId && (
         <OpenOrganizationModal
           open={openOrg}
-          onOpenChange={(v) => {
+          onOpenChange={async (v) => {
             setOpenOrg(v);
-            if (!v) router.refresh();
+            if (!v) {
+              // Перезавантажуємо список після закриття модалки
+              await (view === "tabs" ? reload(tab) : reload("all"));
+            }
           }}
           orgId={selectedOrgId}
         />

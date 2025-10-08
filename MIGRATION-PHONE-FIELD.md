@@ -1,10 +1,12 @@
 # Migration: Add Phone Field to Organizations
 
 ## Problem
-The `phone` column doesn't exist in the `organizations` table, causing errors when creating new leads with only phone/email.
+1. The `phone` column doesn't exist in the `organizations` table
+2. The `name` column has `NOT NULL` constraint, preventing creation of orgs with only email/phone
 
 ## Solution
-Add `phone`, `general_email`, `contact_email`, and `contact_person` columns to the `organizations` table.
+1. Make `name` column **nullable** (remove NOT NULL constraint)
+2. Add `phone`, `general_email`, `contact_email`, and `contact_person` columns to the `organizations` table
 
 ## Run Migration
 
@@ -33,6 +35,9 @@ const sql = postgres(process.env.DATABASE_URL);
 
 async function migrate() {
   try {
+    // Make name nullable
+    await sql`ALTER TABLE organizations ALTER COLUMN name DROP NOT NULL`;
+    
     // Add phone column
     await sql`
       DO $$ 
@@ -113,6 +118,7 @@ node run-migration.mjs
 ## Changes Made
 
 ### 1. Database Schema
+- ✅ **Made `name` column NULLABLE** (removed NOT NULL constraint)
 - ✅ Added `phone` column (TEXT, nullable)
 - ✅ Added `general_email` column (TEXT, nullable)
 - ✅ Added `contact_email` column (TEXT, nullable)
@@ -180,11 +186,11 @@ if (!name && !domain && !general_email && !contact_email && !phone) {
 After running the migration, verify in SQL Editor:
 
 ```sql
--- Check if columns exist
+-- Check if columns exist and name is nullable
 SELECT column_name, data_type, is_nullable
 FROM information_schema.columns
 WHERE table_name = 'organizations'
-  AND column_name IN ('phone', 'general_email', 'contact_email', 'contact_person');
+  AND column_name IN ('name', 'phone', 'general_email', 'contact_email', 'contact_person');
 
 -- Check indexes
 SELECT indexname, indexdef
@@ -197,6 +203,7 @@ Expected output:
 ```
 column_name     | data_type | is_nullable
 ----------------|-----------|------------
+name            | text      | YES         ← ВАЖЛИВО!
 phone           | text      | YES
 general_email   | text      | YES
 contact_email   | text      | YES

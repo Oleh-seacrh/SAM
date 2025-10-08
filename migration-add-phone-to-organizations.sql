@@ -1,5 +1,9 @@
 -- migration-add-phone-to-organizations.sql
 -- Додає колонку phone до таблиці organizations, якщо її ще немає
+-- Робить колонку name nullable
+
+-- Зняти NOT NULL constraint з колонки name
+ALTER TABLE organizations ALTER COLUMN name DROP NOT NULL;
 
 -- Перевіримо чи існує колонка
 DO $$ 

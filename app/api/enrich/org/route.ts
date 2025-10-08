@@ -1,6 +1,7 @@
 // app/api/enrich/org/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { searchByName, searchByEmail, searchByPhone, WebCandidate } from "@/lib/enrich/web";
+import { detectCountryLLM } from "@/lib/llmCountry";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -64,7 +65,20 @@ async function fetchWithTimeout(url: string, ms = 8000): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    return await fetch(url, { cache: "no-store", redirect: "follow", signal: ctrl.signal as any });
+    return await fetch(url, { 
+      cache: "no-store", 
+      redirect: "follow", 
+      signal: ctrl.signal as any,
+      headers: {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9,uk;q=0.8,ru;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "DNT": "1",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1"
+      }
+    });
   } finally {
     clearTimeout(t);
   }
@@ -157,7 +171,24 @@ function extractEmails(html: string): string[] {
   const out = new Set<string>();
   const re = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi;
   const matches = html.match(re) || [];
-  for (const m of matches) out.add(m.toLowerCase());
+  
+  // Filter out common spam/placeholder emails
+  const blacklist = [
+    'example.com', 'test.com', 'domain.com', 'email.com', 
+    'yourcompany.com', 'yourdomain.com', 'company.com',
+    'noreply@', 'no-reply@', 'donotreply@', 'bounce@', 
+    'mailer-daemon@', 'postmaster@', 'abuse@', 'spam@',
+    'sentry.io', 'wixpress.com', 'godaddy.com', 'wordpress.com'
+  ];
+  
+  for (const m of matches) {
+    const lower = m.toLowerCase();
+    const isBlacklisted = blacklist.some(b => lower.includes(b));
+    if (!isBlacklisted) {
+      out.add(lower);
+    }
+  }
+  
   return Array.from(out);
 }
 function extractSocials(html: string): { linkedin?: string; facebook?: string } {
@@ -191,7 +222,7 @@ export async function POST(req: NextRequest) {
       input: { name: name || "", email: emailIn || "", phone: phoneIn || "", domain: domainIn || "" },
       domainResolution: [] as Array<{ stage: string; result: "hit" | "miss"; value?: string }>,
       pages: [] as Array<{ url: string; ok: boolean; status?: number | string; bytes?: number }>,
-      extracted: { emails: 0, phones: 0, socials: { linkedin: false, facebook: false }, name: false },
+      extracted: { emails: 0, phones: 0, socials: { linkedin: false, facebook: false }, name: false, country: false },
     };
 
     // 1) resolve domain
@@ -211,17 +242,23 @@ export async function POST(req: NextRequest) {
 
     if (!domain) {
       let candidates: WebCandidate[] = [];
+      
+      // Try 1: search by name (if provided)
       if (name) {
-        candidates = await searchByName(name, country);
-        trace.domainResolution.push({ stage: "searchByName", result: candidates.length ? "hit" : "miss" });
+        candidates = await searchByName(name, null);
+        trace.domainResolution.push({ stage: "searchByName", result: candidates.length ? "hit" : "miss", value: candidates.length ? `${candidates.length} results` : undefined });
       }
+      
+      // Try 2: search by email (if name search failed and email provided)
       if (!candidates?.length && emailIn) {
         candidates = await searchByEmail(emailIn);
-        trace.domainResolution.push({ stage: "searchByEmail", result: candidates.length ? "hit" : "miss" });
+        trace.domainResolution.push({ stage: "searchByEmail", result: candidates.length ? "hit" : "miss", value: candidates.length ? `${candidates.length} results` : undefined });
       }
+      
+      // Try 3: search by phone (if both name and email search failed and phone provided)
       if (!candidates?.length && phoneIn) {
         candidates = await searchByPhone(phoneIn);
-        trace.domainResolution.push({ stage: "searchByPhone", result: candidates.length ? "hit" : "miss" });
+        trace.domainResolution.push({ stage: "searchByPhone", result: candidates.length ? "hit" : "miss", value: candidates.length ? `${candidates.length} results` : undefined });
       }
 
       if (candidates?.length) {
@@ -243,8 +280,12 @@ export async function POST(req: NextRequest) {
     // 2) fetch common pages
     const origin = `https://${domain}/`;
     const paths = [
-      "", "about", "about-us", "company", "company/about",
-      "contact", "contacts", "en/contact", "en/about", "ua/contact"
+      "", // homepage
+      "about", "about-us", "company", "company/about", "о-нас", "про-нас", "о-компании",
+      "contact", "contacts", "contact-us", "контакты", "контакти", "зв'язок",
+      "en/contact", "en/about", "en/about-us",
+      "ua/contact", "ua/about", "ua/about-us",
+      "ru/contact", "ru/about", "ru/about-us"
     ];
     const pages: Array<{ url: string; html: string }> = [];
     for (const p of paths) {
@@ -277,14 +318,24 @@ export async function POST(req: NextRequest) {
 
     // name
     let bestName: string | null = null;
+    let nameSource: "jsonld" | "og" | "title" = "title";
     for (const pg of pages) {
-      const t = extractJsonLdName(pg.html) || extractOG(pg.html, "title") || extractTitle(pg.html);
+      const jsonLdName = extractJsonLdName(pg.html);
+      const ogName = extractOG(pg.html, "title");
+      const titleName = extractTitle(pg.html);
+      
+      const t = jsonLdName || ogName || titleName;
+      if (jsonLdName) nameSource = "jsonld";
+      else if (ogName) nameSource = "og";
+      
       if (t && (!bestName || t.length < (bestName.length || 999))) bestName = t;
     }
     if (bestName) {
       trace.extracted.name = true;
-      pushUnique(suggestions, { field: "name", value: bestName, confidence: 0.7 });
-      pushUnique(suggestions, { field: "company.displayName", value: bestName, confidence: 0.7 });
+      // Higher confidence for structured data (JSON-LD), medium for OG, lower for title
+      const confidence = nameSource === "jsonld" ? 0.9 : nameSource === "og" ? 0.8 : 0.7;
+      pushUnique(suggestions, { field: "name", value: bestName, confidence });
+      pushUnique(suggestions, { field: "company.displayName", value: bestName, confidence });
     }
 
     // emails
@@ -294,13 +345,13 @@ export async function POST(req: NextRequest) {
     trace.extracted.emails = emails.length;
 
     const corp = emails.filter(e => e.endsWith(`@${domain}`));
-    const generalPreferred = corp.find(e => /^(info|sales|contact|office|hello|support)@/i.test(e)) || corp[0];
+    const generalPreferred = corp.find(e => /^(info|sales|contact|office|hello|support|enquiry|inquiry)@/i.test(e));
     if (generalPreferred) {
-      pushUnique(suggestions, { field: "general_email", value: generalPreferred, confidence: 0.9 });
-    } else if (corp[0]) {
-      pushUnique(suggestions, { field: "general_email", value: corp[0], confidence: 0.7 });
-    } else if (emails[0]) {
-      pushUnique(suggestions, { field: "who.email", value: emails[0], confidence: 0.4 });
+      pushUnique(suggestions, { field: "general_email", value: generalPreferred, confidence: 0.95 });
+    } else if (corp.length > 0) {
+      pushUnique(suggestions, { field: "general_email", value: corp[0], confidence: 0.8 });
+    } else if (emails.length > 0) {
+      pushUnique(suggestions, { field: "who.email", value: emails[0], confidence: 0.5 });
     }
 
     // phones
@@ -309,7 +360,9 @@ export async function POST(req: NextRequest) {
     const phones = Array.from(phonesAll);
     trace.extracted.phones = phones.length;
     if (phones.length) {
-      pushUnique(suggestions, { field: "contact_phone", value: phones[0], confidence: 0.6 });
+      // Higher confidence for international format phones
+      const confidence = phones[0].startsWith('+') ? 0.85 : 0.75;
+      pushUnique(suggestions, { field: "contact_phone", value: phones[0], confidence });
     }
 
     // socials
@@ -320,8 +373,29 @@ export async function POST(req: NextRequest) {
       if (!linkedin_url && soc.linkedin) linkedin_url = soc.linkedin;
       if (!facebook_url && soc.facebook) facebook_url = soc.facebook;
     }
-    if (linkedin_url) { trace.extracted.socials.linkedin = true; pushUnique(suggestions, { field: "linkedin_url", value: linkedin_url, confidence: 0.8 }); }
-    if (facebook_url) { trace.extracted.socials.facebook = true; pushUnique(suggestions, { field: "facebook_url", value: facebook_url, confidence: 0.8 }); }
+    if (linkedin_url) { trace.extracted.socials.linkedin = true; pushUnique(suggestions, { field: "linkedin_url", value: linkedin_url, confidence: 0.95 }); }
+    if (facebook_url) { trace.extracted.socials.facebook = true; pushUnique(suggestions, { field: "facebook_url", value: facebook_url, confidence: 0.95 }); }
+
+    // country detection using LLM
+    try {
+      const allText = pages.map(p => p.html).join(" ").slice(0, 50000);
+      const countryResult = await detectCountryLLM({
+        text: allText,
+        domain: domain || "",
+        phones: phones.slice(0, 3),
+      });
+      
+      if (countryResult?.iso2) {
+        trace.extracted.country = true;
+        pushUnique(suggestions, { 
+          field: "country", 
+          value: countryResult.iso2, 
+          confidence: countryResult.confidence === "high" ? 0.9 : countryResult.confidence === "medium" ? 0.7 : 0.5 
+        });
+      }
+    } catch (e: any) {
+      console.warn("Country detection failed:", e?.message);
+    }
 
     // 4) respond
     if (!suggestions.length) {

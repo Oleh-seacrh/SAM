@@ -289,6 +289,28 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
 
     if (field === "who.phone") return null; // ніколи не пишемо
 
+    if (field === "linkedin_url") {
+      if (value && value.includes("linkedin.com")) {
+        return { key: "linkedin_url", val: value };
+      }
+      return null;
+    }
+
+    if (field === "facebook_url") {
+      if (value && value.includes("facebook.com")) {
+        return { key: "facebook_url", val: value };
+      }
+      return null;
+    }
+
+    if (field === "country") {
+      // value should be ISO2 code (e.g., "UA", "US")
+      if (value && value.length === 2) {
+        return { key: "country", val: value.toUpperCase() };
+      }
+      return null;
+    }
+
     return null;
   }
 

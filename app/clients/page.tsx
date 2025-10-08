@@ -16,6 +16,8 @@ import {
 import { useRouter } from "next/navigation";
 import OpenOrganizationModal from "@/components/modals/OpenOrganizationModal";
 import InquiriesModal from "@/components/modals/InquiriesModal";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { useToast } from "@/components/ui/Toast";
 
 /* =========================================================
  * Small helpers for display
@@ -1054,6 +1056,9 @@ export default function ClientsPage() {
   const [view, setView] = useState<ViewMode>("tabs");
   const [tab, setTab] = useState<OrgType>("client");
   const [query, setQuery] = useState("");
+  
+  const { showToast, ToastContainer } = useToast();
+  const [confirmDelete, setConfirmDelete] = useState<{ id: string; type: OrgType; name: string } | null>(null);
 
   const [data, setData] = useState<Record<OrgType, OrgListItem[]>>({
     client: [],
@@ -1135,14 +1140,29 @@ export default function ClientsPage() {
   };
 
   const onDelete = async (id: string, t: OrgType) => {
-    if (!confirm("Delete this organization?")) return;
-    const r = await fetch(`/api/orgs/${id}`, { method: "DELETE" });
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) {
-      setPageNotice({ title: "Delete failed", message: j?.error || `HTTP ${r.status}` });
-      return;
+    // Знайдемо назву організації для підтвердження
+    const org = data[t].find(o => o.id === id);
+    const name = org?.name || org?.general_email || org?.contact_email || org?.phone || "this organization";
+    setConfirmDelete({ id, type: t, name });
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!confirmDelete) return;
+    const { id, type } = confirmDelete;
+    setConfirmDelete(null);
+
+    try {
+      const r = await fetch(`/api/orgs/${id}`, { method: "DELETE" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        showToast(j?.error || `Delete failed: HTTP ${r.status}`, "error");
+        return;
+      }
+      showToast("Organization deleted", "success");
+      await reload(type);
+    } catch (e: any) {
+      showToast(e?.message || "Delete failed", "error");
     }
-    await reload(t);
   };
 
   // відкриття з софтлоку: скролимось до елемента + коротко підсвічуємо + якір у URL
@@ -1345,6 +1365,21 @@ export default function ClientsPage() {
         message={pageNotice?.message || ""}
         onClose={() => setPageNotice(null)}
       />
+
+      {/* Delete confirmation */}
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title="Delete Organization"
+        message={`Are you sure you want to delete "${confirmDelete?.name}"? This action cannot be undone.`}
+        confirmText="Delete"
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setConfirmDelete(null)}
+      />
+
+      {/* Toast notifications */}
+      <ToastContainer />
     </div>
   );
 }

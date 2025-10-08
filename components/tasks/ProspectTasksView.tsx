@@ -73,7 +73,6 @@ export function ProspectTasksView() {
   const [dragId, setDragId] = useState<number | null>(null);
   const [selectedTask, setSelectedTask] = useState<ProspectTask | null>(null);
   const [open, setOpen] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
 
   async function load() {
     setLoading(true);
@@ -126,23 +125,8 @@ export function ProspectTasksView() {
 
   function onDragStart(e: React.DragEvent, taskId: number) {
     setDragId(taskId);
-    setIsDragging(true);
     e.dataTransfer.setData("text/plain", String(taskId));
     e.dataTransfer.effectAllowed = "move";
-    // Add visual feedback
-    if (e.currentTarget instanceof HTMLElement) {
-      e.currentTarget.style.opacity = "0.5";
-    }
-  }
-
-  function onDragEnd(e: React.DragEvent) {
-    // Reset visual feedback
-    if (e.currentTarget instanceof HTMLElement) {
-      e.currentTarget.style.opacity = "1";
-    }
-    setDragId(null);
-    // Delay resetting isDragging to prevent onClick from firing
-    setTimeout(() => setIsDragging(false), 100);
   }
 
   function onDragOver(e: React.DragEvent) {
@@ -150,41 +134,18 @@ export function ProspectTasksView() {
     e.dataTransfer.dropEffect = "move";
   }
 
-  async function onDrop(e: React.DragEvent, col: ProspectColumn) {
-    e.preventDefault();
-    if (!dragId) {
-      console.log("[onDrop] No dragId, skipping");
-      return;
-    }
-    
-    console.log("[onDrop] Dropping task", dragId, "to column", col.key, "columnId", col.id);
-    
-    try {
-      const response = await fetch(`/api/prospects/tasks/${dragId}`, {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ moveToColumnKey: col.key }),
-      });
-      
-      console.log("[onDrop] Response status:", response.status);
-      
-      if (!response.ok) {
-        const error = await response.json();
-        console.error("[onDrop] Error:", error);
-      } else {
-        console.log("[onDrop] Success!");
-      }
-    } catch (error) {
-      console.error("[onDrop] Exception:", error);
-    }
-    
+  async function onDrop(col: ProspectColumn) {
+    if (!dragId) return;
+    await fetch(`/api/prospects/tasks/${dragId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ moveToColumnKey: col.key }),
+    });
     setDragId(null);
     await load();
   }
 
   function openTaskModal(task: ProspectTask) {
-    // Don't open modal if we're dragging
-    if (isDragging) return;
     setSelectedTask(task);
     setOpen(true);
   }
@@ -209,7 +170,7 @@ export function ProspectTasksView() {
               key={col.id}
               className="flex-shrink-0 w-80 rounded-xl bg-[var(--card)] border border-white/10 p-4"
               onDragOver={onDragOver}
-              onDrop={(e) => onDrop(e, col)}
+              onDrop={() => onDrop(col)}
             >
               <div className="flex items-center justify-between mb-3">
                 <h3 className="font-semibold">{col.title}</h3>
@@ -222,9 +183,7 @@ export function ProspectTasksView() {
                     key={task.id}
                     draggable
                     onDragStart={(e) => onDragStart(e, task.id)}
-                    onDragEnd={onDragEnd}
-                    onClick={() => openTaskModal(task)}
-                    className="cursor-move rounded-lg bg-black/20 border border-white/10 p-3 hover:bg-black/30 transition space-y-2"
+                    className="rounded-lg bg-black/20 border border-white/10 p-3 hover:bg-black/30 transition space-y-2"
                   >
                     <div className="font-medium text-sm">{task.title}</div>
                     

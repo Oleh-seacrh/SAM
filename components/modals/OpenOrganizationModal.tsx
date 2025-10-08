@@ -4,6 +4,13 @@ import * as React from "react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+type Contact = {
+  name: string;
+  email: string;
+  phone: string;
+  position?: string;
+};
+
 type OrgDto = {
   id: string;
   name: string | null;
@@ -12,7 +19,12 @@ type OrgDto = {
   industry: string | null;
   linkedin_url: string | null;
   facebook_url: string | null;
+  alibaba_url: string | null;
+  made_in_china_url: string | null;
+  indiamart_url: string | null;
   general_email: string | null;
+  contacts: Contact[] | null;
+  // Legacy fields (for backward compatibility)
   contact_name: string | null;
   contact_email: string | null;
   contact_phone: string | null;
@@ -24,7 +36,7 @@ type OrgDto = {
   product: string | null;
   quantity: number | null;
   deal_value_usd: number | null;
-  last_contact_at: string | null; // ISO
+  last_contact_at: string | null;
   tags: string[] | null;
   created_at?: string | null;
   updated_at?: string | null;
@@ -44,20 +56,28 @@ type Form = {
   industry: string;
   linkedin_url: string;
   facebook_url: string;
+  alibaba_url: string;
+  made_in_china_url: string;
+  indiamart_url: string;
   general_email: string;
-  contact_name: string;
-  contact_email: string;
-  contact_phone: string;
+  contacts: Contact[];
   status: string;
   size_tag: string;
   source: string;
   note: string;
   brand: string;
   product: string;
-  quantity: string;        // текст у формі
-  deal_value_usd: string;  // текст у формі
-  last_contact_at: string; // ISO або локальний рядок
-  tags: string;            // CSV у формі
+  quantity: string;
+  deal_value_usd: string;
+  last_contact_at: string;
+  tags: string;
+};
+
+const emptyContact: Contact = {
+  name: "",
+  email: "",
+  phone: "",
+  position: "",
 };
 
 const emptyForm: Form = {
@@ -67,10 +87,11 @@ const emptyForm: Form = {
   industry: "",
   linkedin_url: "",
   facebook_url: "",
+  alibaba_url: "",
+  made_in_china_url: "",
+  indiamart_url: "",
   general_email: "",
-  contact_name: "",
-  contact_email: "",
-  contact_phone: "",
+  contacts: [{ ...emptyContact }],
   status: "",
   size_tag: "",
   source: "",
@@ -89,153 +110,122 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Form>(emptyForm);
 
-  // enrichment (MVP)
+  // enrichment
   const [enriching, setEnriching] = useState(false);
   const [suggestions, setSuggestions] = useState<{ field:string; value:string; confidence?:number; source?:string }[]>([]);
   const [pick, setPick] = useState<Record<number, boolean>>({});
   const [enrichReason, setEnrichReason] = useState<string | null>(null);
-  const [enrichTrace, setEnrichTrace] = useState<any | null>(null); // trace from API (diagnostics)
+  const [enrichTrace, setEnrichTrace] = useState<any | null>(null);
 
-  // Закрити по Escape
+  // Close on Escape
   useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onOpenChange(false);
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && open) onOpenChange(false);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
   }, [open, onOpenChange]);
 
-  // Підтягнути дані при відкритті
+  // Load organization data
   useEffect(() => {
     if (!open || !orgId) return;
-    let cancelled = false;
-
-    (async () => {
-      setLoading(true);
-      try {
-        const r = await fetch(`/api/orgs/${orgId}`, { cache: "no-store" });
-        if (!r.ok) throw new Error(`GET ${r.status}`);
-        const data = await r.json();
-        const org: OrgDto = data?.org ?? data; // підтримує {org,...} або plain-row
-
-        if (!cancelled) {
-          setForm({
-            name: org.name ?? "",
-            domain: org.domain ?? "",
-            country: org.country ?? "",
-            industry: org.industry ?? "",
-            linkedin_url: org.linkedin_url ?? "",
-            facebook_url: org.facebook_url ?? "",
-            general_email: org.general_email ?? "",
-            contact_name: org.contact_name ?? "",
-            contact_email: org.contact_email ?? "",
-            contact_phone: org.contact_phone ?? "",
-            status: org.status ?? "",
-            size_tag: org.size_tag ?? "",
-            source: org.source ?? "",
-            note: org.note ?? "",
-            brand: org.brand ?? "",
-            product: org.product ?? "",
-            quantity: org.quantity == null ? "" : String(org.quantity),
-            deal_value_usd: org.deal_value_usd == null ? "" : String(org.deal_value_usd),
-            last_contact_at: org.last_contact_at ?? "",
-            tags: (org.tags ?? []).join(", "),
-          });
+    setLoading(true);
+    fetch(`/api/orgs/${orgId}`)
+      .then(r => r.json())
+      .then((data: OrgDto) => {
+        // Migrate legacy contacts to new format
+        let contacts: Contact[] = data.contacts || [];
+        if (contacts.length === 0 && (data.contact_name || data.contact_email || data.contact_phone)) {
+          contacts = [{
+            name: data.contact_name || "",
+            email: data.contact_email || "",
+            phone: data.contact_phone || "",
+            position: "",
+          }];
         }
-      } catch (e) {
-        console.error(e);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    })();
+        if (contacts.length === 0) {
+          contacts = [{ ...emptyContact }];
+        }
 
-    return () => { cancelled = true; };
+        setForm({
+          name: data.name || "",
+          domain: data.domain || "",
+          country: data.country || "",
+          industry: data.industry || "",
+          linkedin_url: data.linkedin_url || "",
+          facebook_url: data.facebook_url || "",
+          alibaba_url: data.alibaba_url || "",
+          made_in_china_url: data.made_in_china_url || "",
+          indiamart_url: data.indiamart_url || "",
+          general_email: data.general_email || "",
+          contacts,
+          status: data.status || "",
+          size_tag: data.size_tag || "",
+          source: data.source || "",
+          note: data.note || "",
+          brand: data.brand || "",
+          product: data.product || "",
+          quantity: data.quantity != null ? String(data.quantity) : "",
+          deal_value_usd: data.deal_value_usd != null ? String(data.deal_value_usd) : "",
+          last_contact_at: data.last_contact_at || "",
+          tags: (data.tags || []).join(", "),
+        });
+      })
+      .catch(() => alert("Failed to load"))
+      .finally(() => setLoading(false));
   }, [open, orgId]);
 
-  const set = (k: keyof Form) =>
-    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) =>
-      setForm((s) => ({ ...s, [k]: e.target.value }));
+  const set = (key: keyof Form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
+    setForm(f => ({ ...f, [key]: e.target.value }));
+  };
 
-  const submit = async () => {
-    if (!orgId) return;
+  const setContact = (index: number, field: keyof Contact) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    setForm(f => {
+      const newContacts = [...f.contacts];
+      newContacts[index] = { ...newContacts[index], [field]: e.target.value };
+      return { ...f, contacts: newContacts };
+    });
+  };
+
+  const addContact = () => {
+    if (form.contacts.length >= 3) return;
+    setForm(f => ({ ...f, contacts: [...f.contacts, { ...emptyContact }] }));
+  };
+
+  const removeContact = (index: number) => {
+    if (form.contacts.length === 1) return;
+    setForm(f => ({ ...f, contacts: f.contacts.filter((_, i) => i !== index) }));
+  };
+
+  const onSave = async () => {
     setSaving(true);
     try {
       const payload = {
-        name: form.name || null,
-        domain: form.domain || null,
-        country: form.country || null,
-        industry: form.industry || null,
-        linkedin_url: form.linkedin_url || null,
-        facebook_url: form.facebook_url || null,
-        general_email: form.general_email || null,
-        contact_name: form.contact_name || null,
-        contact_email: form.contact_email || null,
-        contact_phone: form.contact_phone || null,
-        status: form.status || null,
-        size_tag: form.size_tag || null,
-        source: form.source || null,
-        note: form.note || null,
-        brand: form.brand || null,
-        product: form.product || null,
-        quantity: form.quantity === "" ? null : Number(form.quantity),
-        deal_value_usd: form.deal_value_usd === "" ? null : Number(form.deal_value_usd),
-        last_contact_at: form.last_contact_at || null,
-        tags: form.tags
-          ? form.tags.split(",").map((s) => s.trim()).filter(Boolean)
-          : null,
+        ...form,
+        quantity: form.quantity ? Number(form.quantity) : null,
+        deal_value_usd: form.deal_value_usd ? Number(form.deal_value_usd) : null,
+        tags: form.tags.split(",").map(t => t.trim()).filter(Boolean),
+        contacts: form.contacts.filter(c => c.name || c.email || c.phone),
       };
 
       const r = await fetch(`/api/orgs/${orgId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
 
-      if (!r.ok) {
-        const err = await r.json().catch(() => ({}));
-        throw new Error(err?.error || `PUT failed: ${r.status}`);
-      }
-
+      if (!r.ok) throw new Error("Save failed");
+      router.refresh();
       onOpenChange(false);
-      router.refresh(); // одразу побачиш зміни у списку/картках
-    } catch (e) {
-      console.error(e);
-      alert(String(e));
+    } catch (e: any) {
+      alert(e?.message || "Failed to save");
     } finally {
       setSaving(false);
     }
   };
 
-  // -------- Enrich (MVP) ----------
-  function setDeep(obj: any, path: string, value: any) {
-    if (!path) return;
-    const parts = path.split(".");
-    let cur = obj;
-    for (let i = 0; i < parts.length - 1; i++) {
-      const k = parts[i];
-      if (cur[k] == null || typeof cur[k] !== "object") cur[k] = {};
-      cur = cur[k];
-    }
-    cur[parts[parts.length - 1]] = value;
-  }
-  function getDeep(obj: any, path: string) {
-    try { return path.split(".").reduce((acc, k) => (acc ? (acc as any)[k] : undefined), obj); }
-    catch { return undefined; }
-  }
-
-  // ——— валідації/мапінг підказок
-  function isEmail(v: string) {
-    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
-  }
-  function normalizePhone(v: string): string | null {
-    const only = v.replace(/[^\d+]/g, "");
-    const hasPlus = only.startsWith("+");
-    const digits = only.replace(/\D/g, "");
-    if (digits.length < 7 || digits.length > 15) return null;
-    return (hasPlus ? "+" : "") + digits;
-  }
-  function normalizeDomainClient(raw: string): string | null {
+  function normalizeDomainClient(raw?: string): string | null {
+    if (!raw) return null;
     try {
       let v = String(raw).trim().toLowerCase();
       if (!v) return null;
@@ -246,6 +236,16 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       const s = String(raw).trim().toLowerCase();
       return s ? s.replace(/^www\./, "") : null;
     }
+  }
+
+  function isEmail(s: string): boolean {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+  }
+
+  function normalizePhone(raw: string): string | null {
+    if (!raw) return null;
+    const cleaned = raw.replace(/[^\d+]/g, "");
+    return cleaned || null;
   }
 
   function mapSuggestionToForm(
@@ -270,24 +270,27 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     }
 
     if (field === "contact_email" && isEmail(value)) {
-      if (!current.contact_email) return { key: "contact_email", val: value.toLowerCase() };
-      return null; // не перезаписуємо персональний
+      if (!current.contacts[0]?.email) {
+        // Will be handled separately
+        return null;
+      }
+      return null;
     }
 
     if (field === "who.email" && isEmail(value)) {
       if (domain && value.toLowerCase().endsWith("@" + domain)) {
         return { key: "general_email", val: value.toLowerCase() };
       }
-      return null; // не корпоративний → ігноруємо
+      return null;
     }
 
     if (field === "contact_phone") {
       const p = normalizePhone(value);
-      if (p && !current.contact_phone) return { key: "contact_phone", val: p };
-      return null; // не перезаписуємо персональний
+      // Will be handled separately for contacts
+      return null;
     }
 
-    if (field === "who.phone") return null; // ніколи не пишемо
+    if (field === "who.phone") return null;
 
     if (field === "linkedin_url") {
       if (value && value.includes("linkedin.com")) {
@@ -304,7 +307,6 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     }
 
     if (field === "country") {
-      // value should be ISO2 code (e.g., "UA", "US")
       if (value && value.length === 2) {
         return { key: "country", val: value.toUpperCase() };
       }
@@ -327,7 +329,6 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       setEnrichReason(null);
       setEnrichTrace(null);
 
-      // Заголовки: Content-Type + умовно X-Org-ID
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(orgId ? { "X-Org-ID": String(orgId) } : {}),
@@ -337,12 +338,12 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
         method: "POST",
         headers,
         body: JSON.stringify({
-          orgId, // залишаємо як є; бек може ігнорувати
+          orgId,
           domain: form.domain || null,
           name: form.name || null,
           country: form.country || null,
-          email: form.contact_email || form.general_email || null,
-          phone: form.contact_phone || null, // додаємо phone
+          email: form.general_email || form.contacts[0]?.email || null,
+          phone: form.contacts[0]?.phone || null,
         }),
       });
       const j = await r.json();
@@ -354,7 +355,6 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       setEnrichReason(typeof j?.reason === "string" ? j.reason : null);
       setEnrichTrace(j?.trace || null);
 
-      // автопозначаємо тільки ті, що реально можна застосувати і цільове поле зараз порожнє
       const pre: Record<number, boolean> = {};
       sugg.forEach((s, i) => {
         const m = mapSuggestionToForm(s, form);
@@ -368,300 +368,357 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     }
   };
 
+  const applySelected = () => {
+    const updated = { ...form };
+    suggestions.forEach((s, i) => {
+      if (!pick[i]) return;
+      const m = mapSuggestionToForm(s, form);
+      if (!m || !m.key || !m.val) return;
+      
+      // Special handling for contacts
+      if (s.field === "contact_email" && isEmail(s.value)) {
+        if (!updated.contacts[0]) updated.contacts[0] = { ...emptyContact };
+        updated.contacts[0].email = s.value.toLowerCase();
+      } else if (s.field === "contact_phone") {
+        const p = normalizePhone(s.value);
+        if (p) {
+          if (!updated.contacts[0]) updated.contacts[0] = { ...emptyContact };
+          updated.contacts[0].phone = p;
+        }
+      } else {
+        (updated as any)[m.key] = m.val;
+      }
+    });
+    setForm(updated);
+    setSuggestions([]);
+    setPick({});
+  };
+
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-[9999]">
-      {/* Overlay */}
-      <div
-        className="absolute inset-0 bg-black/70 backdrop-blur-[2px]"
-        onClick={() => onOpenChange(false)}
-      />
-      {/* Card */}
-      <div className="relative mx-auto my-8 w-full max-w-3xl rounded-2xl border shadow-2xl bg-[var(--bg,#0b0b0d)] text-[var(--text,#e5e7eb)] border-[var(--border,#1f2937)]">
-        {/* Header */}
-        <div className="flex items-center justify-between border-b px-5 py-4 border-[var(--border,#1f2937)]">
-          <h2 className="text-lg font-semibold">{title}</h2>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onFindInfo}
-              className="rounded-md px-3 py-1.5 text-sm bg-white/10 hover:bg-white/20 disabled:opacity-50"
-              disabled={enriching}
-              title="Find info from the website (about/contact pages)"
-            >
-              {enriching ? "Searching…" : "Find info"}
-            </button>
-            <button
-              onClick={() => onOpenChange(false)}
-              className="rounded-md px-2 py-1 text-sm hover:bg-white/10"
-            >
-              ✕
-            </button>
+      <div className="absolute inset-0 bg-black/70" onClick={() => onOpenChange(false)} />
+      
+      <div className="absolute inset-0 flex items-center justify-center p-4">
+        <div className="relative bg-[var(--card)] border border-white/10 rounded-xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+          {/* Header */}
+          <div className="flex items-center justify-between p-6 border-b border-white/10">
+            <h2 className="text-xl font-semibold">{title}</h2>
+            <div className="flex gap-2">
+              <button
+                onClick={onFindInfo}
+                disabled={enriching || loading}
+                className="px-4 py-2 rounded-lg border border-blue-500/40 bg-blue-500/10 hover:bg-blue-500/20 disabled:opacity-50 transition text-sm"
+              >
+                {enriching ? "Searching..." : "Find info"}
+              </button>
+              <button
+                onClick={() => onOpenChange(false)}
+                className="px-4 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition"
+              >
+                ✕
+              </button>
+            </div>
           </div>
-        </div>
 
-        {/* Body */}
-        <div className="px-5 py-4 max-h-[70vh] overflow-y-auto">
-          {loading ? (
-            <div className="text-sm text-zinc-400">Loading…</div>
-          ) : (
-            <>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <L label="Company name">
-                  <input className="input" value={form.name} onChange={set("name")} />
-                </L>
-                <L label="Domain">
-                  <input className="input" placeholder="example.com" value={form.domain} onChange={set("domain")} />
-                </L>
+          {/* Body */}
+          <div className="flex-1 overflow-y-auto p-6">
+            {loading ? (
+              <div>Loading...</div>
+            ) : (
+              <div className="space-y-6">
+                {/* Company Info Section */}
+                <Section title="Company Information">
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <Field label="Company name">
+                      <input className="input" value={form.name} onChange={set("name")} />
+                    </Field>
+                    <Field label="Domain">
+                      <input className="input" value={form.domain} onChange={set("domain")} />
+                    </Field>
+                    <Field label="Country">
+                      <input className="input" value={form.country} onChange={set("country")} placeholder="UA, US, RO..." />
+                    </Field>
+                    <Field label="Industry">
+                      <input className="input" value={form.industry} onChange={set("industry")} placeholder="NDT, Healthcare..." />
+                    </Field>
+                  </div>
+                </Section>
 
-                <L label="Country">
-                  <input className="input" value={form.country} onChange={set("country")} />
-                </L>
-                <L label="Industry">
-                  <input className="input" value={form.industry} onChange={set("industry")} />
-                </L>
+                {/* Socials Section */}
+                <Section title="Social Media & Platforms">
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <Field label="LinkedIn URL">
+                      <input
+                        className="input"
+                        placeholder="https://www.linkedin.com/company/..."
+                        value={form.linkedin_url}
+                        onChange={set("linkedin_url")}
+                      />
+                    </Field>
+                    <Field label="Facebook URL">
+                      <input
+                        className="input"
+                        placeholder="https://www.facebook.com/..."
+                        value={form.facebook_url}
+                        onChange={set("facebook_url")}
+                      />
+                    </Field>
+                    <Field label="Alibaba URL">
+                      <input
+                        className="input"
+                        placeholder="https://www.alibaba.com/..."
+                        value={form.alibaba_url}
+                        onChange={set("alibaba_url")}
+                      />
+                    </Field>
+                    <Field label="Made-in-China URL">
+                      <input
+                        className="input"
+                        placeholder="https://www.made-in-china.com/..."
+                        value={form.made_in_china_url}
+                        onChange={set("made_in_china_url")}
+                      />
+                    </Field>
+                    <Field label="IndiaMART URL">
+                      <input
+                        className="input"
+                        placeholder="https://www.indiamart.com/..."
+                        value={form.indiamart_url}
+                        onChange={set("indiamart_url")}
+                      />
+                    </Field>
+                  </div>
+                </Section>
 
-                {/* NEW: Socials */}
-                <L label="LinkedIn URL">
-                  <input
-                    className="input"
-                    placeholder="https://www.linkedin.com/company/..."
-                    value={form.linkedin_url}
-                    onChange={set("linkedin_url")}
-                  />
-                </L>
-                <L label="Facebook URL">
-                  <input
-                    className="input"
-                    placeholder="https://www.facebook.com/..."
-                    value={form.facebook_url}
-                    onChange={set("facebook_url")}
-                  />
-                </L>
+                {/* Contacts Section */}
+                <Section 
+                  title="Contacts" 
+                  action={
+                    form.contacts.length < 3 ? (
+                      <button
+                        onClick={addContact}
+                        className="px-3 py-1 rounded-lg border border-green-500/40 bg-green-500/10 hover:bg-green-500/20 transition text-sm"
+                      >
+                        + Add Contact
+                      </button>
+                    ) : null
+                  }
+                >
+                  <div className="space-y-4">
+                    <Field label="General email">
+                      <input className="input" value={form.general_email} onChange={set("general_email")} placeholder="info@company.com" />
+                    </Field>
 
-                <L label="General email">
-                  <input className="input" value={form.general_email} onChange={set("general_email")} />
-                </L>
-                <L label="Contact person">
-                  <input className="input" value={form.contact_name} onChange={set("contact_name")} />
-                </L>
+                    {form.contacts.map((contact, idx) => (
+                      <div key={idx} className="border border-white/10 rounded-lg p-4 space-y-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <h4 className="font-medium text-sm">Contact {idx + 1}</h4>
+                          {form.contacts.length > 1 && (
+                            <button
+                              onClick={() => removeContact(idx)}
+                              className="text-xs text-red-400 hover:text-red-300"
+                            >
+                              Remove
+                            </button>
+                          )}
+                        </div>
+                        <div className="grid md:grid-cols-2 gap-3">
+                          <Field label="Name">
+                            <input
+                              className="input"
+                              value={contact.name}
+                              onChange={setContact(idx, "name")}
+                              placeholder="John Doe"
+                            />
+                          </Field>
+                          <Field label="Position">
+                            <input
+                              className="input"
+                              value={contact.position || ""}
+                              onChange={setContact(idx, "position")}
+                              placeholder="Sales Manager"
+                            />
+                          </Field>
+                          <Field label="Email">
+                            <input
+                              className="input"
+                              value={contact.email}
+                              onChange={setContact(idx, "email")}
+                              placeholder="john@company.com"
+                            />
+                          </Field>
+                          <Field label="Phone">
+                            <input
+                              className="input"
+                              value={contact.phone}
+                              onChange={setContact(idx, "phone")}
+                              placeholder="+1 234 567 8900"
+                            />
+                          </Field>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </Section>
 
-                <L label="Personal email">
-                  <input className="input" value={form.contact_email} onChange={set("contact_email")} />
-                </L>
-                <L label="Phone">
-                  <input className="input" value={form.contact_phone} onChange={set("contact_phone")} />
-                </L>
-
-                <L label="Status">
-                  <select className="input" value={form.status} onChange={set("status")}>
-                    <option value="">—</option>
-                    <option value="New">New</option>
-                    <option value="In progress">In progress</option>
-                    <option value="Won">Won</option>
-                    <option value="Lost">Lost</option>
-                  </select>
-                </L>
-                <L label="Size tag (S/M/L)">
-                  <select className="input" value={form.size_tag} onChange={set("size_tag")}>
-                    <option value="">—</option>
-                    <option value="S">S</option>
-                    <option value="M">M</option>
-                    <option value="L">L</option>
-                  </select>
-                </L>
-
-                <L label="Source">
-                  <input className="input" value={form.source} onChange={set("source")} />
-                </L>
-                <L label="Tags (comma separated)">
-                  <input className="input" value={form.tags} onChange={set("tags")} />
-                </L>
-
-                <L label="Last contact at">
-                  <input className="input" placeholder="YYYY-MM-DD or ISO" value={form.last_contact_at} onChange={set("last_contact_at")} />
-                </L>
-                <L label="Brand">
-                  <input className="input" value={form.brand} onChange={set("brand")} />
-                </L>
-
-                <L label="Product">
-                  <input className="input" value={form.product} onChange={set("product")} />
-                </L>
-                <L label="Quantity">
-                  <input className="input" value={form.quantity} onChange={set("quantity")} />
-                </L>
-
-                <L label="Deal value USD">
-                  <input className="input" value={form.deal_value_usd} onChange={set("deal_value_usd")} />
-                </L>
-
-                <div className="md:col-span-2">
-                  <label className="label">Notes</label>
-                  <textarea className="input min-h-[120px]" value={form.note} onChange={set("note")} />
-                </div>
-              </div>
-
-              {/* Reason + Trace (optional diagnostics) */}
-              {enrichReason && (
-                <div className="mt-3 rounded border border-white/10 p-3 text-sm">
-                  <div className="opacity-80 mb-1">
-                    {enrichReason === "no_domain_input" && "Not enough input to search. Add company name, email or phone."}
-                    {enrichReason === "domain_not_resolved" && "We couldn't resolve the company website from the provided data."}
-                    {enrichReason === "pages_unreachable" && "Website found, but common pages (/, about, contact) were unreachable."}
-                    {enrichReason === "no_contacts_found" && "Website opened, but no contacts/socials were detected on common pages."}
-                    {!["no_domain_input","domain_not_resolved","pages_unreachable","no_contacts_found"].includes(enrichReason) && enrichReason}
+                {/* Business Info Section */}
+                <Section title="Business Information">
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <Field label="Status">
+                      <select className="input" value={form.status} onChange={set("status")}>
+                        <option value="">—</option>
+                        <option value="New">New</option>
+                        <option value="In progress">In progress</option>
+                        <option value="Won">Won</option>
+                        <option value="Lost">Lost</option>
+                      </select>
+                    </Field>
+                    <Field label="Size tag (S/M/L)">
+                      <select className="input" value={form.size_tag} onChange={set("size_tag")}>
+                        <option value="">—</option>
+                        <option value="S">S</option>
+                        <option value="M">M</option>
+                        <option value="L">L</option>
+                      </select>
+                    </Field>
+                    <Field label="Source">
+                      <input className="input" value={form.source} onChange={set("source")} />
+                    </Field>
+                    <Field label="Tags (comma separated)">
+                      <input className="input" value={form.tags} onChange={set("tags")} />
+                    </Field>
+                    <Field label="Last contact at">
+                      <input className="input" placeholder="YYYY-MM-DD or ISO" value={form.last_contact_at} onChange={set("last_contact_at")} />
+                    </Field>
+                    <Field label="Brand">
+                      <input className="input" value={form.brand} onChange={set("brand")} />
+                    </Field>
+                    <Field label="Product">
+                      <input className="input" value={form.product} onChange={set("product")} />
+                    </Field>
+                    <Field label="Quantity">
+                      <input className="input" value={form.quantity} onChange={set("quantity")} />
+                    </Field>
+                    <Field label="Deal value USD">
+                      <input className="input" value={form.deal_value_usd} onChange={set("deal_value_usd")} />
+                    </Field>
                   </div>
 
-                  {enrichTrace && (
-                    <div className="text-xs opacity-70 space-y-1">
-                      <div>
-                        <span className="opacity-80">Resolve:</span>{" "}
-                        {Array.isArray(enrichTrace.domainResolution) && enrichTrace.domainResolution.length
-                          ? enrichTrace.domainResolution.map((s: any, idx: number) =>
-                              `${idx ? " → " : ""}${s.stage}:${s.result}${s.value ? `(${s.value})` : ""}`
-                            )
-                          : "—"}
-                      </div>
-                      <div>
-                        <span className="opacity-80">Pages:</span>{" "}
-                        {Array.isArray(enrichTrace.pages) && enrichTrace.pages.length
-                          ? (() => {
-                              const total = enrichTrace.pages.length;
-                              const ok = enrichTrace.pages.filter((p: any) => p.ok).length;
-                              return `${total} tried, ${ok} reachable`;
-                            })()
-                          : "—"}
-                      </div>
-                      <div>
-                        <span className="opacity-80">Extracted:</span>{" "}
-                        {enrichTrace.extracted
-                          ? `emails ${enrichTrace.extracted.emails || 0}, phones ${enrichTrace.extracted.phones || 0}, LinkedIn ${enrichTrace.extracted.socials?.linkedin ? "✓" : "✗"}, Facebook ${enrichTrace.extracted.socials?.facebook ? "✓" : "✗"}, name ${enrichTrace.extracted.name ? "✓" : "✗"}`
-                          : "—"}
-                      </div>
+                  <div className="mt-4">
+                    <Field label="Notes">
+                      <textarea className="input min-h-[120px]" value={form.note} onChange={set("note")} />
+                    </Field>
+                  </div>
+                </Section>
+
+                {/* Enrichment Results */}
+                {enrichReason && (
+                  <div className="mt-3 rounded border border-white/10 p-3 text-sm">
+                    <div className="opacity-80 mb-1">
+                      {enrichReason === "no_domain_input" && "Not enough input to search. Add company name, email or phone."}
+                      {enrichReason === "domain_not_resolved" && "We couldn't resolve the company website from the provided data."}
+                      {enrichReason === "pages_unreachable" && "Website found, but common pages (/, about, contact) were unreachable."}
+                      {enrichReason === "no_contacts_found" && "Website opened, but no contacts/socials were detected on common pages."}
+                      {!["no_domain_input","domain_not_resolved","pages_unreachable","no_contacts_found"].includes(enrichReason) && enrichReason}
                     </div>
-                  )}
-                </div>
-              )}
 
-              {/* Suggestions from enrich */}
-              {!!suggestions.length && (
-                <div className="mt-3 rounded border border-white/10 p-3">
-                  <div className="text-sm opacity-80 mb-2">Suggestions (tick to apply)</div>
-                  <div className="space-y-1 text-sm">
-                    {suggestions.map((s, i) => {
-                      const applicable = canApplySuggestion(s, form);
-                      const personalNote =
-                        s.field === "contact_email" || s.field === "contact_phone" || s.field === "who.phone"
-                          ? " (personal — won't overwrite)"
-                          : s.field === "who.email"
-                            ? " (mapped to general_email if corporate)"
-                            : s.field === "domain"
-                              ? " (will normalize)"
-                              : "";
-
-                      return (
-                        <label key={i} className={`flex items-start gap-2 ${applicable ? "" : "opacity-50"}`}>
-                          <input
-                            type="checkbox"
-                            checked={!!pick[i]}
-                            disabled={!applicable}
-                            onChange={() => {
-                              if (!applicable) return;
-                              setPick((prev) => ({ ...prev, [i]: !prev[i] }));
-                            }}
-                          />
-                          <span className="flex-1">
-                            <span className="opacity-70">{s.field}</span>{personalNote}:{" "}
-                            <span className="font-mono">{String(s.value)}</span>
-                            {typeof s.confidence === "number" && (
-                              <span className="ml-2 text-xs opacity-60">conf {s.confidence.toFixed(2)}</span>
-                            )}
-                            {s.source && (
-                              <span className="ml-2 text-xs underline opacity-60">
-                                <a href={s.source} target="_blank" rel="noopener noreferrer">source</a>
-                              </span>
-                            )}
-                          </span>
-                        </label>
-                      );
-                    })}
+                    {enrichTrace && (
+                      <div className="text-xs opacity-70 space-y-1">
+                        <div>
+                          <span className="opacity-80">Resolve:</span>{" "}
+                          {Array.isArray(enrichTrace.domainResolution) && enrichTrace.domainResolution.length
+                            ? enrichTrace.domainResolution.map((s: any, idx: number) =>
+                                `${s.stage}=${s.result}${s.value ? `(${s.value})` : ""}`
+                              ).join(" → ")
+                            : "none"}
+                        </div>
+                        <div>
+                          <span className="opacity-80">Pages:</span> {enrichTrace.pages?.length || 0} fetched
+                        </div>
+                        <div>
+                          <span className="opacity-80">Extracted:</span>{" "}
+                          emails={enrichTrace.extracted?.emails || 0}, phones={enrichTrace.extracted?.phones || 0},
+                          LinkedIn={enrichTrace.extracted?.socials?.linkedin ? "✓" : "✗"},
+                          Facebook={enrichTrace.extracted?.socials?.facebook ? "✓" : "✗"},
+                          Country={enrichTrace.extracted?.country ? "✓" : "✗"}
+                        </div>
+                      </div>
+                    )}
                   </div>
+                )}
 
-                  <div className="mt-2">
+                {suggestions.length > 0 && (
+                  <div className="mt-4 space-y-2">
+                    <div className="font-semibold text-sm">Suggestions:</div>
+                    {suggestions.map((s, i) => (
+                      <div key={i} className="flex items-center gap-2 text-sm border border-white/10 rounded p-2">
+                        <input
+                          type="checkbox"
+                          checked={pick[i] || false}
+                          onChange={e => setPick(p => ({ ...p, [i]: e.target.checked }))}
+                          disabled={!canApplySuggestion(s, form)}
+                        />
+                        <span className="opacity-70 min-w-[140px]">{s.field}:</span>
+                        <span className="flex-1">{s.value}</span>
+                        {s.confidence != null && (
+                          <span className="text-xs opacity-60">conf: {(s.confidence * 100).toFixed(0)}%</span>
+                        )}
+                      </div>
+                    ))}
                     <button
-                      type="button"
-                      className="rounded-lg px-3 py-2 bg-white/10 hover:bg-white/20 text-sm"
-                      onClick={() => {
-                        const chosen = suggestions.filter((_, i) => pick[i]);
-                        const next = { ...form };
-                        for (const s of chosen) {
-                          const m = mapSuggestionToForm(s, next);
-                          if (m?.key && m.val != null) {
-                            (next as any)[m.key] = m.val;
-                          }
-                        }
-                        setForm(next);
-                      }}
+                      onClick={applySelected}
+                      className="px-4 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
                     >
                       Apply selected
                     </button>
                   </div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+                )}
+              </div>
+            )}
+          </div>
 
-        {/* Footer */}
-        <div className="flex items-center justify-end gap-2 border-t px-5 py-3 border-[var(--border,#1f2937)]">
-          <button
-            onClick={() => onOpenChange(false)}
-            className="rounded-lg px-4 py-2 text-sm hover:bg-white/10 disabled:opacity-50"
-            disabled={saving}
-          >
-            Cancel
-          </button>
-          <button
-            onClick={submit}
-            className="rounded-lg px-4 py-2 text-sm text-white disabled:opacity-50 bg-[var(--accent,#2563eb)] hover:opacity-90"
-            disabled={saving}
-          >
-            {saving ? "Saving..." : "OK"}
-          </button>
+          {/* Footer */}
+          <div className="flex items-center justify-end gap-3 p-6 border-t border-white/10">
+            <button
+              onClick={() => onOpenChange(false)}
+              className="px-6 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={onSave}
+              disabled={saving}
+              className="px-6 py-2 rounded-lg bg-blue-500 hover:bg-blue-600 disabled:opacity-50 transition font-medium"
+            >
+              {saving ? "Saving..." : "OK"}
+            </button>
+          </div>
         </div>
       </div>
-
-      <style jsx>{`
-        .input{
-          width:100%;
-          border-radius:0.5rem;
-          border-width:1px;
-          padding:0.5rem 0.75rem;
-          font-size:0.875rem;
-          background: var(--bg,#0b0b0d);
-          color: var(--text,#e5e7eb);
-          border-color: var(--border,#1f2937);
-          outline: none;
-        }
-        .label{
-          display:block;
-          font-size:.75rem;
-          font-weight:600;
-          color: var(--text,#e5e7eb);
-          opacity:.75;
-          margin-bottom: .25rem;
-        }
-      `}</style>
     </div>
   );
 }
 
-function L({ label, children }: { label: string; children: React.ReactNode }) {
+function Section({ title, children, action }: { title: string; children: React.ReactNode; action?: React.ReactNode }) {
   return (
-    <div>
-      <label className="label">{label}</label>
+    <div className="border border-white/10 rounded-lg p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-semibold text-base">{title}</h3>
+        {action}
+      </div>
       {children}
     </div>
   );
 }
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <label className="block text-sm font-medium mb-1.5 opacity-90">{label}</label>
+      {children}
+    </div>
+  );
+}
+

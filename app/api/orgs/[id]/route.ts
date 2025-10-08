@@ -74,11 +74,22 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 
     const linkedin_url    = strOrNull(body.linkedin_url);
     const facebook_url    = strOrNull(body.facebook_url);
+    const alibaba_url     = strOrNull(body.alibaba_url);
+    const made_in_china_url = strOrNull(body.made_in_china_url);
+    const indiamart_url   = strOrNull(body.indiamart_url);
 
     const general_email   = strOrNull(body.general_email);
-    const contact_name    = strOrNull(body.contact_name);
-    const contact_email   = strOrNull(body.contact_email);
-    const contact_phone   = strOrNull(body.contact_phone);
+    
+    // Handle contacts array (new format) or legacy fields
+    let contacts = null;
+    if (Array.isArray(body.contacts) && body.contacts.length > 0) {
+      contacts = JSON.stringify(body.contacts.filter((c: any) => c.name || c.email || c.phone));
+    }
+    
+    // Legacy contact fields (for backward compatibility)
+    const contact_name    = strOrNull(body.contact_name) || (body.contacts?.[0]?.name ? strOrNull(body.contacts[0].name) : null);
+    const contact_email   = strOrNull(body.contact_email) || (body.contacts?.[0]?.email ? strOrNull(body.contacts[0].email) : null);
+    const contact_phone   = strOrNull(body.contact_phone) || (body.contacts?.[0]?.phone ? strOrNull(body.contacts[0].phone) : null);
 
     const status          = strOrNull(body.status);
     const size_tag        = strOrNull(body.size_tag);
@@ -110,7 +121,11 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
         industry        = ${industry},
         linkedin_url    = ${linkedin_url},
         facebook_url    = ${facebook_url},
+        alibaba_url     = ${alibaba_url},
+        made_in_china_url = ${made_in_china_url},
+        indiamart_url   = ${indiamart_url},
         general_email   = ${general_email},
+        contacts        = ${contacts === null ? null : sql/*sql*/`${contacts}::jsonb`},
         contact_name    = ${contact_name},
         contact_email   = ${contact_email},
         contact_phone   = ${contact_phone},

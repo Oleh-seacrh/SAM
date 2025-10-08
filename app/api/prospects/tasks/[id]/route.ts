@@ -106,30 +106,39 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       console.log("[PATCH] Moving to columnId:", colId, "newStatus:", newStatus);
 
       // Update timestamps based on column
-      const updates: Record<string, any> = {
-        column_id: colId,
-        status: newStatus,
-        updated_at: sql`NOW()`,
-      };
-
-      if (moveToColumnKey === "contacted" || moveToColumnKey === "send_offer") {
-        updates.contacted_at = sql`NOW()`;
-      } else if (moveToColumnKey === "waiting_reply") {
-        updates.replied_at = sql`NOW()`;
-      } else if (moveToColumnKey === "won") {
-        updates.won_at = sql`NOW()`;
-        updates.progress = 100;
-      } else if (moveToColumnKey === "lost") {
-        updates.lost_at = sql`NOW()`;
-      }
-
-      console.log("[PATCH] Updating with:", updates);
+      console.log("[PATCH] Updating task to columnId:", colId, "status:", newStatus);
       
-      await sql`
-        UPDATE prospect_tasks
-        SET ${sql(updates)}
-        WHERE id = ${id};
-      `;
+      if (moveToColumnKey === "contacted" || moveToColumnKey === "send_offer") {
+        await sql`
+          UPDATE prospect_tasks
+          SET column_id = ${colId}, status = ${newStatus}, contacted_at = NOW(), updated_at = NOW()
+          WHERE id = ${id};
+        `;
+      } else if (moveToColumnKey === "waiting_reply") {
+        await sql`
+          UPDATE prospect_tasks
+          SET column_id = ${colId}, status = ${newStatus}, replied_at = NOW(), updated_at = NOW()
+          WHERE id = ${id};
+        `;
+      } else if (moveToColumnKey === "won") {
+        await sql`
+          UPDATE prospect_tasks
+          SET column_id = ${colId}, status = ${newStatus}, won_at = NOW(), progress = 100, updated_at = NOW()
+          WHERE id = ${id};
+        `;
+      } else if (moveToColumnKey === "lost") {
+        await sql`
+          UPDATE prospect_tasks
+          SET column_id = ${colId}, status = ${newStatus}, lost_at = NOW(), updated_at = NOW()
+          WHERE id = ${id};
+        `;
+      } else {
+        await sql`
+          UPDATE prospect_tasks
+          SET column_id = ${colId}, status = ${newStatus}, updated_at = NOW()
+          WHERE id = ${id};
+        `;
+      }
       
       console.log("[PATCH] Task updated successfully");
     }

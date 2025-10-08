@@ -2,6 +2,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchByName, searchByEmail, searchByPhone, WebCandidate } from "@/lib/enrich/web";
 import { detectCountryLLM } from "@/lib/llmCountry";
+import { findPlatformsByName } from "@/lib/enrich/platforms";
+import { getSql } from "@/lib/db";
+import { getTenantIdFromSession } from "@/lib/auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -428,6 +431,66 @@ export async function POST(req: NextRequest) {
       }
     } catch (e: any) {
       console.warn("Country detection failed:", e?.message);
+    }
+
+    // platforms search (Alibaba, Made-in-China, IndiaMART)
+    if (bestName) {
+      try {
+        const sql = getSql();
+        const tenantId = await getTenantIdFromSession();
+        
+        // Get tenant settings for platform preferences
+        let platformsEnabled = { alibaba: true, madeInChina: false, indiamart: false };
+        try {
+          const rows = await sql`select enrich_config from tenant_settings where tenant_id = ${tenantId} limit 1`;
+          if (rows[0]?.enrich_config?.sources?.platforms) {
+            platformsEnabled = rows[0].enrich_config.sources.platforms;
+          }
+        } catch {
+          // Use defaults if settings not found
+        }
+
+        // Only search if at least one platform is enabled
+        if (platformsEnabled.alibaba || platformsEnabled.madeInChina || platformsEnabled.indiamart) {
+          console.log("[ENRICH] Searching platforms for:", bestName);
+          const platformResults = await findPlatformsByName(bestName, platformsEnabled, 10000);
+          
+          trace.platforms = {
+            searched: true,
+            resultsCount: platformResults.length,
+            enabled: platformsEnabled
+          };
+
+          // Add platform URLs as suggestions
+          for (const platform of platformResults) {
+            if (platform.source === "alibaba" && platform.website) {
+              pushUnique(suggestions, { 
+                field: "alibaba_url", 
+                value: platform.website, 
+                confidence: 0.8,
+                source: "alibaba-search"
+              });
+            } else if (platform.source === "madeInChina" && platform.website) {
+              pushUnique(suggestions, { 
+                field: "made_in_china_url", 
+                value: platform.website, 
+                confidence: 0.8,
+                source: "made-in-china-search"
+              });
+            } else if (platform.source === "indiamart" && platform.website) {
+              pushUnique(suggestions, { 
+                field: "indiamart_url", 
+                value: platform.website, 
+                confidence: 0.8,
+                source: "indiamart-search"
+              });
+            }
+          }
+        }
+      } catch (e: any) {
+        console.warn("Platform search failed:", e?.message);
+        trace.platforms = { searched: false, error: e?.message };
+      }
     }
 
     // 4) respond

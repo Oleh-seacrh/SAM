@@ -320,6 +320,27 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
       return null;
     }
 
+    if (field === "alibaba_url") {
+      if (value && value.includes("alibaba.com")) {
+        return { key: "alibaba_url", val: value };
+      }
+      return null;
+    }
+
+    if (field === "made_in_china_url") {
+      if (value && value.includes("made-in-china.com")) {
+        return { key: "made_in_china_url", val: value };
+      }
+      return null;
+    }
+
+    if (field === "indiamart_url") {
+      if (value && value.includes("indiamart.com")) {
+        return { key: "indiamart_url", val: value };
+      }
+      return null;
+    }
+
     return null;
   }
 
@@ -687,6 +708,14 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                           Facebook={enrichTrace.extracted?.socials?.facebook ? "✓" : "✗"},
                           Country={enrichTrace.extracted?.country ? "✓" : "✗"}
                         </div>
+                        {enrichTrace.platforms && (
+                          <div>
+                            <span>Platforms:</span>{" "}
+                            {enrichTrace.platforms.searched 
+                              ? `Found ${enrichTrace.platforms.resultsCount || 0} results` 
+                              : enrichTrace.platforms.error || "Not searched"}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

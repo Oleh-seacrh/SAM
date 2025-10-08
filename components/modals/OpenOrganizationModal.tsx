@@ -11,9 +11,12 @@ type Contact = {
   position?: string;
 };
 
+type OrgType = "client" | "prospect" | "supplier";
+
 type OrgDto = {
   id: string;
   name: string | null;
+  org_type: OrgType | null;
   domain: string | null;
   country: string | null;
   industry: string | null;
@@ -47,6 +50,7 @@ type Props = {
   onOpenChange: (v: boolean) => void;
   orgId: string;
   title?: string;
+  onInquiries?: (org: OrgDto) => void;
 };
 
 type Form = {
@@ -104,11 +108,12 @@ const emptyForm: Form = {
   tags: "",
 };
 
-export default function OpenOrganizationModal({ open, onOpenChange, orgId, title = "Organization" }: Props) {
+export default function OpenOrganizationModal({ open, onOpenChange, orgId, title = "Organization", onInquiries }: Props) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState<Form>(emptyForm);
+  const [orgData, setOrgData] = useState<OrgDto | null>(null);
 
   // enrichment
   const [enriching, setEnriching] = useState(false);
@@ -133,6 +138,8 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
     fetch(`/api/orgs/${orgId}`)
       .then(r => r.json())
       .then((data: OrgDto) => {
+        setOrgData(data);
+        
         // Migrate legacy contacts to new format
         let contacts: Contact[] = data.contacts || [];
         if (contacts.length === 0 && (data.contact_name || data.contact_email || data.contact_phone)) {
@@ -396,16 +403,52 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
 
   if (!open) return null;
 
+  const typeColor = (t?: OrgType | string | null) => {
+    switch (t) {
+      case "client":
+        return "bg-emerald-500";
+      case "prospect":
+        return "bg-amber-500";
+      case "supplier":
+        return "bg-sky-500";
+      default:
+        return "bg-zinc-600/70";
+    }
+  };
+
+  const typeLabel = (t?: OrgType | string | null) => {
+    return t || "—";
+  };
+
   return (
     <div className="fixed inset-0 z-[9999]">
       <div className="absolute inset-0 bg-black/60" onClick={() => onOpenChange(false)} />
       
       <div className="absolute inset-0 flex items-center justify-center p-4">
-        <div className="relative bg-[var(--card)] border border-white/10 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="relative bg-[#11161d] border border-white/10 rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+          {/* Colored left border */}
+          <div
+            className={`absolute left-0 top-0 h-full w-1 ${typeColor(orgData?.org_type)}`}
+            aria-hidden
+          />
+          
           {/* Header */}
           <div className="flex items-center justify-between p-6 border-b border-white/10">
-            <h2 className="text-xl font-semibold">{title}</h2>
+            <div className="flex items-center gap-3">
+              <h2 className="text-xl font-semibold">{title}</h2>
+              <span className="px-2 py-0.5 rounded text-xs border border-white/10 bg-white/5">
+                {typeLabel(orgData?.org_type)}
+              </span>
+            </div>
             <div className="flex gap-2">
+              {onInquiries && orgData && (
+                <button
+                  onClick={() => onInquiries(orgData)}
+                  className="px-4 py-2 rounded-lg border border-white/10 bg-white/5 hover:bg-white/10 transition text-sm"
+                >
+                  Inquiries
+                </button>
+              )}
               <button
                 onClick={onFindInfo}
                 disabled={enriching || loading}

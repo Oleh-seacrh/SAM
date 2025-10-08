@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Spinner } from "@/components/ui/Spinner";
 
 type Contact = {
   name: string;
@@ -473,8 +474,9 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
               <button
                 onClick={onFindInfo}
                 disabled={enriching || loading}
-                className="px-4 py-2 rounded-lg border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50 transition text-sm"
+                className="px-4 py-2 rounded-lg border border-purple-500/40 bg-purple-500/10 hover:bg-purple-500/20 disabled:opacity-50 transition text-sm flex items-center gap-2"
               >
+                {enriching && <Spinner />}
                 {enriching ? "Searching..." : "Find info"}
               </button>
               <button

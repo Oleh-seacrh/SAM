@@ -140,9 +140,12 @@ export function ProspectTasksView() {
     if (e.currentTarget instanceof HTMLElement) {
       e.currentTarget.style.opacity = "1";
     }
-    setDragId(null);
-    // Delay resetting isDragging to prevent onClick from firing
-    setTimeout(() => setIsDragging(false), 100);
+    // Don't reset dragId immediately - onDrop needs it and fires after onDragEnd
+    // Reset dragId after a short delay to allow onDrop to complete first
+    setTimeout(() => {
+      setDragId(null);
+      setIsDragging(false);
+    }, 100);
   }
 
   function onDragOver(e: React.DragEvent) {
@@ -157,10 +160,14 @@ export function ProspectTasksView() {
       return;
     }
     
-    console.log("[onDrop] Dropping task", dragId, "to column", col.key, "columnId", col.id);
+    // Capture dragId before resetting it
+    const taskId = dragId;
+    setDragId(null);
+    
+    console.log("[onDrop] Dropping task", taskId, "to column", col.key, "columnId", col.id);
     
     try {
-      const response = await fetch(`/api/prospects/tasks/${dragId}`, {
+      const response = await fetch(`/api/prospects/tasks/${taskId}`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ moveToColumnKey: col.key }),
@@ -178,7 +185,6 @@ export function ProspectTasksView() {
       console.error("[onDrop] Exception:", error);
     }
     
-    setDragId(null);
     await load();
   }
 

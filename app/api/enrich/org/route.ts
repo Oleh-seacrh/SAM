@@ -251,7 +251,21 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (!domain) {
+    // Check if web search is enabled in settings
+    const sql = getSql();
+    const tenantId = await getTenantIdFromSession();
+    let webSearchEnabled = true; // default
+    
+    try {
+      const rows = await sql`select enrich_config from tenant_settings where tenant_id = ${tenantId} limit 1`;
+      if (rows[0]?.enrich_config?.sources?.web !== undefined) {
+        webSearchEnabled = rows[0].enrich_config.sources.web;
+      }
+    } catch {
+      // Use default if settings not found
+    }
+
+    if (!domain && webSearchEnabled) {
       let candidates: WebCandidate[] = [];
       
       // Try 1: search by name (if provided)
@@ -281,6 +295,8 @@ export async function POST(req: NextRequest) {
           trace.domainResolution.push({ stage: "homepage.pick", result: "miss" });
         }
       }
+    } else if (!domain && !webSearchEnabled) {
+      trace.domainResolution.push({ stage: "web-search", result: "miss", value: "disabled in settings" });
     }
 
     if (!domain) {
@@ -434,12 +450,12 @@ export async function POST(req: NextRequest) {
     }
 
     // platforms search (Alibaba, Made-in-China, IndiaMART)
-    if (bestName) {
+    // Використовуємо bestName або name якщо є
+    const searchName = bestName || name;
+    
+    if (searchName || emailIn || phoneIn) {
       try {
-        const sql = getSql();
-        const tenantId = await getTenantIdFromSession();
-        
-        // Get tenant settings for platform preferences
+        // Get tenant settings for platform preferences (reuse sql/tenantId from above)
         let platformsEnabled = { alibaba: true, madeInChina: false, indiamart: false };
         try {
           const rows = await sql`select enrich_config from tenant_settings where tenant_id = ${tenantId} limit 1`;
@@ -452,18 +468,19 @@ export async function POST(req: NextRequest) {
 
         // Only search if at least one platform is enabled
         if (platformsEnabled.alibaba || platformsEnabled.madeInChina || platformsEnabled.indiamart) {
-          console.log("[ENRICH] Searching platforms for:", bestName, {
-            email: emails[0],
-            phone: phones[0]
+          console.log("[ENRICH] Searching platforms for:", searchName, {
+            email: emailIn || emails[0],
+            phone: phoneIn || phones[0],
+            webSearchDisabled: !webSearchEnabled
           });
           
           const platformResults = await findPlatformsByName(
-            bestName, 
+            searchName || "", 
             platformsEnabled, 
             15000, // Збільшено timeout для парсингу
             {
-              email: emails[0],
-              phone: phones[0],
+              email: emailIn || emails[0],
+              phone: phoneIn || phones[0],
               parsePage: true // Парсити знайдені сторінки
             }
           );
@@ -573,11 +590,11 @@ export async function POST(req: NextRequest) {
     }
 
     // social media search (Facebook, LinkedIn)
-    if (bestName) {
+    if (searchName) {
       try {
-        console.log("[ENRICH] Searching social media for:", bestName);
-        const socialResults = await findSocialMedia(bestName, {
-          email: emails[0],
+        console.log("[ENRICH] Searching social media for:", searchName);
+        const socialResults = await findSocialMedia(searchName, {
+          email: emailIn || emails[0],
           domain: domain || undefined
         });
 

@@ -738,7 +738,9 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                 {suggestions.length > 0 && (
                   <div className="mt-4 space-y-2">
                     <div className="font-semibold text-sm">Suggestions:</div>
-                    {suggestions.map((s, i) => {
+                    {suggestions
+                      .filter(s => s.field !== "company.displayName") // Фільтруємо дублікат
+                      .map((s, i) => {
                       // Іконки для різних джерел
                       const getSourceIcon = (source?: string) => {
                         if (!source) return null;

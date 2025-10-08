@@ -142,22 +142,12 @@ export async function POST(req: NextRequest) {
       return "prospect";
     })();
 
-    // ім'я з фолбеками
-    let name = normName(body?.name);
+    // ім'я і емейли
+    const name = normName(body?.name) || null;  // no fallback, null if empty
     const emailsArr: string[] = Array.isArray(body?.emails)
       ? (body.emails.map(normEmail).filter(Boolean) as string[])
       : [];
-    if (!name) {
-      if (domain) {
-        const base = domain.split(".")[0] || "Unnamed";
-        name = base.charAt(0).toUpperCase() + base.slice(1);
-      } else if (emailsArr[0]) {
-        const base = (emailsArr[0].split("@")[1] || "").split(".")[0] || "Unnamed";
-        name = base.charAt(0).toUpperCase() + base.slice(1);
-      } else {
-        name = "Unnamed";
-      }
-    }
+    const phoneRaw = body?.phone ? String(body.phone).trim() : null;
 
     // optional-поля, які можемо отримати уже на створенні
     const status          = body?.status ?? null;
@@ -166,9 +156,9 @@ export async function POST(req: NextRequest) {
     const tags            = normTags(body?.tags);
     const industry        = body?.industry ?? null;
     const contact_person  = body?.contact_person ?? null;
-    const phone           = body?.phone ?? null;
-    const general_email   = normEmail(body?.general_email) ?? emailsArr[0] ?? null;
-    const contact_email   = normEmail(body?.contact_email) ?? emailsArr[1] ?? null;
+    const phone           = phoneRaw;
+    const general_email   = normEmail(body?.general_email) || emailsArr[0] || null;
+    const contact_email   = normEmail(body?.contact_email) || emailsArr[1] || null;
 
     /* ---------- HARD LOCK: domain exact ---------- */
     if (domain) {
@@ -241,35 +231,22 @@ export async function POST(req: NextRequest) {
 
     /* ---------- INSERT мінімальний (як у тебе було) ---------- */
     const orgRows = await sql/*sql*/`
-      insert into organizations (name, org_type, domain, country)
-      values (${name || null}, ${org_type}, ${domain}, ${country})
+      insert into organizations (
+        name, org_type, domain, country,
+        general_email, contact_email, phone,
+        status, size_tag, source, tags, industry, contact_person
+      )
+      values (
+        ${name}, ${org_type}, ${domain}, ${country},
+        ${general_email}, ${contact_email}, ${phone},
+        ${status}, ${size_tag}, ${source}, ${tags}, ${industry}, ${contact_person}
+      )
       returning *;
     `;
     const org = orgRows[0];
 
-    /* ---------- Одразу доновлюємо optional-поля, якщо вони є ---------- */
-    try {
-      await sql/*sql*/`
-        update organizations
-        set
-          status          = ${status},
-          size_tag        = ${size_tag},
-          source          = ${source},
-          tags            = ${tags},
-          industry        = ${industry},
-          contact_person  = ${contact_person},
-          phone           = ${phone},
-          general_email   = coalesce(${general_email}, general_email),
-          contact_email   = coalesce(${contact_email}, contact_email)
-        where id = ${org.id};
-      `;
-    } catch {
-      // якщо якихось колонок немає — ігноруємо, створення вже відбулось
-    }
-
-    // Повернемо оновлений рядок (щоб на UI відразу бачити всі поля)
-    const full = (await sql/*sql*/`select * from organizations where id = ${org.id} limit 1;`)[0];
-    return new Response(JSON.stringify({ id: full.id, org: full }), {
+    // Повернемо створений рядок
+    return new Response(JSON.stringify({ id: org.id, org }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });

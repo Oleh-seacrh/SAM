@@ -338,7 +338,7 @@ function Row({
             />
             <div className="min-w-0">
               <div className="text-lg font-semibold leading-tight truncate">
-                {item.name || "—"}
+                {item.name || contactPerson || generalEmail || personalEmail || phone || "—"}
               </div>
               <div className="mt-0.5 flex items-center gap-2">
                 <span className="px-1.5 py-0.5 rounded text-[11px] bg-white/10">
@@ -837,8 +837,17 @@ function NewLeadModal({
   return (
     <div className="fixed inset-0 z-[50]">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="absolute inset-0 overflow-auto">
-        <Modal title="New Lead" onClose={onClose}>
+      <div className="absolute inset-0 overflow-auto flex items-center justify-center p-4">
+        <div className="relative bg-[#11161d] border border-white/10 rounded-2xl w-full max-w-3xl p-6 shadow-2xl">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-semibold">New Lead</h2>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg border border-white/10 hover:bg-white/10 transition"
+            >
+              ✕
+            </button>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <div className="text-xs text-muted-foreground mb-1">Name (optional)</div>
@@ -924,10 +933,21 @@ function NewLeadModal({
           )}
 
           <div className="pt-4 flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
-            <Button onClick={() => create()} disabled={saving}>{saving ? "Creating…" : "Create"}</Button>
+            <button
+              onClick={onClose}
+              className="px-4 py-2 rounded-lg border border-white/10 hover:bg-white/10 transition text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => create()}
+              disabled={saving}
+              className="px-4 py-2 rounded-lg bg-white/10 hover:bg-white/15 border border-white/10 disabled:opacity-50 transition text-sm font-medium"
+            >
+              {saving ? "Creating…" : "Create"}
+            </button>
           </div>
-        </Modal>
+        </div>
       </div>
 
       {/* Soft-lock діалог */}
@@ -1147,7 +1167,12 @@ export default function ClientsPage() {
     <div className="p-4 md:p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold tracking-tight">Clients (CRM)</h1>
-        <Button onClick={() => setShowNew(true)}>New Lead</Button>
+        <button 
+          onClick={() => setShowNew(true)}
+          className="px-4 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-sm font-medium transition-colors"
+        >
+          New Lead
+        </button>
       </div>
 
       {/* toolbar */}

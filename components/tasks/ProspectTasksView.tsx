@@ -127,6 +127,18 @@ export function ProspectTasksView() {
     setDragId(taskId);
     e.dataTransfer.setData("text/plain", String(taskId));
     e.dataTransfer.effectAllowed = "move";
+
+    // Add visual feedback
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = "0.5";
+    }
+  }
+
+  function onDragEnd(e: React.DragEvent) {
+    // Reset visual feedback
+    if (e.currentTarget instanceof HTMLElement) {
+      e.currentTarget.style.opacity = "1";
+    }
   }
 
   function onDragOver(e: React.DragEvent) {
@@ -183,6 +195,7 @@ export function ProspectTasksView() {
                     key={task.id}
                     draggable
                     onDragStart={(e) => onDragStart(e, task.id)}
+                    onDragEnd={onDragEnd}
                     className="rounded-lg bg-black/20 border border-white/10 p-3 hover:bg-black/30 transition space-y-2"
                   >
                     <div className="font-medium text-sm">{task.title}</div>
@@ -257,9 +270,8 @@ export function ProspectTasksView() {
       {/* Task Detail Modal */}
       <Modal open={open} onClose={() => setOpen(false)}>
         {selectedTask && (
-          <div>
-            <h2 className="text-xl font-semibold mb-4">{selectedTask.title}</h2>
           <div className="space-y-4">
+            <h2 className="text-xl font-semibold mb-4">{selectedTask.title}</h2>
             <div className="space-y-2">
               <div>
                 <strong>Company:</strong> {selectedTask.companyName || "N/A"}
@@ -341,10 +353,8 @@ export function ProspectTasksView() {
               </button>
             </div>
           </div>
-          </div>
         )}
       </Modal>
     </div>
   );
 }
-

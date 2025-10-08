@@ -716,6 +716,14 @@ export default function OpenOrganizationModal({ open, onOpenChange, orgId, title
                               : enrichTrace.platforms.error || "Not searched"}
                           </div>
                         )}
+                        {enrichTrace.socialMedia && (
+                          <div>
+                            <span>Social Media:</span>{" "}
+                            {enrichTrace.socialMedia.searched 
+                              ? `LinkedIn: ${enrichTrace.socialMedia.found?.linkedin ? "✓" : "✗"}, Facebook: ${enrichTrace.socialMedia.found?.facebook ? "✓" : "✗"}` 
+                              : enrichTrace.socialMedia.error || "Not searched"}
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>

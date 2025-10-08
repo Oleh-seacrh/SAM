@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchByName, searchByEmail, searchByPhone, WebCandidate } from "@/lib/enrich/web";
 import { detectCountryLLM } from "@/lib/llmCountry";
-import { findPlatformsByName } from "@/lib/enrich/platforms";
+import { findPlatformsByName, findSocialMedia } from "@/lib/enrich/platforms";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
 
@@ -452,8 +452,21 @@ export async function POST(req: NextRequest) {
 
         // Only search if at least one platform is enabled
         if (platformsEnabled.alibaba || platformsEnabled.madeInChina || platformsEnabled.indiamart) {
-          console.log("[ENRICH] Searching platforms for:", bestName);
-          const platformResults = await findPlatformsByName(bestName, platformsEnabled, 10000);
+          console.log("[ENRICH] Searching platforms for:", bestName, {
+            email: emails[0],
+            phone: phones[0]
+          });
+          
+          const platformResults = await findPlatformsByName(
+            bestName, 
+            platformsEnabled, 
+            15000, // Збільшено timeout для парсингу
+            {
+              email: emails[0],
+              phone: phones[0],
+              parsePage: true // Парсити знайдені сторінки
+            }
+          );
           
           trace.platforms = {
             searched: true,
@@ -467,29 +480,135 @@ export async function POST(req: NextRequest) {
               pushUnique(suggestions, { 
                 field: "alibaba_url", 
                 value: platform.website, 
-                confidence: 0.8,
+                confidence: 0.85,
                 source: "alibaba-search"
               });
+              
+              // Додати контакти з Alibaba сторінки
+              if (platform.emails?.length) {
+                platform.emails.forEach(email => {
+                  pushUnique(suggestions, {
+                    field: "general_email",
+                    value: email,
+                    confidence: 0.75,
+                    source: "alibaba-page"
+                  });
+                });
+              }
+              if (platform.phones?.length) {
+                platform.phones.forEach(phone => {
+                  pushUnique(suggestions, {
+                    field: "phone",
+                    value: phone,
+                    confidence: 0.75,
+                    source: "alibaba-page"
+                  });
+                });
+              }
             } else if (platform.source === "madeInChina" && platform.website) {
               pushUnique(suggestions, { 
                 field: "made_in_china_url", 
                 value: platform.website, 
-                confidence: 0.8,
+                confidence: 0.85,
                 source: "made-in-china-search"
               });
+              
+              // Додати контакти з Made-in-China сторінки
+              if (platform.emails?.length) {
+                platform.emails.forEach(email => {
+                  pushUnique(suggestions, {
+                    field: "general_email",
+                    value: email,
+                    confidence: 0.75,
+                    source: "made-in-china-page"
+                  });
+                });
+              }
+              if (platform.phones?.length) {
+                platform.phones.forEach(phone => {
+                  pushUnique(suggestions, {
+                    field: "phone",
+                    value: phone,
+                    confidence: 0.75,
+                    source: "made-in-china-page"
+                  });
+                });
+              }
             } else if (platform.source === "indiamart" && platform.website) {
               pushUnique(suggestions, { 
                 field: "indiamart_url", 
                 value: platform.website, 
-                confidence: 0.8,
+                confidence: 0.85,
                 source: "indiamart-search"
               });
+              
+              // Додати контакти з IndiaMART сторінки
+              if (platform.emails?.length) {
+                platform.emails.forEach(email => {
+                  pushUnique(suggestions, {
+                    field: "general_email",
+                    value: email,
+                    confidence: 0.75,
+                    source: "indiamart-page"
+                  });
+                });
+              }
+              if (platform.phones?.length) {
+                platform.phones.forEach(phone => {
+                  pushUnique(suggestions, {
+                    field: "phone",
+                    value: phone,
+                    confidence: 0.75,
+                    source: "indiamart-page"
+                  });
+                });
+              }
             }
           }
         }
       } catch (e: any) {
         console.warn("Platform search failed:", e?.message);
         trace.platforms = { searched: false, error: e?.message };
+      }
+    }
+
+    // social media search (Facebook, LinkedIn)
+    if (bestName) {
+      try {
+        console.log("[ENRICH] Searching social media for:", bestName);
+        const socialResults = await findSocialMedia(bestName, {
+          email: emails[0],
+          domain: domain || undefined
+        });
+
+        trace.socialMedia = {
+          searched: true,
+          found: {
+            linkedin: !!socialResults.linkedin,
+            facebook: !!socialResults.facebook
+          }
+        };
+
+        if (socialResults.linkedin) {
+          pushUnique(suggestions, {
+            field: "linkedin_url",
+            value: socialResults.linkedin,
+            confidence: 0.9,
+            source: "social-search"
+          });
+        }
+
+        if (socialResults.facebook) {
+          pushUnique(suggestions, {
+            field: "facebook_url",
+            value: socialResults.facebook,
+            confidence: 0.9,
+            source: "social-search"
+          });
+        }
+      } catch (e: any) {
+        console.warn("Social media search failed:", e?.message);
+        trace.socialMedia = { searched: false, error: e?.message };
       }
     }
 

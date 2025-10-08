@@ -130,35 +130,43 @@ function validatePhoneCandidate(raw: string): string | null {
 
 function cleanPhoneRaw(text: string): string[] {
   const phones = new Map<string, number>(); // phone -> priority
-  const body = text.replace(/<[^>]+>/g, " ");
   
-  // Priority 1: tel: links
+  // Keep full text with HTML for better context extraction
+  const fullText = text;
+  const plainText = text.replace(/<[^>]+>/g, " ");
+  
+  // Priority 1: tel: links (highest - most reliable)
   const telLinks = /href=["']tel:([^"']+)["']/gi;
-  for (const m of body.matchAll(telLinks)) {
+  for (const m of fullText.matchAll(telLinks)) {
     const validated = validatePhoneCandidate(m[1]);
     if (validated) phones.set(validated, (phones.get(validated) || 0) + 10);
   }
   
-  // Priority 2: Labels (phone, tel, contact, etc.)
-  const labelPattern = /(?:phone|tel|telephone|mobile|fax|contact|тел|телефон|моб)[\s:]{0,5}(\+?\d[\d()\s\-]{6,}\d)/gi;
-  for (const m of body.matchAll(labelPattern)) {
+  // Priority 2: Extract from visible text near labels with more context
+  // Look for patterns like "Call ... +44 (0) 1992 571 775" or "Phone: +44..."
+  const labelPatternExtended = /(?:call|phone|tel|telephone|mobile|fax|contact|тел|телефон|моб)[^<>\d]{0,30}?(\+\d{1,3}[\s\-.()\d]{8,25})/gi;
+  for (const m of plainText.matchAll(labelPatternExtended)) {
     const validated = validatePhoneCandidate(m[1]);
-    if (validated) phones.set(validated, (phones.get(validated) || 0) + 8);
+    if (validated) phones.set(validated, (phones.get(validated) || 0) + 9);
   }
   
-  // Priority 3: International format
-  const intlPattern = /(?:\+|00)\d{1,3}[\s\-.]?\d{1,4}[\s\-.]?\d{1,4}[\s\-.]?\d{1,9}/g;
-  for (const m of body.matchAll(intlPattern)) {
+  // Priority 3: International format with country code
+  const intlPattern = /\+\d{1,3}[\s\-.()\d]{8,20}/g;
+  for (const m of plainText.matchAll(intlPattern)) {
     const validated = validatePhoneCandidate(m[0]);
-    if (validated) phones.set(validated, (phones.get(validated) || 0) + 5);
+    if (validated) phones.set(validated, (phones.get(validated) || 0) + 7);
   }
   
-  // Priority 4: General pattern (lower priority)
-  const generalPattern = /\+?\d[\d()\s\-]{6,}\d/g;
-  for (const m of body.matchAll(generalPattern)) {
-    const validated = validatePhoneCandidate(m[0]);
-    if (validated && !phones.has(validated)) {
-      phones.set(validated, 2);
+  // Priority 4: Look in footer/header sections (common locations)
+  const footerMatch = /<footer[^>]*>([\s\S]*?)<\/footer>/gi;
+  const headerMatch = /<header[^>]*>([\s\S]*?)<\/header>/gi;
+  
+  for (const section of [...fullText.matchAll(footerMatch), ...fullText.matchAll(headerMatch)]) {
+    const sectionText = section[1].replace(/<[^>]+>/g, " ");
+    const phoneInSection = /\+\d{1,3}[\s\-.()\d]{8,20}/g;
+    for (const m of sectionText.matchAll(phoneInSection)) {
+      const validated = validatePhoneCandidate(m[0]);
+      if (validated) phones.set(validated, (phones.get(validated) || 0) + 8);
     }
   }
   
@@ -277,15 +285,23 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ suggestions: [], reason: "domain_not_resolved" as const, trace }, { status: 200 });
     }
 
-    // 2) fetch common pages
+    // 2) fetch common pages - expanded list for better data extraction
     const origin = `https://${domain}/`;
     const paths = [
-      "", // homepage
-      "about", "about-us", "company", "company/about", "о-нас", "про-нас", "о-компании",
-      "contact", "contacts", "contact-us", "контакты", "контакти", "зв'язок",
-      "en/contact", "en/about", "en/about-us",
-      "ua/contact", "ua/about", "ua/about-us",
-      "ru/contact", "ru/about", "ru/about-us"
+      "", // homepage (often has contact in footer)
+      // About pages
+      "about", "about-us", "about-company", "company", "company/about", 
+      "о-нас", "про-нас", "о-компании", "about.html",
+      // Contact pages (high priority for phones/emails)
+      "contact", "contacts", "contact-us", "get-in-touch", "reach-us",
+      "контакты", "контакти", "зв'язок", "contact.html",
+      // Multi-language variants
+      "en", "en/contact", "en/about", "en/about-us", "en/contact-us",
+      "ua", "ua/contact", "ua/about", "ua/about-us",
+      "ru", "ru/contact", "ru/about", "ru/about-us",
+      "de/kontakt", "fr/contact", "es/contacto",
+      // Footer/Header specific pages
+      "footer", "header", "site-map", "sitemap"
     ];
     const pages: Array<{ url: string; html: string }> = [];
     for (const p of paths) {
@@ -319,6 +335,13 @@ export async function POST(req: NextRequest) {
     // name
     let bestName: string | null = null;
     let nameSource: "jsonld" | "og" | "title" = "title";
+    
+    // Blacklist for invalid company names
+    const invalidNames = [
+      'contact', 'home', 'welcome', 'about', 'index', 'main',
+      'untitled', 'default', 'page', 'site', 'website'
+    ];
+    
     for (const pg of pages) {
       const jsonLdName = extractJsonLdName(pg.html);
       const ogName = extractOG(pg.html, "title");
@@ -328,8 +351,17 @@ export async function POST(req: NextRequest) {
       if (jsonLdName) nameSource = "jsonld";
       else if (ogName) nameSource = "og";
       
-      if (t && (!bestName || t.length < (bestName.length || 999))) bestName = t;
+      // Skip if name is too short or in blacklist
+      if (t && t.length >= 3) {
+        const normalized = t.toLowerCase().trim();
+        const isInvalid = invalidNames.some(inv => normalized === inv || normalized.startsWith(inv + ' ') || normalized.endsWith(' ' + inv));
+        
+        if (!isInvalid && (!bestName || t.length < (bestName.length || 999))) {
+          bestName = t;
+        }
+      }
     }
+    
     if (bestName) {
       trace.extracted.name = true;
       // Higher confidence for structured data (JSON-LD), medium for OG, lower for title
@@ -378,11 +410,12 @@ export async function POST(req: NextRequest) {
 
     // country detection using LLM
     try {
-      const allText = pages.map(p => p.html).join(" ").slice(0, 50000);
+      // Remove all limits - use full HTML content for better accuracy
+      const allText = pages.map(p => p.html).join(" ");
       const countryResult = await detectCountryLLM({
         text: allText,
         domain: domain || "",
-        phones: phones.slice(0, 3),
+        phones: phones,
       });
       
       if (countryResult?.iso2) {

@@ -449,91 +449,97 @@ export async function POST(req: NextRequest) {
       console.warn("Country detection failed:", e?.message);
     }
 
-    // platforms search (Alibaba, Made-in-China, IndiaMART)
-    // Використовуємо bestName або name або витягуємо з domain
-    let searchName = bestName || name;
-    if (!searchName && domain) {
-      // Якщо немає назви, спробуємо з domain (e.g., "xraymedem.com" -> "Xraymedem")
+    // ============================================================================
+    // НЕЗАЛЕЖНИЙ пошук на платформах (Alibaba, LinkedIn, Facebook)
+    // Виконується ЗАВЖДИ якщо є назва, незалежно від domain чи інших результатів
+    // ============================================================================
+    
+    // Визначаємо назву для пошуку
+    let platformSearchName = bestName || name;
+    if (!platformSearchName && domain) {
+      // Якщо немає назви, витягуємо з domain: "xraymedem.com" -> "Xraymedem"
       const domainParts = domain.split('.');
       if (domainParts[0]) {
-        searchName = domainParts[0].charAt(0).toUpperCase() + domainParts[0].slice(1);
+        platformSearchName = domainParts[0].charAt(0).toUpperCase() + domainParts[0].slice(1);
       }
     }
     
-    if (searchName || emailIn || phoneIn) {
+    console.log("[ENRICH] Platform search name:", platformSearchName);
+    
+    // Отримуємо settings для платформ
+    let platformsEnabled = { alibaba: true, madeInChina: false, indiamart: false };
+    try {
+      const rows = await sql`select enrich_config from tenant_settings where tenant_id = ${tenantId} limit 1`;
+      if (rows[0]?.enrich_config?.sources?.platforms) {
+        platformsEnabled = rows[0].enrich_config.sources.platforms;
+      }
+    } catch {
+      // Use defaults if settings not found
+    }
+
+    // ALIBABA, Made-in-China, IndiaMART пошук
+    if (platformSearchName && (platformsEnabled.alibaba || platformsEnabled.madeInChina || platformsEnabled.indiamart)) {
       try {
-        // Get tenant settings for platform preferences (reuse sql/tenantId from above)
-        let platformsEnabled = { alibaba: true, madeInChina: false, indiamart: false };
-        try {
-          const rows = await sql`select enrich_config from tenant_settings where tenant_id = ${tenantId} limit 1`;
-          if (rows[0]?.enrich_config?.sources?.platforms) {
-            platformsEnabled = rows[0].enrich_config.sources.platforms;
-          }
-        } catch {
-          // Use defaults if settings not found
-        }
+        console.log("[ENRICH] Simple platform search:", {
+          searchName: platformSearchName,
+          platformsEnabled
+        });
+        
+        // ПРОСТИЙ пошук через Google "Company Name + Platform"
+        const simplePlatformResults = await findPlatformsSimple(
+          platformSearchName, 
+          platformsEnabled
+        );
+        
+        console.log("[ENRICH] Simple platform results:", simplePlatformResults);
+        
+        trace.platforms = {
+          searched: true,
+          resultsCount: Object.keys(simplePlatformResults).filter(k => simplePlatformResults[k as keyof typeof simplePlatformResults]).length,
+          enabled: platformsEnabled,
+          simple: true
+        };
 
-        // Only search if at least one platform is enabled
-        if (platformsEnabled.alibaba || platformsEnabled.madeInChina || platformsEnabled.indiamart) {
-          console.log("[ENRICH] Simple platform search:", {
-            searchName,
-            platformsEnabled
+        // Add platform URLs as suggestions (просто URLs, без парсингу)
+        if (simplePlatformResults.alibaba) {
+          pushUnique(suggestions, { 
+            field: "alibaba_url", 
+            value: simplePlatformResults.alibaba, 
+            confidence: 0.8,
+            source: "google-search"
           });
-          
-          // ПРОСТИЙ пошук через Google "Company Name + Platform"
-          const simplePlatformResults = await findPlatformsSimple(
-            searchName || "", 
-            platformsEnabled
-          );
-          
-          console.log("[ENRICH] Simple platform results:", simplePlatformResults);
-          
-          trace.platforms = {
-            searched: true,
-            resultsCount: Object.keys(simplePlatformResults).filter(k => simplePlatformResults[k as keyof typeof simplePlatformResults]).length,
-            enabled: platformsEnabled,
-            simple: true
-          };
-
-          // Add platform URLs as suggestions (просто URLs, без парсингу)
-          if (simplePlatformResults.alibaba) {
-            pushUnique(suggestions, { 
-              field: "alibaba_url", 
-              value: simplePlatformResults.alibaba, 
-              confidence: 0.8,
-              source: "google-search"
-            });
-          }
-          
-          if (simplePlatformResults.madeInChina) {
-            pushUnique(suggestions, { 
-              field: "made_in_china_url", 
-              value: simplePlatformResults.madeInChina, 
-              confidence: 0.8,
-              source: "google-search"
-            });
-          }
-          
-          if (simplePlatformResults.indiamart) {
-            pushUnique(suggestions, { 
-              field: "indiamart_url", 
-              value: simplePlatformResults.indiamart, 
-              confidence: 0.8,
-              source: "google-search"
-            });
-          }
+        }
+        
+        if (simplePlatformResults.madeInChina) {
+          pushUnique(suggestions, { 
+            field: "made_in_china_url", 
+            value: simplePlatformResults.madeInChina, 
+            confidence: 0.8,
+            source: "google-search"
+          });
+        }
+        
+        if (simplePlatformResults.indiamart) {
+          pushUnique(suggestions, { 
+            field: "indiamart_url", 
+            value: simplePlatformResults.indiamart, 
+            confidence: 0.8,
+            source: "google-search"
+          });
         }
       } catch (e: any) {
         console.warn("Platform search failed:", e?.message);
         trace.platforms = { searched: false, error: e?.message };
       }
+    } else {
+      trace.platforms = { searched: false, reason: platformSearchName ? "platforms disabled" : "no search name" };
     }
 
-    // social media search (Facebook, LinkedIn)
-    if (searchName) {
+    // LINKEDIN & FACEBOOK пошук (також незалежний)
+    if (platformSearchName) {
       try {
-        console.log("[ENRICH] Searching social media for:", searchName);
-        const socialResults = await findSocialMedia(searchName, {
+        console.log("[ENRICH] Searching social media for:", platformSearchName);
+        const socialResults = await findSocialMedia(platformSearchName, {
           email: emailIn || emails[0],
           domain: domain || undefined
         });

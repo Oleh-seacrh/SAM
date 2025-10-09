@@ -186,22 +186,63 @@ export async function findSocialMedia(
  */
 export async function findPlatformsSimple(
   name: string,
-  enabled: { alibaba: boolean; madeInChina: boolean; indiamart: boolean }
+  enabled: { alibaba: boolean; madeInChina: boolean; indiamart: boolean },
+  options?: {
+    email?: string;
+    phone?: string;
+  }
 ): Promise<{ alibaba?: string; madeInChina?: string; indiamart?: string }> {
   const result: { alibaba?: string; madeInChina?: string; indiamart?: string } = {};
 
+  console.log("[findPlatformsSimple] Starting search:", { name, enabled, options });
+
   try {
-    // Alibaba пошук - просто "Company Name Alibaba"
-    if (enabled.alibaba && name) {
-      const alibabaRes = await searchWeb(`"${name}" Alibaba`, 3, 1).catch(() => null);
-      if (alibabaRes?.items) {
-        const alibabaLink = alibabaRes.items.find(item => 
-          item.link.includes('alibaba.com') && 
-          (item.link.includes('/company/') || item.link.includes('.alibaba.com'))
-        );
-        if (alibabaLink) {
-          result.alibaba = alibabaLink.link;
+    // Alibaba пошук - МНОЖИННІ варіанти пошуку
+    if (enabled.alibaba && (name || options?.email || options?.phone)) {
+      const queries: string[] = [];
+      
+      // 1. Назва компанії
+      if (name) queries.push(`"${name}" Alibaba`);
+      
+      // 2. Email (часто найкращий результат!)
+      if (options?.email) queries.push(`"${options.email}" Alibaba`);
+      
+      // 3. Телефон
+      if (options?.phone) {
+        const cleanPhone = options.phone.replace(/\D/g, '');
+        if (cleanPhone.length >= 8) {
+          queries.push(`"${cleanPhone}" Alibaba`);
         }
+      }
+
+      // Пробуємо по черзі, зупиняємось як знайдемо
+      for (const query of queries) {
+        console.log("[findPlatformsSimple] Searching Alibaba:", query);
+        const alibabaRes = await searchWeb(query, 5, 1).catch((err) => {
+          console.error("[findPlatformsSimple] Alibaba search error:", err);
+          return null;
+        });
+        console.log("[findPlatformsSimple] Alibaba response:", alibabaRes ? `${alibabaRes.items?.length || 0} items` : 'null');
+        
+        if (alibabaRes?.items && alibabaRes.items.length > 0) {
+          // Шукаємо посилання на alibaba.com
+          const alibabaLink = alibabaRes.items.find(item => 
+            item.link.includes('alibaba.com') && 
+            (item.link.includes('/company/') || item.link.includes('.alibaba.com'))
+          );
+          
+          if (alibabaLink) {
+            console.log("[findPlatformsSimple] Found Alibaba link:", alibabaLink.link);
+            result.alibaba = alibabaLink.link;
+            break; // Знайшли - виходимо з циклу
+          } else {
+            console.log("[findPlatformsSimple] No matching Alibaba link in results for:", query);
+          }
+        }
+      }
+      
+      if (!result.alibaba) {
+        console.log("[findPlatformsSimple] Alibaba NOT found after trying all queries");
       }
     }
 
@@ -231,8 +272,9 @@ export async function findPlatformsSimple(
       }
     }
   } catch (e) {
-    console.error('Platform search error:', e);
+    console.error('[findPlatformsSimple] Platform search error:', e);
   }
 
+  console.log("[findPlatformsSimple] Final result:", result);
   return result;
 }

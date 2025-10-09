@@ -45,11 +45,21 @@ export async function searchWeb(q: string, num: number = 5, start: number = 1): 
   try {
     const res = await fetch(url.toString(), { cache: "no-store" });
     if (!res.ok) {
-      // 4xx/5xx → повертаємо порожньо
+      // 4xx/5xx → логуємо і повертаємо порожньо
+      const errorText = await res.text().catch(() => "");
+      console.error("[searchWeb] Google CSE error:", {
+        status: res.status,
+        statusText: res.statusText,
+        query: q,
+        error: errorText
+      });
       return { items: [] };
     }
     const json = await res.json();
     const rawItems = Array.isArray(json?.items) ? json.items : [];
+    
+    console.log("[searchWeb] Query:", q, "→ Results:", rawItems.length);
+    
     const items: CSEItem[] = rawItems.map((it: any) => ({
       title: String(it?.title ?? ""),
       link: String(it?.link ?? ""),
@@ -58,7 +68,8 @@ export async function searchWeb(q: string, num: number = 5, start: number = 1): 
       homepage: it?.link ? toHomepage(String(it.link)) : undefined,
     }));
     return { items };
-  } catch {
+  } catch (err) {
+    console.error("[searchWeb] Fetch error:", err);
     return { items: [] };
   }
 }

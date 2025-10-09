@@ -454,17 +454,36 @@ export async function POST(req: NextRequest) {
     // Виконується ЗАВЖДИ якщо є назва, незалежно від domain чи інших результатів
     // ============================================================================
     
-    // Визначаємо назву для пошуку
+    // Визначаємо назву для пошуку (пріоритет: bestName -> name -> domain -> email)
     let platformSearchName = bestName || name;
+    
+    // Якщо немає назви, витягуємо з domain: "xraymedem.com" -> "Xraymedem"
     if (!platformSearchName && domain) {
-      // Якщо немає назви, витягуємо з domain: "xraymedem.com" -> "Xraymedem"
       const domainParts = domain.split('.');
       if (domainParts[0]) {
         platformSearchName = domainParts[0].charAt(0).toUpperCase() + domainParts[0].slice(1);
       }
     }
     
-    console.log("[ENRICH] Platform search name:", platformSearchName);
+    // Якщо все ще немає назви, витягуємо з email: "sales@xraymedem.com" -> "Xraymedem"
+    if (!platformSearchName && emailIn) {
+      const emailDomain = emailIn.split('@')[1];
+      if (emailDomain) {
+        const domainParts = emailDomain.split('.');
+        if (domainParts[0]) {
+          platformSearchName = domainParts[0].charAt(0).toUpperCase() + domainParts[0].slice(1);
+        }
+      }
+    }
+    
+    console.log("[ENRICH] Platform search name:", platformSearchName, {
+      sources: {
+        bestName: bestName || null,
+        inputName: name || null,
+        domain: domain || null,
+        email: emailIn || null
+      }
+    });
     
     // Отримуємо settings для платформ
     let platformsEnabled = { alibaba: true, madeInChina: false, indiamart: false };
@@ -482,13 +501,19 @@ export async function POST(req: NextRequest) {
       try {
         console.log("[ENRICH] Simple platform search:", {
           searchName: platformSearchName,
+          email: emailIn,
+          phone: phoneIn,
           platformsEnabled
         });
         
-        // ПРОСТИЙ пошук через Google "Company Name + Platform"
+        // ПРОСТИЙ пошук через Google "Company Name + Platform" (+ email + phone)
         const simplePlatformResults = await findPlatformsSimple(
           platformSearchName, 
-          platformsEnabled
+          platformsEnabled,
+          {
+            email: emailIn || undefined,
+            phone: phoneIn || undefined
+          }
         );
         
         console.log("[ENRICH] Simple platform results:", simplePlatformResults);

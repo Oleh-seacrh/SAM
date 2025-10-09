@@ -14,6 +14,71 @@ import { searchWeb } from "./web";
 import { parsePage } from "../crawl/parsePage";
 
 /**
+ * Витягує company URL з Alibaba product page
+ */
+async function extractCompanyFromProductPage(productUrl: string): Promise<string | null> {
+  try {
+    console.log("[extractCompanyFromProductPage] Fetching:", productUrl);
+    
+    const res = await fetch(productUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+      signal: AbortSignal.timeout(10000) // 10s timeout
+    });
+    
+    if (!res.ok) {
+      console.error("[extractCompanyFromProductPage] HTTP error:", res.status);
+      return null;
+    }
+    
+    const html = await res.text();
+    
+    // Шукаємо посилання на company/store
+    // Alibaba має різні формати:
+    // 1. /company/profile-XXXXX.html
+    // 2. supplier.alibaba.com
+    // 3. /shop/XXXXX.html
+    
+    const patterns = [
+      // Найпопулярніший формат: subdomain.alibaba.com
+      /https?:\/\/([a-z0-9-]+)\.alibaba\.com/i,
+      // Company profile
+      /href=["']?(\/company\/[^"'\s>]+)/i,
+      // Shop
+      /href=["']?(\/shop\/[^"'\s>]+)/i,
+    ];
+    
+    for (const pattern of patterns) {
+      const match = html.match(pattern);
+      if (match) {
+        let url = match[0];
+        
+        // Якщо це relative URL - додаємо домен
+        if (url.startsWith('/')) {
+          url = `https://www.alibaba.com${url}`;
+        }
+        
+        // Перевіряємо що це дійсно company/shop, а не product
+        if (!url.includes('/product-detail/')) {
+          console.log("[extractCompanyFromProductPage] Found company URL:", url);
+          return url;
+        }
+      }
+    }
+    
+    console.log("[extractCompanyFromProductPage] No company URL found in product page");
+    return null;
+    
+  } catch (e) {
+    console.error("[extractCompanyFromProductPage] Error:", e);
+    return null;
+  }
+}
+
+/**
  * Покращений пошук на платформах з множинними запитами та парсингом сторінок
  */
 export async function findPlatformsByName(
@@ -225,19 +290,47 @@ export async function findPlatformsSimple(
         console.log("[findPlatformsSimple] Alibaba response:", alibabaRes ? `${alibabaRes.items?.length || 0} items` : 'null');
         
         if (alibabaRes?.items && alibabaRes.items.length > 0) {
-          // Шукаємо посилання на alibaba.com
-          const alibabaLink = alibabaRes.items.find(item => 
+          // 1. Спочатку шукаємо COMPANY PAGE (пріоритет)
+          const companyLink = alibabaRes.items.find(item => 
             item.link.includes('alibaba.com') && 
             (item.link.includes('/company/') || item.link.includes('.alibaba.com'))
           );
           
-          if (alibabaLink) {
-            console.log("[findPlatformsSimple] Found Alibaba link:", alibabaLink.link);
-            result.alibaba = alibabaLink.link;
-            break; // Знайшли - виходимо з циклу
-          } else {
-            console.log("[findPlatformsSimple] No matching Alibaba link in results for:", query);
+          if (companyLink) {
+            console.log("[findPlatformsSimple] Found Alibaba COMPANY link:", companyLink.link);
+            result.alibaba = companyLink.link;
+            break; // Знайшли company - виходимо
           }
+          
+          // 2. Якщо company немає → шукаємо PRODUCT PAGE
+          const productLink = alibabaRes.items.find(item => 
+            item.link.includes('alibaba.com') && 
+            item.link.includes('/product-detail/')
+          );
+          
+          if (productLink) {
+            console.log("[findPlatformsSimple] Found Alibaba PRODUCT link:", productLink.link);
+            
+            // 3. Парсимо product page → витягуємо company link
+            try {
+              const companyUrl = await extractCompanyFromProductPage(productLink.link);
+              if (companyUrl) {
+                console.log("[findPlatformsSimple] Extracted company from product:", companyUrl);
+                result.alibaba = companyUrl;
+                break;
+              } else {
+                console.log("[findPlatformsSimple] Could not extract company from product, using product URL");
+                result.alibaba = productLink.link; // Fallback: якщо не витягли - даємо product
+                break;
+              }
+            } catch (e) {
+              console.error("[findPlatformsSimple] Error extracting company from product:", e);
+              result.alibaba = productLink.link; // Fallback: даємо product
+              break;
+            }
+          }
+          
+          console.log("[findPlatformsSimple] No matching Alibaba link in results for:", query);
         }
       }
       

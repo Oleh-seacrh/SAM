@@ -148,8 +148,8 @@
 
 Переконайтеся що в `.env.local` або Settings є:
 ```env
-GOOGLE_CSE_API_KEY=your_key
-GOOGLE_CSE_CX=your_cx
+GOOGLE_SEARCH_API_KEY=your_key
+GOOGLE_CSE_ID=your_cx
 OPENAI_API_KEY=your_openai_key
 ```
 

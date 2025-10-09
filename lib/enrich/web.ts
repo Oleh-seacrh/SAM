@@ -27,8 +27,8 @@ function toHomepage(u: string): string | undefined {
 }
 
 export async function searchWeb(q: string, num: number = 5, start: number = 1): Promise<CSEResult> {
-  const key = getEnv("GOOGLE_CSE_API_KEY", "CSE_API_KEY");
-  const cx  = getEnv("GOOGLE_CSE_CX", "CSE_CX");
+  const key = getEnv("GOOGLE_SEARCH_API_KEY", "GOOGLE_CSE_API_KEY");
+  const cx  = getEnv("GOOGLE_CSE_ID", "GOOGLE_CSE_CX");
 
   if (!key || !cx || !q || !q.trim()) {
     // Без ключів — тихе порожнє повернення (щоб /api/enrich/org міг дати reason)

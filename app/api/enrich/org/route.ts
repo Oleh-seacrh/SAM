@@ -2,7 +2,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { searchByName, searchByEmail, searchByPhone, WebCandidate } from "@/lib/enrich/web";
 import { detectCountryLLM } from "@/lib/llmCountry";
-import { findPlatformsByName, findSocialMedia } from "@/lib/enrich/platforms";
+import { findPlatformsByName, findSocialMedia, findPlatformsSimple } from "@/lib/enrich/platforms";
 import { getSql } from "@/lib/db";
 import { getTenantIdFromSession } from "@/lib/auth";
 
@@ -450,8 +450,15 @@ export async function POST(req: NextRequest) {
     }
 
     // platforms search (Alibaba, Made-in-China, IndiaMART)
-    // Використовуємо bestName або name якщо є
-    const searchName = bestName || name;
+    // Використовуємо bestName або name або витягуємо з domain
+    let searchName = bestName || name;
+    if (!searchName && domain) {
+      // Якщо немає назви, спробуємо з domain (e.g., "xraymedem.com" -> "Xraymedem")
+      const domainParts = domain.split('.');
+      if (domainParts[0]) {
+        searchName = domainParts[0].charAt(0).toUpperCase() + domainParts[0].slice(1);
+      }
+    }
     
     if (searchName || emailIn || phoneIn) {
       try {
@@ -468,119 +475,52 @@ export async function POST(req: NextRequest) {
 
         // Only search if at least one platform is enabled
         if (platformsEnabled.alibaba || platformsEnabled.madeInChina || platformsEnabled.indiamart) {
-          console.log("[ENRICH] Searching platforms for:", searchName, {
-            email: emailIn || emails[0],
-            phone: phoneIn || phones[0],
-            webSearchDisabled: !webSearchEnabled
+          console.log("[ENRICH] Simple platform search:", {
+            searchName,
+            platformsEnabled
           });
           
-          const platformResults = await findPlatformsByName(
+          // ПРОСТИЙ пошук через Google "Company Name + Platform"
+          const simplePlatformResults = await findPlatformsSimple(
             searchName || "", 
-            platformsEnabled, 
-            15000, // Збільшено timeout для парсингу
-            {
-              email: emailIn || emails[0],
-              phone: phoneIn || phones[0],
-              parsePage: true // Парсити знайдені сторінки
-            }
+            platformsEnabled
           );
+          
+          console.log("[ENRICH] Simple platform results:", simplePlatformResults);
           
           trace.platforms = {
             searched: true,
-            resultsCount: platformResults.length,
-            enabled: platformsEnabled
+            resultsCount: Object.keys(simplePlatformResults).filter(k => simplePlatformResults[k as keyof typeof simplePlatformResults]).length,
+            enabled: platformsEnabled,
+            simple: true
           };
 
-          // Add platform URLs as suggestions
-          for (const platform of platformResults) {
-            if (platform.source === "alibaba" && platform.website) {
-              pushUnique(suggestions, { 
-                field: "alibaba_url", 
-                value: platform.website, 
-                confidence: 0.85,
-                source: "alibaba-search"
-              });
-              
-              // Додати контакти з Alibaba сторінки
-              if (platform.emails?.length) {
-                platform.emails.forEach(email => {
-                  pushUnique(suggestions, {
-                    field: "general_email",
-                    value: email,
-                    confidence: 0.75,
-                    source: "alibaba-page"
-                  });
-                });
-              }
-              if (platform.phones?.length) {
-                platform.phones.forEach(phone => {
-                  pushUnique(suggestions, {
-                    field: "phone",
-                    value: phone,
-                    confidence: 0.75,
-                    source: "alibaba-page"
-                  });
-                });
-              }
-            } else if (platform.source === "madeInChina" && platform.website) {
-              pushUnique(suggestions, { 
-                field: "made_in_china_url", 
-                value: platform.website, 
-                confidence: 0.85,
-                source: "made-in-china-search"
-              });
-              
-              // Додати контакти з Made-in-China сторінки
-              if (platform.emails?.length) {
-                platform.emails.forEach(email => {
-                  pushUnique(suggestions, {
-                    field: "general_email",
-                    value: email,
-                    confidence: 0.75,
-                    source: "made-in-china-page"
-                  });
-                });
-              }
-              if (platform.phones?.length) {
-                platform.phones.forEach(phone => {
-                  pushUnique(suggestions, {
-                    field: "phone",
-                    value: phone,
-                    confidence: 0.75,
-                    source: "made-in-china-page"
-                  });
-                });
-              }
-            } else if (platform.source === "indiamart" && platform.website) {
-              pushUnique(suggestions, { 
-                field: "indiamart_url", 
-                value: platform.website, 
-                confidence: 0.85,
-                source: "indiamart-search"
-              });
-              
-              // Додати контакти з IndiaMART сторінки
-              if (platform.emails?.length) {
-                platform.emails.forEach(email => {
-                  pushUnique(suggestions, {
-                    field: "general_email",
-                    value: email,
-                    confidence: 0.75,
-                    source: "indiamart-page"
-                  });
-                });
-              }
-              if (platform.phones?.length) {
-                platform.phones.forEach(phone => {
-                  pushUnique(suggestions, {
-                    field: "phone",
-                    value: phone,
-                    confidence: 0.75,
-                    source: "indiamart-page"
-                  });
-                });
-              }
-            }
+          // Add platform URLs as suggestions (просто URLs, без парсингу)
+          if (simplePlatformResults.alibaba) {
+            pushUnique(suggestions, { 
+              field: "alibaba_url", 
+              value: simplePlatformResults.alibaba, 
+              confidence: 0.8,
+              source: "google-search"
+            });
+          }
+          
+          if (simplePlatformResults.madeInChina) {
+            pushUnique(suggestions, { 
+              field: "made_in_china_url", 
+              value: simplePlatformResults.madeInChina, 
+              confidence: 0.8,
+              source: "google-search"
+            });
+          }
+          
+          if (simplePlatformResults.indiamart) {
+            pushUnique(suggestions, { 
+              field: "indiamart_url", 
+              value: simplePlatformResults.indiamart, 
+              confidence: 0.8,
+              source: "google-search"
+            });
           }
         }
       } catch (e: any) {

@@ -143,34 +143,95 @@ export async function findSocialMedia(
   const result: { facebook?: string; linkedin?: string } = {};
 
   try {
-    // LinkedIn пошук
-    const linkedinQueries = [];
-    if (name) linkedinQueries.push(`site:linkedin.com/company "${name}"`);
-    if (options?.domain) linkedinQueries.push(`site:linkedin.com/company "${options.domain}"`);
-    
-    if (linkedinQueries.length) {
-      const linkedinRes = await searchWeb(linkedinQueries[0], 1, 1).catch(() => null);
-      if (linkedinRes?.items?.[0]?.link) {
-        result.linkedin = linkedinRes.items[0].link;
+    // LinkedIn пошук - СПРОЩЕНИЙ: просто "Company Name LinkedIn"
+    if (name) {
+      const linkedinRes = await searchWeb(`"${name}" LinkedIn`, 3, 1).catch(() => null);
+      if (linkedinRes?.items) {
+        // Шукаємо перше посилання на linkedin.com/company
+        const linkedinLink = linkedinRes.items.find(item => 
+          item.link.includes('linkedin.com/company') || 
+          item.link.includes('linkedin.com/school')
+        );
+        if (linkedinLink) {
+          result.linkedin = linkedinLink.link;
+        }
       }
     }
 
-    // Facebook пошук
-    const facebookQueries = [];
-    if (name) facebookQueries.push(`site:facebook.com "${name}"`);
-    if (options?.email) {
-      const emailDomain = options.email.split('@')[1];
-      if (emailDomain) facebookQueries.push(`site:facebook.com "${emailDomain}"`);
-    }
-    
-    if (facebookQueries.length) {
-      const facebookRes = await searchWeb(facebookQueries[0], 1, 1).catch(() => null);
-      if (facebookRes?.items?.[0]?.link) {
-        result.facebook = facebookRes.items[0].link;
+    // Facebook пошук - СПРОЩЕНИЙ: просто "Company Name Facebook"
+    if (name) {
+      const facebookRes = await searchWeb(`"${name}" Facebook`, 3, 1).catch(() => null);
+      if (facebookRes?.items) {
+        // Шукаємо перше посилання на facebook.com (не marketplace, не ads)
+        const facebookLink = facebookRes.items.find(item => 
+          item.link.includes('facebook.com/') && 
+          !item.link.includes('marketplace') &&
+          !item.link.includes('business.facebook.com')
+        );
+        if (facebookLink) {
+          result.facebook = facebookLink.link;
+        }
       }
     }
   } catch (e) {
     console.error('Social media search error:', e);
+  }
+
+  return result;
+}
+
+/**
+ * Простий пошук платформ через Google (не site:)
+ * Для Alibaba, Made-in-China, IndiaMART
+ */
+export async function findPlatformsSimple(
+  name: string,
+  enabled: { alibaba: boolean; madeInChina: boolean; indiamart: boolean }
+): Promise<{ alibaba?: string; madeInChina?: string; indiamart?: string }> {
+  const result: { alibaba?: string; madeInChina?: string; indiamart?: string } = {};
+
+  try {
+    // Alibaba пошук - просто "Company Name Alibaba"
+    if (enabled.alibaba && name) {
+      const alibabaRes = await searchWeb(`"${name}" Alibaba`, 3, 1).catch(() => null);
+      if (alibabaRes?.items) {
+        const alibabaLink = alibabaRes.items.find(item => 
+          item.link.includes('alibaba.com') && 
+          (item.link.includes('/company/') || item.link.includes('.alibaba.com'))
+        );
+        if (alibabaLink) {
+          result.alibaba = alibabaLink.link;
+        }
+      }
+    }
+
+    // Made-in-China пошук
+    if (enabled.madeInChina && name) {
+      const micRes = await searchWeb(`"${name}" Made in China`, 3, 1).catch(() => null);
+      if (micRes?.items) {
+        const micLink = micRes.items.find(item => 
+          item.link.includes('made-in-china.com')
+        );
+        if (micLink) {
+          result.madeInChina = micLink.link;
+        }
+      }
+    }
+
+    // IndiaMART пошук
+    if (enabled.indiamart && name) {
+      const indiamartRes = await searchWeb(`"${name}" IndiaMART`, 3, 1).catch(() => null);
+      if (indiamartRes?.items) {
+        const indiamartLink = indiamartRes.items.find(item => 
+          item.link.includes('indiamart.com')
+        );
+        if (indiamartLink) {
+          result.indiamart = indiamartLink.link;
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Platform search error:', e);
   }
 
   return result;
